@@ -1,0 +1,118 @@
+[package]
+name = "qaexchange-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["QUANTAXIS Team"]
+description = "High-performance quantitative exchange system built on QARS"
+license = "MIT"
+
+[lib]
+name = "qaexchange"
+path = "src/lib.rs"
+
+[[bin]]
+name = "qaexchange-server"
+path = "src/main.rs"
+
+[dependencies]
+# 核心依赖 - 复用 qars2 本地项目
+qars = { path = "../qars2", package = "qa-rs" }
+
+# Web 框架
+actix = "0.13"
+actix-web = "4.4"
+actix-web-actors = "4.2"
+actix-files = "0.6"
+
+# 异步运行时
+tokio = { version = "1.35", features = ["full"] }
+futures = "0.3"
+
+# 并发数据结构
+dashmap = "5.5"
+parking_lot = "0.12"
+crossbeam = "0.8"
+rayon = "1.8"
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# 日期时间
+chrono = "0.4"
+
+# 日志
+log = "0.4"
+env_logger = "0.11"
+
+# 错误处理
+thiserror = "1.0"
+anyhow = "1.0"
+
+# UUID
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# 数据库 (复用 qars 的连接)
+mongodb = "2.7"
+# clickhouse = { version = "0.11", features = ["tokio_io"] }
+
+# 配置管理
+config = "0.13"
+
+# 指标监控
+prometheus = "0.13"
+
+# 零拷贝 IPC (复用 qars 的 iceoryx2)
+# iceoryx2 = "0.3" # 已通过 qars 依赖
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.12"
+criterion = "0.5"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# 优化性能配置 (与 qars 保持一致)
+[profile.opt-dev]
+inherits = "dev"
+opt-level = 2
+debug = true
+
+[profile.debug-release]
+inherits = "release"
+debug = true
+strip = false
+
+[profile.extreme]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# 并行编译优化
+[build]
+jobs = 8
+
+[[example]]
+name = "start_exchange"
+path = "examples/start_exchange.rs"
+
+[[example]]
+name = "client_demo"
+path = "examples/client_demo.rs"
+
+[[example]]
+name = "stress_test"
+path = "examples/stress_test.rs"

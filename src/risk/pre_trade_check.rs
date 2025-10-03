@@ -1,0 +1,462 @@
+//! 盘前风控检查
+//!
+//! 在订单提交到撮合引擎前进行风险检查，包括：
+//! - 资金充足性检查
+//! - 持仓限额检查
+//! - 订单合法性检查
+//! - 自成交防范
+
+use crate::core::{QA_Account, Order};
+use crate::exchange::AccountManager;
+use crate::ExchangeError;
+use std::sync::Arc;
+use dashmap::DashMap;
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+
+/// 风控检查结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RiskCheckResult {
+    /// 通过
+    Pass,
+    /// 拒绝
+    Reject { reason: String, code: RiskCheckCode },
+}
+
+/// 风控拒绝代码
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum RiskCheckCode {
+    /// 资金不足
+    InsufficientFunds = 1001,
+    /// 超过持仓限额
+    ExceedPositionLimit = 1002,
+    /// 订单金额过大
+    ExceedOrderLimit = 1003,
+    /// 风险度过高
+    HighRiskRatio = 1004,
+    /// 自成交风险
+    SelfTradingRisk = 1005,
+    /// 账户不存在
+    AccountNotFound = 1006,
+    /// 合约不存在
+    InstrumentNotFound = 1007,
+    /// 订单参数非法
+    InvalidOrderParams = 1008,
+}
+
+/// 风控配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskConfig {
+    /// 单账户单品种最大持仓比例 (0.0-1.0)
+    pub max_position_ratio: f64,
+
+    /// 单笔订单最大金额
+    pub max_order_amount: f64,
+
+    /// 风险度阈值 (触发警告)
+    pub risk_ratio_warning: f64,
+
+    /// 风险度阈值 (拒绝下单)
+    pub risk_ratio_reject: f64,
+
+    /// 是否启用自成交防范
+    pub enable_self_trade_prevention: bool,
+
+    /// 最小订单数量
+    pub min_order_volume: f64,
+
+    /// 最大订单数量
+    pub max_order_volume: f64,
+}
+
+impl Default for RiskConfig {
+    fn default() -> Self {
+        Self {
+            max_position_ratio: 0.5,        // 50% 单品种持仓
+            max_order_amount: 10_000_000.0, // 1000万单笔限额
+            risk_ratio_warning: 0.8,        // 80% 风险度警告
+            risk_ratio_reject: 0.95,        // 95% 拒绝下单
+            enable_self_trade_prevention: true,
+            min_order_volume: 1.0,          // 最小1手
+            max_order_volume: 10000.0,      // 最大10000手
+        }
+    }
+}
+
+/// 订单风控检查请求
+#[derive(Debug, Clone)]
+pub struct OrderCheckRequest {
+    pub user_id: String,
+    pub instrument_id: String,
+    pub direction: String,      // BUY/SELL
+    pub offset: String,          // OPEN/CLOSE
+    pub volume: f64,
+    pub price: f64,
+}
+
+/// 盘前风控检查器
+pub struct PreTradeCheck {
+    /// 账户管理器引用
+    account_mgr: Arc<AccountManager>,
+
+    /// 风控配置
+    config: Arc<RwLock<RiskConfig>>,
+
+    /// 活动订单追踪 (user_id -> order_id set)
+    active_orders: DashMap<String, Arc<RwLock<Vec<String>>>>,
+}
+
+impl PreTradeCheck {
+    pub fn new(account_mgr: Arc<AccountManager>) -> Self {
+        Self {
+            account_mgr,
+            config: Arc::new(RwLock::new(RiskConfig::default())),
+            active_orders: DashMap::new(),
+        }
+    }
+
+    /// 创建带自定义配置的检查器
+    pub fn with_config(account_mgr: Arc<AccountManager>, config: RiskConfig) -> Self {
+        Self {
+            account_mgr,
+            config: Arc::new(RwLock::new(config)),
+            active_orders: DashMap::new(),
+        }
+    }
+
+    /// 执行完整风控检查
+    pub fn check(&self, req: &OrderCheckRequest) -> Result<RiskCheckResult, ExchangeError> {
+        // 1. 基础参数检查
+        self.check_order_params(req)?;
+
+        // 2. 账户存在性检查
+        let account = self.account_mgr.get_account(&req.user_id)?;
+
+        // 3. 资金充足性检查
+        if let Some(reject) = self.check_funds(&account, req)? {
+            return Ok(reject);
+        }
+
+        // 4. 持仓限额检查
+        if let Some(reject) = self.check_position_limit(&account, req)? {
+            return Ok(reject);
+        }
+
+        // 5. 风险度检查
+        if let Some(reject) = self.check_risk_ratio(&account)? {
+            return Ok(reject);
+        }
+
+        // 6. 自成交防范检查
+        if self.config.read().enable_self_trade_prevention {
+            if let Some(reject) = self.check_self_trading(req)? {
+                return Ok(reject);
+            }
+        }
+
+        Ok(RiskCheckResult::Pass)
+    }
+
+    /// 检查订单参数合法性
+    fn check_order_params(&self, req: &OrderCheckRequest) -> Result<(), ExchangeError> {
+        let config = self.config.read();
+
+        // 检查数量范围
+        if req.volume < config.min_order_volume {
+            return Err(ExchangeError::RiskCheckFailed(
+                format!("Order volume {} below minimum {}", req.volume, config.min_order_volume)
+            ));
+        }
+
+        if req.volume > config.max_order_volume {
+            return Err(ExchangeError::RiskCheckFailed(
+                format!("Order volume {} exceeds maximum {}", req.volume, config.max_order_volume)
+            ));
+        }
+
+        // 检查价格合法性
+        if req.price <= 0.0 {
+            return Err(ExchangeError::RiskCheckFailed(
+                "Invalid order price".to_string()
+            ));
+        }
+
+        // 检查订单金额
+        let order_amount = req.price * req.volume;
+        if order_amount > config.max_order_amount {
+            return Err(ExchangeError::RiskCheckFailed(
+                format!("Order amount {} exceeds limit {}", order_amount, config.max_order_amount)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// 检查资金充足性
+    fn check_funds(
+        &self,
+        account: &Arc<RwLock<QA_Account>>,
+        req: &OrderCheckRequest,
+    ) -> Result<Option<RiskCheckResult>, ExchangeError> {
+        let acc = account.read();
+
+        // 计算所需资金 (简化: 价格 * 数量 + 手续费估算)
+        let estimated_commission = req.price * req.volume * 0.0003; // 万3手续费
+        let required_funds = if req.direction == "BUY" && req.offset == "OPEN" {
+            // 买开仓需要全额资金
+            req.price * req.volume + estimated_commission
+        } else if req.direction == "SELL" && req.offset == "OPEN" {
+            // 卖开仓需要保证金 (简化: 20%)
+            req.price * req.volume * 0.2 + estimated_commission
+        } else {
+            // 平仓只需手续费
+            estimated_commission
+        };
+
+        if acc.accounts.available < required_funds {
+            return Ok(Some(RiskCheckResult::Reject {
+                reason: format!(
+                    "Insufficient funds: available={:.2}, required={:.2}",
+                    acc.accounts.available, required_funds
+                ),
+                code: RiskCheckCode::InsufficientFunds,
+            }));
+        }
+
+        Ok(None)
+    }
+
+    /// 检查持仓限额
+    fn check_position_limit(
+        &self,
+        account: &Arc<RwLock<QA_Account>>,
+        req: &OrderCheckRequest,
+    ) -> Result<Option<RiskCheckResult>, ExchangeError> {
+        let acc = account.read();
+        let config = self.config.read();
+
+        // 如果是开仓，检查持仓限额
+        if req.offset == "OPEN" {
+            let current_position = acc.hold.get(&req.instrument_id)
+                .map(|pos| pos.volume_long + pos.volume_short)
+                .unwrap_or(0.0);
+
+            let new_position = current_position + req.volume;
+            let total_value = acc.accounts.balance;
+            let position_ratio = (new_position * req.price) / total_value;
+
+            if position_ratio > config.max_position_ratio {
+                return Ok(Some(RiskCheckResult::Reject {
+                    reason: format!(
+                        "Position ratio {:.2}% exceeds limit {:.2}%",
+                        position_ratio * 100.0,
+                        config.max_position_ratio * 100.0
+                    ),
+                    code: RiskCheckCode::ExceedPositionLimit,
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// 检查风险度
+    fn check_risk_ratio(
+        &self,
+        account: &Arc<RwLock<QA_Account>>,
+    ) -> Result<Option<RiskCheckResult>, ExchangeError> {
+        let acc = account.read();
+        let config = self.config.read();
+
+        let risk_ratio = acc.accounts.risk_ratio;
+
+        // 拒绝阈值
+        if risk_ratio >= config.risk_ratio_reject {
+            return Ok(Some(RiskCheckResult::Reject {
+                reason: format!(
+                    "Risk ratio {:.2}% exceeds reject threshold {:.2}%",
+                    risk_ratio * 100.0,
+                    config.risk_ratio_reject * 100.0
+                ),
+                code: RiskCheckCode::HighRiskRatio,
+            }));
+        }
+
+        // 警告阈值 (不拒绝，但记录日志)
+        if risk_ratio >= config.risk_ratio_warning {
+            log::warn!(
+                "High risk ratio for user {}: {:.2}%",
+                acc.account_cookie,
+                risk_ratio * 100.0
+            );
+        }
+
+        Ok(None)
+    }
+
+    /// 自成交防范检查
+    fn check_self_trading(
+        &self,
+        _req: &OrderCheckRequest,
+    ) -> Result<Option<RiskCheckResult>, ExchangeError> {
+        // TODO: 实现自成交防范逻辑
+        // 需要检查同一账户是否在同一合约上有对手方向的订单
+        // 这需要访问订单簿，暂时返回 Pass
+        Ok(None)
+    }
+
+    /// 记录活动订单
+    pub fn register_active_order(&self, user_id: &str, order_id: String) {
+        self.active_orders
+            .entry(user_id.to_string())
+            .or_insert_with(|| Arc::new(RwLock::new(Vec::new())))
+            .write()
+            .push(order_id);
+    }
+
+    /// 移除活动订单
+    pub fn remove_active_order(&self, user_id: &str, order_id: &str) {
+        if let Some(orders) = self.active_orders.get(user_id) {
+            orders.write().retain(|id| id != order_id);
+        }
+    }
+
+    /// 获取账户活动订单数量
+    pub fn get_active_order_count(&self, user_id: &str) -> usize {
+        self.active_orders
+            .get(user_id)
+            .map(|orders| orders.read().len())
+            .unwrap_or(0)
+    }
+
+    /// 更新风控配置
+    pub fn update_config(&self, config: RiskConfig) {
+        *self.config.write() = config;
+    }
+
+    /// 获取当前配置
+    pub fn get_config(&self) -> RiskConfig {
+        self.config.read().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::account_ext::{OpenAccountRequest, AccountType};
+
+    fn create_test_account_manager() -> Arc<AccountManager> {
+        let mgr = Arc::new(AccountManager::new());
+
+        // 创建测试账户
+        let req = OpenAccountRequest {
+            user_id: "test_user".to_string(),
+            user_name: "Test User".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+            password: "test123".to_string(),
+        };
+
+        mgr.open_account(req).unwrap();
+        mgr
+    }
+
+    #[test]
+    fn test_check_order_params() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        // 正常订单
+        let req = OrderCheckRequest {
+            user_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 100.0,
+        };
+
+        assert!(checker.check_order_params(&req).is_ok());
+
+        // 数量过小
+        let req_small = OrderCheckRequest {
+            volume: 0.5,
+            ..req.clone()
+        };
+        assert!(checker.check_order_params(&req_small).is_err());
+
+        // 价格非法
+        let req_invalid_price = OrderCheckRequest {
+            price: -10.0,
+            ..req.clone()
+        };
+        assert!(checker.check_order_params(&req_invalid_price).is_err());
+    }
+
+    #[test]
+    fn test_check_funds() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr.clone());
+
+        let account = account_mgr.get_account("test_user").unwrap();
+
+        // 资金充足
+        let req = OrderCheckRequest {
+            user_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 100.0,
+        };
+
+        let result = checker.check_funds(&account, &req).unwrap();
+        assert!(result.is_none()); // 通过检查
+
+        // 资金不足
+        let req_large = OrderCheckRequest {
+            volume: 10000.0,
+            price: 1000.0,
+            ..req
+        };
+
+        let result = checker.check_funds(&account, &req_large).unwrap();
+        assert!(result.is_some()); // 拒绝
+        if let Some(RiskCheckResult::Reject { code, .. }) = result {
+            assert_eq!(code, RiskCheckCode::InsufficientFunds);
+        }
+    }
+
+    #[test]
+    fn test_full_check() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        let req = OrderCheckRequest {
+            user_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 100.0,
+        };
+
+        let result = checker.check(&req).unwrap();
+        assert!(matches!(result, RiskCheckResult::Pass));
+    }
+
+    #[test]
+    fn test_active_order_tracking() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        assert_eq!(checker.get_active_order_count("test_user"), 0);
+
+        checker.register_active_order("test_user", "order1".to_string());
+        checker.register_active_order("test_user", "order2".to_string());
+        assert_eq!(checker.get_active_order_count("test_user"), 2);
+
+        checker.remove_active_order("test_user", "order1");
+        assert_eq!(checker.get_active_order_count("test_user"), 1);
+    }
+}

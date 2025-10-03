@@ -1,0 +1,58 @@
+# QAEXCHANGE 交易所配置
+
+[server]
+# 服务器地址
+address = "127.0.0.1"
+# HTTP 端口
+http_port = 8080
+# WebSocket 端口
+ws_port = 8081
+
+[database]
+# MongoDB 连接
+mongodb_uri = "mongodb://localhost:27017"
+mongodb_db = "qaexchange"
+
+# ClickHouse 连接 (可选)
+# clickhouse_uri = "tcp://localhost:9000"
+# clickhouse_db = "qaexchange"
+
+[matching]
+# 撮合引擎配置
+# 开盘集合竞价时间 (HH:MM)
+auction_start = "09:25"
+auction_end = "09:30"
+
+# 连续交易时间
+trading_start = "09:30"
+trading_end = "15:00"
+
+[risk]
+# 风控配置
+# 单账户最大持仓比例 (%)
+max_position_ratio = 50.0
+
+# 单笔订单最大金额
+max_order_amount = 10000000.0
+
+# 风险度阈值 (触发强平)
+risk_ratio_threshold = 1.0
+
+[settlement]
+# 结算配置
+# 结算时间 (HH:MM)
+settlement_time = "15:30"
+
+# 是否自动强平
+auto_force_liquidation = true
+
+[market_data]
+# 行情推送配置
+# Level1 推送频率 (ms)
+level1_interval_ms = 100
+
+# Level2 推送频率 (ms)
+level2_interval_ms = 500
+
+# 最大订阅者数量
+max_subscribers = 1000

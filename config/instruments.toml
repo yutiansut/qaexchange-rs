@@ -1,0 +1,25 @@
+# 合约配置
+
+[[instruments]]
+instrument_id = "IX2301"
+name = "IX指数2301"
+exchange_id = "SHFE"
+product_type = "futures"
+prev_close = 120.0
+is_trading = true
+
+[[instruments]]
+instrument_id = "IY2301"
+name = "IY指数2301"
+exchange_id = "SHFE"
+product_type = "futures"
+prev_close = 160.0
+is_trading = true
+
+[[instruments]]
+instrument_id = "IZ2301"
+name = "IZ指数2301"
+exchange_id = "SHFE"
+product_type = "futures"
+prev_close = 140.0
+is_trading = true
