@@ -1,8 +1,11 @@
 # QAEXCHANGE-RS
 
 **版本**: v1.0.0 (核心功能完整版)
-**更新日期**: 2025-10-06
+
+**更新日期**: 2025-10-07
+
 **功能完成度**: ✅ 100% (19/19 核心任务完成)
+
 **开发状态**: Phase 1-10 已完成，生产就绪
 
 高性能量化交易所系统 - 基于 QARS 核心架构构建
@@ -13,9 +16,9 @@
 
 ### 我是...
 - **新用户/评估者** → [快速开始](#快速开始) | [核心特性](#核心特性) | [功能完成度](#-功能完成度)
-- **前端开发者** → [前端对接指南](docs/FRONTEND_INTEGRATION.md) ⭐ | [用户端API](docs/API_REFERENCE.md) | [管理端API](docs/ADMIN_API_REFERENCE.md) ⭐
-- **后端开发者** → [系统架构](docs/ARCHITECTURE.md) | [开发指南](docs/DEVELOPMENT.md) | [核心模块详解](#-核心模块详解)
-- **架构师** → [功能映射矩阵](docs/FEATURE_MATRIX.md) ⭐ | [数据模型](docs/DATA_MODELS.md) ⭐ | [系统架构](docs/ARCHITECTURE.md)
+- **前端开发者** → [前端对接指南](docs/05_integration/frontend/integration_guide.md) ⭐ | [用户端API](docs/04_api/http/user_api.md) | [管理端API](docs/04_api/http/admin_api.md) ⭐
+- **后端开发者** → [系统架构](docs/02_architecture/system_overview.md) | [开发指南](docs/06_development/README.md) | [核心模块详解](#-核心模块详解)
+- **架构师** → [功能映射矩阵](docs/07_reference/feature_matrix.md) ⭐ | [数据模型](docs/02_architecture/data_models.md) ⭐ | [系统架构](docs/02_architecture/system_overview.md)
 - **完整文档** → [文档中心](docs/README.md) (60+ 文档)
 
 ⭐ = v0.4.0 新增文档 | ✨ = v0.5.0 新增功能 | 🆕 = v1.0.0 新增功能
@@ -70,6 +73,14 @@
   - WebSocket 批量推送 (100条/批, 背压控制)
   - 崩溃恢复机制 (< 5s 恢复时间)
   - crossbeam 高性能分发
+
+✅ **市场快照生成器**: 🆕 Phase 9 新增
+  - 每秒级别市场快照生成 (35+ 字段)
+  - OHLC 自动计算 (日内高开低收)
+  - 买卖五档行情 (实时订单簿深度)
+  - 成交统计 (累计成交量/成交额)
+  - 零拷贝订阅 (crossbeam channel, 无限订阅者)
+  - 完整测试和文档
 
 ✅ **结算系统**: 日终结算/盯市盈亏/强平处理 🆕
   - 完整集合竞价算法 (最大成交量原则 + tie-breaking)
@@ -205,8 +216,10 @@ qaexchange-rs/
 │   ├── market/                   # 行情推送 ✨
 │   │   ├── broadcaster.rs        # 行情广播器 (crossbeam channel)
 │   │   ├── snapshot_broadcaster.rs # 订单簿快照广播
+│   │   ├── snapshot_generator.rs # 市场快照生成器 🆕 (每秒级别, OHLC + 5档)
 │   │   ├── cache.rs              # L1 行情缓存 (DashMap, 100ms TTL)
-│   │   └── recovery.rs           # 行情数据恢复器
+│   │   ├── recovery.rs           # 行情数据恢复器
+│   │   └── mod.rs                # MarketDataService (统一数据访问接口)
 │   ├── service/                  # 对外服务
 │   │   ├── websocket/            # WebSocket 服务
 │   │   └── http/                 # HTTP API
@@ -329,7 +342,7 @@ qaexchange-rs/
 **Checkpoint** (`checkpoint/`): 快照管理
 - 账户快照创建/恢复
 
-**详细文档**: [存储系统概览](docs/storage/README.md)
+**详细文档**: [WAL 设计](docs/03_core_modules/storage/wal.md) | [MemTable 实现](docs/03_core_modules/storage/memtable.md) | [SSTable 格式](docs/03_core_modules/storage/sstable.md)
 
 ---
 
@@ -349,7 +362,7 @@ qaexchange-rs/
 - 聚合查询: < 50ms
 - 时间序列聚合: < 100ms
 
-**详细文档**: [Phase 8 查询引擎](docs/PHASE8_QUERY_ENGINE.md)
+**详细文档**: [Phase 8 查询引擎](docs/08_advanced/phase_reports/phase_8.md)
 
 ---
 
@@ -367,7 +380,7 @@ qaexchange-rs/
 - 心跳间隔: 100ms
 - 故障切换: < 500ms
 
-**详细文档**: [Phase 6-7 实现总结](docs/PHASE6_7_IMPLEMENTATION.md)
+**详细文档**: [Phase 6-7 实现总结](docs/08_advanced/phase_reports/phase_6_7.md)
 
 ---
 
@@ -401,9 +414,9 @@ qaexchange-rs/
 - 心跳机制 (10s 超时)
 
 **API文档**:
-- [用户端API参考](docs/API_REFERENCE.md) - 20个REST API
-- [管理端API参考](docs/ADMIN_API_REFERENCE.md) ⭐ - 25个REST API
-- [WebSocket协议](docs/WEBSOCKET_PROTOCOL.md) - 8个消息类型
+- [用户端API参考](docs/04_api/http/user_api.md) - 20个REST API
+- [管理端API参考](docs/04_api/http/admin_api.md) ⭐ - 25个REST API
+- [WebSocket协议](docs/04_api/websocket/protocol.md) - 8个消息类型
 
 ---
 
@@ -422,7 +435,7 @@ qaexchange-rs/
 - 账户更新 (AccountUpdate)
 - 订单簿快照 (OrderBook)
 
-**详细文档**: [序列化指南](docs/SERIALIZATION_GUIDE.md)
+**详细文档**: [序列化指南](docs/05_integration/serialization.md)
 
 ---
 
@@ -449,7 +462,7 @@ qaexchange-rs/
 - `admin/monitoring.vue` - 系统监控 (存储/性能监控)
 - `admin/accounts.vue` - 账户管理 (账户列表)
 
-**详细文档**: [前端对接指南](docs/FRONTEND_INTEGRATION.md)
+**详细文档**: [前端对接指南](docs/05_integration/frontend/integration_guide.md)
 
 ---
 
@@ -566,7 +579,7 @@ GET    /api/position/{user_id}         # 查询持仓
 - 合约信息查询
 - 等...
 
-**完整文档**: [用户端API参考](docs/API_REFERENCE.md)
+**完整文档**: [用户端API参考](docs/04_api/http/user_api.md)
 
 ---
 
@@ -617,7 +630,7 @@ GET    /admin/market/statistics        # 市场统计
 GET    /admin/market/depth/{id}        # 市场深度
 ```
 
-**完整文档**: [管理端API参考](docs/ADMIN_API_REFERENCE.md) ⭐
+**完整文档**: [管理端API参考](docs/04_api/http/admin_api.md) ⭐
 
 ---
 
@@ -645,7 +658,7 @@ ws://host:port/ws?user_id={user_id}
 - `Error` - 错误消息
 - `Pong` - 心跳响应
 
-**完整文档**: [WebSocket协议文档](docs/WEBSOCKET_PROTOCOL.md)
+**完整文档**: [WebSocket协议文档](docs/04_api/websocket/protocol.md)
 
 ---
 
@@ -756,7 +769,7 @@ OrderRouter (订单路由)
 - [x] 行情数据恢复机制 (< 5s 恢复时间)
 - [x] qars Orderbook lastprice 初始化修复
 
-**详细文档**: [行情推送系统完善总结](docs/MARKET_DATA_IMPLEMENTATION_SUMMARY.md) ✨
+**详细文档**: [行情推送系统完善总结](docs/08_advanced/implementation_summaries/market_data.md) ✨
 
 ### 📋 Phase 10-11: 生产就绪与网络层 (计划中)
 
@@ -822,45 +835,62 @@ MIT
 
 ### 快速开始
 - [主文档 README.md](.) - 项目概览和快速开始 ⭐ 当前文档
-- [前端对接指南](docs/FRONTEND_INTEGRATION.md) - 前端开发者必读
-- [部署指南](docs/DEPLOYMENT.md) - 快速部署到生产环境
+- [快速入门指南](docs/01_getting_started/quick_start.md) - 5分钟快速上手
+- [前端对接指南](docs/05_integration/frontend/integration_guide.md) - 前端开发者必读
+- [部署指南](docs/06_development/deployment.md) - 快速部署到生产环境
 
 ### 架构与设计
-- [系统架构](docs/ARCHITECTURE.md) - 完整系统设计（含管理端） ⭐ 已更新
-- [功能映射矩阵](docs/FEATURE_MATRIX.md) ⭐ - 前后端功能对照表（95%完成）
-- [数据模型](docs/DATA_MODELS.md) ⭐ - Rust + TypeScript完整定义
+- [系统架构](docs/02_architecture/system_overview.md) - 完整系统设计（含管理端） ⭐ 已更新
+- [高性能架构](docs/02_architecture/high_performance.md) - P99 < 100μs 延迟设计
+- [功能映射矩阵](docs/07_reference/feature_matrix.md) ⭐ - 前后端功能对照表（95%完成）
+- [数据模型](docs/02_architecture/data_models.md) ⭐ - QIFI/TIFI/DIFF 协议详解
+- [解耦存储架构](docs/02_architecture/decoupled_storage.md) - 零拷贝 + WAL 持久化
+
+### 核心模块
+- [存储系统](docs/03_core_modules/README.md) - WAL + MemTable + SSTable 架构
+  - [WAL 设计](docs/03_core_modules/storage/wal.md) - Write-Ahead Log 崩溃恢复
+  - [MemTable 实现](docs/03_core_modules/storage/memtable.md) - OLTP/OLAP 内存表
+  - [SSTable 格式](docs/03_core_modules/storage/sstable.md) - rkyv/Parquet 持久化
+  - [查询引擎](docs/03_core_modules/storage/query_engine.md) - Polars SQL 查询
+  - [复制系统](docs/03_core_modules/storage/replication.md) - 主从复制与故障转移
+- [市场数据模块](docs/03_core_modules/market/README.md) 🆕 - 行情数据服务总览
+  - [快照生成器](docs/03_core_modules/market/snapshot_generator.md) 🆕 - 每秒级别市场快照
+  - [测试指南](docs/03_core_modules/market/testing.md) 🆕 - 完整测试流程
+- [通知系统](docs/03_core_modules/notification/architecture.md) - 零拷贝通知推送
 
 ### API 参考
-- [用户端API参考](docs/API_REFERENCE.md) - 20个REST API
-- [管理端API参考](docs/ADMIN_API_REFERENCE.md) ⭐ - 25个REST API（v0.4.0新增）
-- [WebSocket协议](docs/WEBSOCKET_PROTOCOL.md) - 8个消息类型
-- [错误码说明](docs/ERROR_CODES.md) - 所有错误码详解
+- [用户端API参考](docs/04_api/http/user_api.md) - 20个REST API
+- [管理端API参考](docs/04_api/http/admin_api.md) ⭐ - 25个REST API（v0.4.0新增）
+- [WebSocket协议](docs/04_api/websocket/protocol.md) - DIFF 协议完整定义
+- [DIFF 协议详解](docs/04_api/websocket/diff_protocol.md) - 差分同步机制
+- [WebSocket 快速开始](docs/04_api/websocket/quick_start.md) - WebSocket 客户端示例
+- [错误码说明](docs/04_api/error_codes.md) - 所有错误码详解
 
-### 存储系统
-- [存储系统概览](docs/storage/README.md) - WAL + MemTable + SSTable 架构
-- [存储架构设计](docs/storage/01_STORAGE_ARCHITECTURE.md) - 详细设计文档
-- [数据分发架构](docs/storage/02_DISTRIBUTION_ARCHITECTURE.md) - 零拷贝分发
-- [故障恢复设计](docs/storage/03_RECOVERY_DESIGN.md) - WAL恢复机制
-- [混合存储设计](docs/storage/07_HYBRID_OLTP_OLAP_DESIGN.md) - OLTP + OLAP双体系
-- [集成实施计划](docs/storage/06_INTEGRATED_IMPLEMENTATION_PLAN.md) - Phase 1-8计划
-
-### 复制与查询
-- [Phase 6-7 实现总结](docs/PHASE6_7_IMPLEMENTATION.md) - 主从复制与性能优化
-- [Phase 8 查询引擎](docs/PHASE8_QUERY_ENGINE.md) ⭐ - Polars DataFrame分析引擎
-
-### 行情推送系统 ✨
-- [行情推送完善方案](docs/MARKET_DATA_ENHANCEMENT.md) ✨ - Phase 9 设计文档
-- [行情推送实施总结](docs/MARKET_DATA_IMPLEMENTATION_SUMMARY.md) ✨ - Phase 9 实施细节
-
-### 通知系统
-- [通知系统概览](docs/notification/README.md) - rkyv零拷贝序列化
-- [序列化指南](docs/SERIALIZATION_GUIDE.md) - rkyv使用模式
+### 集成指南
+- [前端集成指南](docs/05_integration/frontend/integration_guide.md) - Vue.js 集成示例
+- [DIFF 协议集成](docs/05_integration/diff_protocol.md) - DIFF 协议接入详解
+- [序列化指南](docs/05_integration/serialization.md) - rkyv/JSON 序列化最佳实践
 
 ### 开发指南
 - [开发规范](CLAUDE.md) - 项目约定（复用qars优先）
-- [开发环境](docs/DEVELOPMENT.md) - 环境搭建
-- [测试指南](docs/TESTING.md) - 单元测试和集成测试
-- [性能优化](docs/PERFORMANCE.md) - 性能调优建议
+- [开发环境](docs/06_development/README.md) - 环境搭建
+- [WebSocket 集成](docs/06_development/websocket_integration.md) - DIFF 协议接入详解
+- [测试指南](docs/06_development/testing.md) - 单元测试和集成测试
+- [部署指南](docs/06_development/deployment.md) - 生产环境部署
+
+### 参考资料
+- [术语表](docs/07_reference/glossary.md) - 专业术语解释
+- [常见问题 FAQ](docs/07_reference/faq.md) - 常见问题解答
+- [性能基准](docs/07_reference/benchmarks.md) - 性能测试数据
+- [性能指标](docs/07_reference/performance.md) - 性能调优建议
+
+### 高级主题
+- [Phase 6-7 实现总结](docs/08_advanced/phase_reports/phase_6_7.md) - 主从复制与性能优化
+- [Phase 8 查询引擎](docs/08_advanced/phase_reports/phase_8.md) ⭐ - Polars DataFrame分析引擎
+- [市场数据增强实现](docs/08_advanced/technical_deep_dive/market_data_enhancement.md) ✨ - L1 缓存与 WAL 恢复
+- [市场数据实现总结](docs/08_advanced/implementation_summaries/market_data.md) ✨ - Phase 9 市场数据增强
+- [管理功能实现](docs/08_advanced/implementation_summaries/management_features.md) - Phase 10 用户管理
+- [DIFF 测试报告](docs/08_advanced/diff_test_reports/main_report.md) - DIFF 协议测试结果
 
 ### 其他
 - [变更日志](CHANGELOG.md) - 版本历史和更新记录
