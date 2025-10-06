@@ -51,7 +51,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         // 持仓查询
         .service(
             web::scope("/api/position")
-                .route("/{user_id}", web::get().to(handlers::query_position))
+                .route("/account/{account_id}", web::get().to(handlers::query_position))  // 按account_id查询
+                .route("/user/{user_id}", web::get().to(handlers::query_positions_by_user))  // 按user_id查询所有
         )
 
         // 成交记录查询

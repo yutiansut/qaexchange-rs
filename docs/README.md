@@ -77,6 +77,7 @@
 ### 🛠️ [06. 开发指南](./06_development/)
 开发、测试、部署文档。
 
+- [WebSocket 集成指南](./06_development/websocket_integration.md) - DIFF 协议接入详解 ✨ **新增**
 - [测试指南](./06_development/testing.md) - 单元测试与集成测试
 - [部署指南](./06_development/deployment.md) - 生产环境部署
 

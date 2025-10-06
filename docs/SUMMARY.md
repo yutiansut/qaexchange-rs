@@ -78,6 +78,7 @@
 # 开发指南
 
 - [开发指南](06_development/README.md)
+  - [WebSocket 集成指南](06_development/websocket_integration.md)
   - [测试指南](06_development/testing.md)
   - [部署指南](06_development/deployment.md)
 

@@ -288,12 +288,12 @@ pub async fn query_user_orders(
     )))
 }
 
-/// 查询持仓
+/// 查询持仓（按account_id查询单个账户）
 pub async fn query_position(
-    user_id: web::Path<String>,
+    account_id: web::Path<String>,  // 修复: 改为account_id
     state: web::Data<Arc<AppState>>,
 ) -> Result<HttpResponse> {
-    match state.account_mgr.get_account(&user_id) {
+    match state.account_mgr.get_account(&account_id) {
         Ok(account) => {
             let mut acc = account.write();  // 需要 mut 才能调用 float_profit 方法
             let mut positions = Vec::new();
@@ -312,12 +312,44 @@ pub async fn query_position(
             Ok(HttpResponse::Ok().json(ApiResponse::success(positions)))
         }
         Err(e) => {
-            log::error!("Failed to query position: {:?}", e);
+            log::error!("Failed to query position by account_id: {:?}", e);
             Ok(HttpResponse::NotFound().json(
                 ApiResponse::<()>::error(404, format!("Account not found: {:?}", e))
             ))
         }
     }
+}
+
+/// 查询持仓（按user_id查询该用户所有账户的持仓）
+pub async fn query_positions_by_user(
+    user_id: web::Path<String>,
+    state: web::Data<Arc<AppState>>,
+) -> Result<HttpResponse> {
+    let accounts = state.account_mgr.get_accounts_by_user(&user_id);
+
+    if accounts.is_empty() {
+        return Ok(HttpResponse::NotFound().json(
+            ApiResponse::<()>::error(404, format!("No accounts found for user: {}", user_id))
+        ));
+    }
+
+    let mut all_positions = Vec::new();
+    for account in accounts {
+        let mut acc = account.write();
+        for (code, pos) in acc.hold.iter_mut() {
+            all_positions.push(PositionInfo {
+                instrument_id: code.clone(),
+                volume_long: pos.volume_long_today + pos.volume_long_his,
+                volume_short: pos.volume_short_today + pos.volume_short_his,
+                cost_long: pos.open_price_long,
+                cost_short: pos.open_price_short,
+                profit_long: pos.float_profit_long(),
+                profit_short: pos.float_profit_short(),
+            });
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(all_positions)))
 }
 
 /// 入金

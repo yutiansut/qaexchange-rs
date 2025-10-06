@@ -1,3 +1,7 @@
 [submodule "web/src/websocket"]
 	path = web/src/websocket
 	url = https://github.com/yutiansut/qifi-js.git
+
+[submodule "qastrategyagent"]
+	path = qastrategyagent
+	url = https://github.com/yutiansut/qastrategyagent.git

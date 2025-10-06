@@ -4,6 +4,15 @@
 
 ## 📄 文档列表
 
+- **[WebSocket 集成指南](websocket_integration.md)** - DIFF 协议接入详解 ✨ **新增**
+  - 协议概览与连接建立
+  - 认证机制
+  - 数据同步机制（peek_message/rtn_data）
+  - 业务截面管理
+  - 行情订阅与交易指令
+  - 完整客户端实现示例（Python/JavaScript）
+  - 性能优化建议
+
 - **[测试指南](testing.md)** - 单元测试与集成测试
   - 测试框架
   - 测试策略
