@@ -400,10 +400,25 @@ impl DiffHandler {
             tokio::spawn(async move {
                 log::info!("Started market data streaming task for user: {}", user_id_clone);
 
-                while let Ok(event) = receiver.recv() {
-                    // 将 MarketDataEvent 转换为 DIFF quote 格式
-                    if let Some(quote_patch) = Self::convert_market_event_to_diff(&event) {
-                        snapshot_mgr.push_patch(&user_id_clone, quote_patch).await;
+                loop {
+                    // ✅ 使用 spawn_blocking 避免阻塞 Tokio 执行器
+                    let receiver_clone = receiver.clone();
+                    match tokio::task::spawn_blocking(move || receiver_clone.recv()).await {
+                        Ok(Ok(event)) => {
+                            // 将 MarketDataEvent 转换为 DIFF quote 格式
+                            if let Some(quote_patch) = Self::convert_market_event_to_diff(&event) {
+                                snapshot_mgr.push_patch(&user_id_clone, quote_patch).await;
+                                log::debug!("Pushed market data patch for user: {}", user_id_clone);
+                            }
+                        }
+                        Ok(Err(_)) => {
+                            log::warn!("Market data channel disconnected for user: {}", user_id_clone);
+                            break;
+                        }
+                        Err(e) => {
+                            log::error!("spawn_blocking error: {}", e);
+                            break;
+                        }
                     }
                 }
 
