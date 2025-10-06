@@ -91,8 +91,35 @@ impl MarketDataService {
 
     /// 设置存储（用于从 WAL 恢复数据）
     pub fn with_storage(mut self, storage: Arc<crate::storage::hybrid::OltpHybridStorage>) -> Self {
-        self.storage = Some(storage);
+        self.storage = Some(storage.clone());
+
+        // 从WAL恢复最近10分钟的市场数据到缓存
+        if let Err(e) = self.recover_recent_market_data(10) {
+            log::warn!("Failed to recover market data from WAL: {}", e);
+        }
+
         self
+    }
+
+    /// 从WAL恢复最近N分钟的市场数据
+    pub fn recover_recent_market_data(&self, minutes: i64) -> Result<()> {
+        if let Some(ref storage) = self.storage {
+            let recovery = recovery::MarketDataRecovery::new(storage.clone(), self.cache.clone());
+            match recovery.recover_recent_minutes(minutes) {
+                Ok(stats) if stats.tick_records > 0 || stats.orderbook_records > 0 => {
+                    log::info!("✅ [Market Data Recovery] Recovered {} ticks, {} orderbooks in {}ms",
+                        stats.tick_records, stats.orderbook_records, stats.recovery_time_ms);
+                }
+                Ok(_) => {
+                    log::debug!("[Market Data Recovery] No recent market data found in WAL");
+                }
+                Err(e) => {
+                    log::warn!("[Market Data Recovery] Failed: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// 设置合约配置
