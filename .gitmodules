@@ -1,0 +1,3 @@
+[submodule "web/src/websocket"]
+	path = web/src/websocket
+	url = https://github.com/yutiansut/qifi-js.git
