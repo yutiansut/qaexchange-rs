@@ -166,20 +166,85 @@ impl DiffHandler {
         ctx_addr: Addr<DiffWebsocketSession>,
     ) {
         if let Some(ref user_mgr) = self.user_manager {
-            // 使用 UserManager 进行登录验证
-            let login_req = crate::user::UserLoginRequest {
-                username: username.clone(),
-                password,
+            // 尝试两种认证方式：
+            // 1. username + password（原始密码）
+            // 2. user_id + token（JWT 或其他 token）
+
+            // 先尝试 token 认证（检查 username 是否为 UUID 格式的 user_id）
+            let login_result = if username.len() == 36 && username.contains('-') {
+                log::info!("Detected UUID format username, attempting token authentication for user_id: {}", username);
+
+                // username 是 UUID 格式，可能是 user_id，尝试 token 认证
+                match user_mgr.verify_token(&password) {
+                    Ok(verified_user_id) => {
+                        log::info!("Token verification successful, verified_user_id: {}", verified_user_id);
+
+                        // Token 验证成功，检查 user_id 匹配
+                        if verified_user_id == username {
+                            match user_mgr.get_user(&username) {
+                                Ok(user) => {
+                                    log::info!("Token auth successful for user: {}", user.username);
+                                    Ok(crate::user::UserLoginResponse {
+                                        success: true,
+                                        user_id: Some(user.user_id.clone()),
+                                        username: Some(user.username.clone()),
+                                        token: Some(password.clone()),
+                                        message: "Token authentication successful".to_string(),
+                                    })
+                                }
+                                Err(e) => {
+                                    log::warn!("Token auth failed: user not found: {}", e);
+                                    Ok(crate::user::UserLoginResponse {
+                                        success: false,
+                                        user_id: None,
+                                        username: None,
+                                        token: None,
+                                        message: format!("User not found: {}", e),
+                                    })
+                                }
+                            }
+                        } else {
+                            log::warn!("Token auth failed: user_id mismatch (expected: {}, got: {})", username, verified_user_id);
+                            Ok(crate::user::UserLoginResponse {
+                                success: false,
+                                user_id: None,
+                                username: None,
+                                token: None,
+                                message: "Token user_id mismatch".to_string(),
+                            })
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Token verification failed: {}, falling back to password auth", e);
+                        // Token 验证失败，尝试常规密码认证（向后兼容）
+                        user_mgr.login(crate::user::UserLoginRequest {
+                            username: username.clone(),
+                            password,
+                        })
+                    }
+                }
+            } else {
+                log::info!("Standard password authentication for username: {}", username);
+                // 常规密码认证
+                user_mgr.login(crate::user::UserLoginRequest {
+                    username: username.clone(),
+                    password,
+                })
             };
 
-            match user_mgr.login(login_req) {
+            match login_result {
                 Ok(login_resp) => {
                     if login_resp.success {
                         // 登录成功，初始化用户快照
                         let user_id = login_resp.user_id.clone().unwrap_or_default();
                         self.snapshot_mgr.initialize_user(&user_id).await;
 
-                        // 发送登录成功通知
+                        // ✅ 设置 session 的 user_id（认证成功）
+                        ctx_addr.do_send(SetUserId {
+                            user_id: user_id.clone(),
+                        });
+
+                        // 发送登录成功通知（通过 SnapshotManager 推送）
                         let notify_patch = serde_json::json!({
                             "notify": {
                                 "login_success": {
@@ -189,39 +254,33 @@ impl DiffHandler {
                                     "content": format!("Login successful for user: {}", username)
                                 }
                             },
-                            "user_id": user_id,
+                            "user_id": user_id.clone(),
                             "username": username
                         });
 
-                        let rtn_data = DiffServerMessage::RtnData {
-                            data: vec![notify_patch],
-                        };
-
-                        ctx_addr.do_send(SendDiffMessage { message: rtn_data });
+                        // ✅ 通过 SnapshotManager 推送（触发 peek_message）
+                        self.snapshot_mgr.push_patch(&user_id, notify_patch).await;
                         log::info!("DIFF login successful: user={}, user_id={}", username, user_id);
                     } else {
-                        // 登录失败
+                        // 登录失败（也通过 SnapshotManager 推送，确保客户端能收到）
                         let notify_patch = serde_json::json!({
                             "notify": {
                                 "login_failed": {
                                     "type": "MESSAGE",
                                     "level": "ERROR",
                                     "code": 1001,
-                                    "content": login_resp.message
+                                    "content": login_resp.message.clone()
                                 }
                             }
                         });
 
-                        let rtn_data = DiffServerMessage::RtnData {
-                            data: vec![notify_patch],
-                        };
-
-                        ctx_addr.do_send(SendDiffMessage { message: rtn_data });
-                        log::warn!("DIFF login failed for user: {}", username);
+                        // 使用 "anonymous" 作为临时 user_id 推送失败消息
+                        self.snapshot_mgr.push_patch("anonymous", notify_patch).await;
+                        log::warn!("DIFF login failed for user: {}, reason: {}", username, login_resp.message);
                     }
                 }
                 Err(e) => {
-                    // 登录错误
+                    // 登录错误（也通过 SnapshotManager 推送）
                     let notify_patch = serde_json::json!({
                         "notify": {
                             "login_error": {
@@ -233,16 +292,13 @@ impl DiffHandler {
                         }
                     });
 
-                    let rtn_data = DiffServerMessage::RtnData {
-                        data: vec![notify_patch],
-                    };
-
-                    ctx_addr.do_send(SendDiffMessage { message: rtn_data });
+                    // 使用 "anonymous" 作为临时 user_id 推送错误消息
+                    self.snapshot_mgr.push_patch("anonymous", notify_patch).await;
                     log::error!("DIFF login error for user {}: {}", username, e);
                 }
             }
         } else {
-            // UserManager 不可用
+            // UserManager 不可用（也通过 SnapshotManager 推送）
             let notify_patch = serde_json::json!({
                 "notify": {
                     "service_error": {
@@ -254,11 +310,8 @@ impl DiffHandler {
                 }
             });
 
-            let rtn_data = DiffServerMessage::RtnData {
-                data: vec![notify_patch],
-            };
-
-            ctx_addr.do_send(SendDiffMessage { message: rtn_data });
+            // 使用 "anonymous" 作为临时 user_id 推送错误消息
+            self.snapshot_mgr.push_patch("anonymous", notify_patch).await;
             log::error!("DIFF login failed: UserManager not available");
         }
     }
@@ -306,7 +359,7 @@ impl DiffHandler {
         //     "ins_list": ins_list
         // })).await;
 
-        // 发送订阅确认和初始行情数据
+        // 发送订阅确认（通过 SnapshotManager 推送，触发 peek_message）
         let notify_patch = serde_json::json!({
             "notify": {
                 "subscribe_success": {
@@ -323,11 +376,8 @@ impl DiffHandler {
             }
         });
 
-        let rtn_data = DiffServerMessage::RtnData {
-            data: vec![notify_patch],
-        };
-
-        ctx_addr.do_send(SendDiffMessage { message: rtn_data });
+        // ✅ 通过 SnapshotManager 推送订阅确认（触发 peek_message 返回）
+        self.snapshot_mgr.push_patch(user_id, notify_patch).await;
 
         log::info!(
             "User {} subscribed to quotes: {:?}",
@@ -335,8 +385,33 @@ impl DiffHandler {
             instruments
         );
 
-        // TODO: 实际应该从 MarketDataBroadcaster 订阅并持续推送行情更新
-        // 目前仅完成订阅确认，行情推送需要与 MarketDataBroadcaster 集成
+        // ✅ 从 MarketDataBroadcaster 订阅并启动推送任务
+        if let Some(ref broadcaster) = self.market_broadcaster {
+            let receiver = broadcaster.subscribe(
+                user_id.to_string(),
+                instruments.clone(),
+                vec!["orderbook".to_string(), "tick".to_string(), "last_price".to_string()],
+            );
+
+            // 启动异步任务持续推送行情数据
+            let snapshot_mgr = self.snapshot_mgr.clone();
+            let user_id_clone = user_id.to_string();
+
+            tokio::spawn(async move {
+                log::info!("Started market data streaming task for user: {}", user_id_clone);
+
+                while let Ok(event) = receiver.recv() {
+                    // 将 MarketDataEvent 转换为 DIFF quote 格式
+                    if let Some(quote_patch) = Self::convert_market_event_to_diff(&event) {
+                        snapshot_mgr.push_patch(&user_id_clone, quote_patch).await;
+                    }
+                }
+
+                log::info!("Market data streaming task ended for user: {}", user_id_clone);
+            });
+        } else {
+            log::warn!("MarketDataBroadcaster not available, skipping live market data");
+        }
     }
 
     /// 处理下单请求
@@ -764,6 +839,69 @@ impl DiffHandler {
         // 3. 管理view_width（滚动窗口）
     }
 
+    /// 将 MarketDataEvent 转换为 DIFF 格式的 JSON patch
+    fn convert_market_event_to_diff(event: &crate::market::MarketDataEvent) -> Option<serde_json::Value> {
+        use crate::market::MarketDataEvent;
+
+        match event {
+            MarketDataEvent::OrderBookSnapshot { instrument_id, bids, asks, timestamp } => {
+                // 转换为 DIFF quotes 格式
+                Some(serde_json::json!({
+                    "quotes": {
+                        instrument_id: {
+                            "instrument_id": instrument_id,
+                            "datetime": timestamp,
+                            "bid_price1": bids.get(0).map(|b| b.price),
+                            "bid_volume1": bids.get(0).map(|b| b.volume),
+                            "ask_price1": asks.get(0).map(|a| a.price),
+                            "ask_volume1": asks.get(0).map(|a| a.volume),
+                        }
+                    }
+                }))
+            }
+
+            MarketDataEvent::LastPrice { instrument_id, price, timestamp } => {
+                Some(serde_json::json!({
+                    "quotes": {
+                        instrument_id: {
+                            "instrument_id": instrument_id,
+                            "last_price": price,
+                            "datetime": timestamp,
+                        }
+                    }
+                }))
+            }
+
+            MarketDataEvent::Tick { instrument_id, price, volume, direction, timestamp } => {
+                Some(serde_json::json!({
+                    "quotes": {
+                        instrument_id: {
+                            "instrument_id": instrument_id,
+                            "last_price": price,
+                            "volume": volume,
+                            "datetime": timestamp,
+                        }
+                    }
+                }))
+            }
+
+            MarketDataEvent::OrderBookUpdate { instrument_id, side, price, volume, timestamp } => {
+                // 增量更新转换为完整字段更新
+                let field_prefix = if side == "bid" { "bid" } else { "ask" };
+                Some(serde_json::json!({
+                    "quotes": {
+                        instrument_id: {
+                            "instrument_id": instrument_id,
+                            format!("{}_price1", field_prefix): price,
+                            format!("{}_volume1", field_prefix): volume,
+                            "datetime": timestamp,
+                        }
+                    }
+                }))
+            }
+        }
+    }
+
     /// 处理 peek_message（阻塞等待新数据）
     ///
     /// 实现 DIFF 协议的核心同步机制：
@@ -887,7 +1025,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for DiffWebsocketSess
                                 .into_actor(self),
                             );
                         } else {
-                            // 未认证，但允许 ReqLogin 消息
+                            // 未认证，只允许 ReqLogin 消息
                             if matches!(diff_msg, DiffClientMessage::ReqLogin { .. }) {
                                 let handler = self.diff_handler.clone();
                                 let user_id = "anonymous".to_string();  // 临时用户ID
@@ -900,7 +1038,8 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for DiffWebsocketSess
                                     .into_actor(self),
                                 );
                             } else {
-                                log::warn!("Unauthenticated DIFF message from session {}", self.session_id);
+                                log::warn!("Unauthenticated DIFF message from session {}, rejecting: {:?}",
+                                           self.session_id, diff_msg);
                             }
                         }
                     }
@@ -952,6 +1091,25 @@ impl ActixHandler<SendDiffMessage> for DiffWebsocketSession {
                 log::error!("Failed to serialize DIFF message: {}", e);
             }
         }
+    }
+}
+
+/// 设置 session 的 user_id（Actix 消息）
+#[derive(Clone)]
+pub struct SetUserId {
+    pub user_id: String,
+}
+
+impl ActixMessage for SetUserId {
+    type Result = ();
+}
+
+impl ActixHandler<SetUserId> for DiffWebsocketSession {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetUserId, _ctx: &mut Self::Context) {
+        self.user_id = Some(msg.user_id.clone());
+        log::info!("Session {} authenticated as user {}", self.session_id, msg.user_id);
     }
 }
 

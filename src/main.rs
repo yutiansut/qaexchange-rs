@@ -667,13 +667,15 @@ impl ExchangeServer {
                 .app_data(web::Data::new(ws_server.clone()))
                 .wrap(middleware::Logger::default())
                 .route("/ws", web::get().to(qaexchange::service::websocket::ws_route))
+                .route("/ws/diff", web::get().to(qaexchange::service::websocket::ws_diff_route))
                 .route("/health", web::get().to(|| async { "OK" }))
         })
         .bind(&bind_address)?
         .run();
 
-        log::info!("✅ WebSocket server started at ws://{}/ws", bind_address);
-        log::info!("   Connection: ws://{}/ws?user_id=<USER_ID>", bind_address);
+        log::info!("✅ WebSocket server started at ws://{}", bind_address);
+        log::info!("   Legacy Protocol: ws://{}/ws?user_id=<USER_ID>", bind_address);
+        log::info!("   DIFF Protocol:   ws://{}/ws/diff?user_id=<USER_ID> (Recommended)", bind_address);
         log::info!("   Market Data: Subscribe to channels [orderbook, tick, last_price]");
 
         Ok(server)
