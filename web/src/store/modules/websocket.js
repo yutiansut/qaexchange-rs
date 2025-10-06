@@ -83,7 +83,7 @@ const actions = {
     console.log('[WebSocket] Initializing...')
 
     // 获取当前用户 ID
-    const userId = rootState.currentUser || rootState.userInfo?.user_id
+    const userId = rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id)
     if (!userId) {
       console.error('[WebSocket] No user ID available')
       throw new Error('No user ID available')
@@ -217,7 +217,7 @@ const actions = {
 
     // 自动填充 user_id
     const orderWithUserId = {
-      user_id: rootState.currentUser || rootState.userInfo?.user_id,
+      user_id: rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id),
       order_id: `order_${Date.now()}`,
       ...order
     }
@@ -237,7 +237,7 @@ const actions = {
       throw new Error('WebSocket not connected')
     }
 
-    const userId = rootState.currentUser || rootState.userInfo?.user_id
+    const userId = rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id)
     console.log('[WebSocket] Cancelling order:', orderId)
     state.ws.cancelOrder(userId, orderId)
   },
@@ -317,7 +317,7 @@ const getters = {
 
   // 账户信息
   account: state => (currency = 'CNY') => {
-    return state.snapshot.accounts?.[currency]
+    return state.snapshot.accounts && state.snapshot.accounts[currency]
   },
 
   // 所有持仓
@@ -325,7 +325,7 @@ const getters = {
 
   // 获取特定持仓
   position: state => (instrumentId) => {
-    return state.snapshot.positions?.[instrumentId]
+    return state.snapshot.positions && state.snapshot.positions[instrumentId]
   },
 
   // 所有订单
@@ -333,7 +333,7 @@ const getters = {
 
   // 获取特定订单
   order: state => (orderId) => {
-    return state.snapshot.orders?.[orderId]
+    return state.snapshot.orders && state.snapshot.orders[orderId]
   },
 
   // 活跃订单（未完成的订单）
@@ -354,7 +354,7 @@ const getters = {
 
   // 获取特定行情
   quote: state => (instrumentId) => {
-    return state.snapshot.quotes?.[instrumentId]
+    return state.snapshot.quotes && state.snapshot.quotes[instrumentId]
   },
 
   // 订阅的合约列表

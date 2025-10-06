@@ -14,20 +14,20 @@
             <el-col :span="5">
               <div class="status-item">
                 <div class="label">账户余额</div>
-                <div class="value">¥ {{ formatNumber(account?.balance || 0) }}</div>
+                <div class="value">¥ {{ formatNumber(accountBalance) }}</div>
               </div>
             </el-col>
             <el-col :span="5">
               <div class="status-item">
                 <div class="label">可用资金</div>
-                <div class="value">¥ {{ formatNumber(account?.available || 0) }}</div>
+                <div class="value">¥ {{ formatNumber(accountAvailable) }}</div>
               </div>
             </el-col>
             <el-col :span="5">
               <div class="status-item">
                 <div class="label">浮动盈亏</div>
                 <div class="value" :class="profitClass">
-                  {{ formatProfit(account?.float_profit || 0) }}
+                  {{ formatProfit(accountFloatProfit) }}
                 </div>
               </div>
             </el-col>
@@ -508,8 +508,20 @@ export default {
     },
 
     profitClass() {
-      const profit = this.account?.float_profit || 0
+      const profit = this.accountFloatProfit
       return profit >= 0 ? 'profit' : 'loss'
+    },
+
+    accountBalance() {
+      return this.account && this.account.balance || 0
+    },
+
+    accountAvailable() {
+      return this.account && this.account.available || 0
+    },
+
+    accountFloatProfit() {
+      return this.account && this.account.float_profit || 0
     }
   },
 
