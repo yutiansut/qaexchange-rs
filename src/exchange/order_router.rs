@@ -592,6 +592,24 @@ impl OrderRouter {
 
                 log::debug!("Order {} accepted, exchange_order_id={}", order_id, exchange_order_id);
 
+                // 持久化订单簿tick数据（订单挂入导致bid/ask变化）
+                self.persist_orderbook_tick(&order.instrument_id)?;
+
+                // 广播订单簿更新（通知前端订单簿已变化）
+                if let Some(ref broadcaster) = self.market_broadcaster {
+                    // 获取更新后的bid/ask价格用于广播
+                    if let Some(orderbook) = self.matching_engine.get_orderbook(&order.instrument_id) {
+                        let ob = orderbook.read();
+                        let side = if order.direction == "BUY" { "bid" } else { "ask" };
+                        broadcaster.broadcast_orderbook_update(
+                            order.instrument_id.clone(),
+                            side.to_string(),
+                            order.limit_price,
+                            order.volume_orign,
+                        );
+                    }
+                }
+
                 // 持久化订单簿快照（订单已进入订单簿）
                 self.persist_orderbook_snapshot(&order.instrument_id)?;
             }
@@ -738,6 +756,44 @@ impl OrderRouter {
                 )?;
 
                 log::debug!("Order {} cancel accepted, exchange_order_id={}", order_id, id);
+
+                // 持久化订单簿tick数据（撤单导致bid/ask变化）
+                self.persist_orderbook_tick(&order.instrument_id)?;
+
+                // 广播订单簿更新（通知前端订单簿已变化）
+                if let Some(ref broadcaster) = self.market_broadcaster {
+                    // 撤单后，该价格档位的挂单量减少或消失
+                    if let Some(orderbook) = self.matching_engine.get_orderbook(&order.instrument_id) {
+                        let ob = orderbook.read();
+                        let side = if order.direction == "BUY" { "bid" } else { "ask" };
+
+                        // 获取撤单后该价格档位的剩余挂单量
+                        let remaining_volume = if order.direction == "BUY" {
+                            ob.bid_queue.get_sorted_orders()
+                                .and_then(|orders| {
+                                    orders.iter()
+                                        .find(|o| o.price == order.limit_price)
+                                        .map(|o| o.volume)  // 在闭包内 map 以复制值
+                                })
+                                .unwrap_or(0.0)
+                        } else {
+                            ob.ask_queue.get_sorted_orders()
+                                .and_then(|orders| {
+                                    orders.iter()
+                                        .find(|o| o.price == order.limit_price)
+                                        .map(|o| o.volume)  // 在闭包内 map 以复制值
+                                })
+                                .unwrap_or(0.0)
+                        };
+
+                        broadcaster.broadcast_orderbook_update(
+                            order.instrument_id.clone(),
+                            side.to_string(),
+                            order.limit_price,
+                            remaining_volume,  // 0表示该档位已清空
+                        );
+                    }
+                }
 
                 // 持久化订单簿快照（撤单后订单簿发生变化）
                 self.persist_orderbook_snapshot(&order.instrument_id)?;
@@ -955,6 +1011,63 @@ impl OrderRouter {
             // 写入WAL（OltpHybridStorage会自动处理序列号）
             if let Err(e) = storage.write(tick_record) {
                 log::warn!("Failed to persist tick data to WAL: {}", e);
+                // 不影响交易流程，只记录警告
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 持久化订单簿tick数据到WAL（订单挂入/撤销时调用，不更新last_price）
+    ///
+    /// 与 persist_tick_data 的区别：
+    /// - persist_tick_data: 成交时调用，更新 last_price + bid/ask
+    /// - persist_orderbook_tick: 订单簿变化时调用，只更新 bid/ask，保持 last_price 不变
+    fn persist_orderbook_tick(&self, instrument_id: &str) -> Result<(), ExchangeError> {
+        if let Some(ref storage) = self.storage {
+            use crate::storage::wal::record::WalRecord;
+
+            // 获取订单簿中的买卖价
+            let (bid_price, ask_price, last_price) = if let Some(orderbook) = self.matching_engine.get_orderbook(instrument_id) {
+                let ob = orderbook.read();
+                let bid = ob.bid_queue.get_sorted_orders()
+                    .and_then(|orders| orders.first().map(|o| o.price))
+                    .unwrap_or(0.0);
+                let ask = ob.ask_queue.get_sorted_orders()
+                    .and_then(|orders| orders.first().map(|o| o.price))
+                    .unwrap_or(0.0);
+
+                // 尝试获取最后成交价（从订单簿的lastprice字段，或使用中间价）
+                let last = if ob.lastprice > 0.0 {
+                    ob.lastprice
+                } else if bid > 0.0 && ask > 0.0 {
+                    (bid + ask) / 2.0
+                } else if bid > 0.0 {
+                    bid
+                } else if ask > 0.0 {
+                    ask
+                } else {
+                    0.0
+                };
+
+                (bid, ask, last)
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+
+            // 创建TickData记录（volume=0表示订单簿变化，非成交）
+            let tick_record = WalRecord::TickData {
+                instrument_id: WalRecord::to_fixed_array_16(instrument_id),
+                last_price,  // 保持上次成交价不变
+                bid_price,
+                ask_price,
+                volume: 0,  // 0表示订单簿变化，非成交tick
+                timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+            };
+
+            // 写入WAL（OltpHybridStorage会自动处理序列号）
+            if let Err(e) = storage.write(tick_record) {
+                log::warn!("Failed to persist orderbook tick data to WAL: {}", e);
                 // 不影响交易流程，只记录警告
             }
         }

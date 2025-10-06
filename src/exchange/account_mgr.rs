@@ -442,13 +442,27 @@ impl AccountManager {
             let json = std::fs::read_to_string(&path)
                 .map_err(|e| ExchangeError::IOError(format!("Read snapshot file failed: {}", e)))?;
 
-            let qifi: QIFI = serde_json::from_str(&json)
-                .map_err(|e| ExchangeError::SerializationError(format!("QIFI deserialization failed: {}", e)))?;
+            // 容错处理：将 JSON 中的 null 替换为 0.0（兼容旧版快照）
+            // 这是临时解决方案，防止因为旧快照中的 null 值导致启动失败
+            let sanitized_json = json.replace(": null,", ": 0.0,").replace(": null\n", ": 0.0\n");
+
+            let qifi: QIFI = serde_json::from_str(&sanitized_json)
+                .map_err(|e| {
+                    log::error!("Failed to deserialize snapshot file: {:?}, error: {}", path, e);
+                    ExchangeError::SerializationError(format!("QIFI deserialization failed for {:?}: {}", path.file_name(), e))
+                })?;
 
             // 恢复账户
-            self.restore_account_from_qifi(qifi)?;
-
-            restored_count += 1;
+            match self.restore_account_from_qifi(qifi) {
+                Ok(_) => {
+                    log::debug!("Successfully restored account from {:?}", path.file_name());
+                    restored_count += 1;
+                }
+                Err(e) => {
+                    log::warn!("Failed to restore account from {:?}: {}, skipping", path.file_name(), e);
+                    // 继续处理其他文件，不中断恢复流程
+                }
+            }
         }
 
         log::info!("Restored {} accounts from snapshots in {}", restored_count, snapshot_dir);
