@@ -207,6 +207,8 @@ export default {
         if (this.accounts.length > 0 && !this.form.account_id) {
           this.form.account_id = this.accounts[0].account_id
           this.selectedAccount = this.accounts[0]
+          // 通知父组件初始账户选择
+          this.$emit('account-change', this.form.account_id)
         }
       } catch (error) {
         this.$message.error('加载账户列表失败: ' + (error.message || '未知错误'))
@@ -215,6 +217,8 @@ export default {
 
     handleAccountChange(accountId) {
       this.selectedAccount = this.accounts.find(acc => acc.account_id === accountId)
+      // 通知父组件账户选择变化
+      this.$emit('account-change', accountId)
     },
 
     handleTypeChange() {

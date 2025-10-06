@@ -38,13 +38,13 @@
             <el-col :span="8">
               <div class="info-item">
                 <span class="label">买一</span>
-                <span class="value bid">{{ tickData.bid_price ? tickData.bid_price.toFixed(2) : '--' }}</span>
+                <span class="value bid">{{ bestBidPrice ? bestBidPrice.toFixed(2) : '--' }}</span>
               </div>
             </el-col>
             <el-col :span="8">
               <div class="info-item">
                 <span class="label">卖一</span>
-                <span class="value ask">{{ tickData.ask_price ? tickData.ask_price.toFixed(2) : '--' }}</span>
+                <span class="value ask">{{ bestAskPrice ? bestAskPrice.toFixed(2) : '--' }}</span>
               </div>
             </el-col>
             <el-col :span="8">
@@ -67,14 +67,14 @@
           </div>
 
           <div class="orderbook-content">
-            <!-- 卖盘 -->
+            <!-- 卖盘（价格越高越上，远离最新价）-->
             <div class="asks">
               <div class="header-row">
                 <span class="price">价格(卖)</span>
                 <span class="volume">数量</span>
               </div>
               <div
-                v-for="(ask, index) in orderbook.asks"
+                v-for="(ask, index) in reversedAsks"
                 :key="'ask-' + index"
                 class="order-row ask-row"
                 @click="handlePriceClick(ask.price, 'SELL')"
@@ -153,6 +153,7 @@
                 direction="BUY"
                 offset="OPEN"
                 @submit="handleOrderSubmit"
+                @account-change="handleAccountChange"
               />
             </el-tab-pane>
 
@@ -163,6 +164,7 @@
                 direction="SELL"
                 offset="OPEN"
                 @submit="handleOrderSubmit"
+                @account-change="handleAccountChange"
               />
             </el-tab-pane>
 
@@ -171,6 +173,7 @@
                 :instrument-id="selectedInstrument"
                 :current-price="tickData.last_price"
                 @submit="handleOrderSubmit"
+                @account-change="handleAccountChange"
               />
             </el-tab-pane>
           </el-tabs>
@@ -232,7 +235,7 @@
 </template>
 
 <script>
-import { getInstruments, getOrderBook, getTick, submitOrder, cancelOrder, queryUserOrders } from '@/api'
+import { getInstruments, getOrderBook, getTick, getRecentTrades, submitOrder, cancelOrder, queryUserOrders } from '@/api'
 import { mapGetters } from 'vuex'
 import OrderForm from './components/OrderForm.vue'
 import CloseForm from './components/CloseForm.vue'
@@ -253,12 +256,29 @@ export default {
       if (this.priceChange > 0) return 'price-up'
       if (this.priceChange < 0) return 'price-down'
       return ''
+    },
+    // 卖盘反序：价格高的在上面（远离最新价）
+    reversedAsks() {
+      return [...this.orderbook.asks].reverse()
+    },
+    // 从订单簿第一档获取买一价
+    bestBidPrice() {
+      return this.orderbook.bids && this.orderbook.bids.length > 0
+        ? this.orderbook.bids[0].price
+        : (this.tickData.bid_price || null)
+    },
+    // 从订单簿第一档获取卖一价
+    bestAskPrice() {
+      return this.orderbook.asks && this.orderbook.asks.length > 0
+        ? this.orderbook.asks[0].price
+        : (this.tickData.ask_price || null)
     }
   },
   data() {
     return {
       instruments: [],
       selectedInstrument: 'IF2501',
+      selectedAccountId: null,  // 当前选中的账户ID（用于查询委托）
       activeTab: 'buy',
       depth: 5,
       orderbook: {
@@ -327,11 +347,19 @@ export default {
       }
     },
 
+    handleAccountChange(accountId) {
+      // 当OrderForm中的账户选择变化时更新
+      this.selectedAccountId = accountId
+      // 立即刷新该账户的委托
+      this.loadPendingOrders()
+    },
+
     async loadPendingOrders() {
-      if (!this.currentUser) return
+      // Phase 10: 使用 account_id 而非 user_id 查询委托
+      if (!this.selectedAccountId) return
 
       try {
-        const data = await queryUserOrders(this.currentUser)
+        const data = await queryUserOrders(this.selectedAccountId)
         // 过滤未完成的订单：Submitted(提交), PartiallyFilled(部分成交)
         // 不包括：Filled(已成交), Cancelled(已撤销), Rejected(已拒绝)
         this.pendingOrders = (data.orders || []).filter(o =>
@@ -342,9 +370,38 @@ export default {
       }
     },
 
+    async loadRecentTrades() {
+      if (!this.selectedInstrument) return
+
+      try {
+        const trades = await getRecentTrades(this.selectedInstrument, 20)
+
+        // 转换后端数据格式为前端需要的格式
+        this.recentTrades = (trades || []).map(trade => {
+          // 将纳秒时间戳转换为 HH:MM:SS 格式
+          const date = new Date(trade.timestamp / 1000000)  // 纳秒 → 毫秒
+          const timeStr = date.toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          })
+
+          return {
+            time: timeStr,
+            price: trade.price,
+            volume: trade.volume,
+            direction: trade.direction  // backend已经提供了direction字段
+          }
+        })
+      } catch (error) {
+        console.error('Failed to load recent trades:', error)
+      }
+    },
+
     handleInstrumentChange() {
       this.loadOrderBook()
       this.loadTick()
+      this.loadRecentTrades()
     },
 
     setDepth(depth) {
@@ -425,11 +482,13 @@ export default {
       this.loadOrderBook()
       this.loadTick()
       this.loadPendingOrders()
+      this.loadRecentTrades()
 
       this.refreshTimer = setInterval(() => {
         this.loadOrderBook()
         this.loadTick()
         this.loadPendingOrders()
+        this.loadRecentTrades()
       }, 2000)  // 每2秒刷新
     },
 
