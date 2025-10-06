@@ -1,0 +1,37 @@
+[book]
+title = "QAExchange Documentation"
+authors = ["QAExchange Team"]
+language = "zh"
+multilingual = false
+src = "docs"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[preprocessor.links]
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/QUANTAXIS/qaexchange-rs"
+edit-url-template = "https://github.com/QUANTAXIS/qaexchange-rs/edit/master/docs/{path}"
+site-url = "/qaexchange-rs/"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+teaser-word-count = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 1
+boost-paragraph = 1
+expand = true
+heading-split-level = 3
+
+[output.html.print]
+enable = true
