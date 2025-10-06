@@ -5,8 +5,64 @@
 </template>
 
 <script>
+import { mapGetters, mapActions } from 'vuex'
+
 export default {
-  name: 'App'
+  name: 'App',
+
+  computed: {
+    ...mapGetters(['isLoggedIn']),
+    ...mapGetters('websocket', ['connectionState'])
+  },
+
+  watch: {
+    // 监听登录状态变化
+    isLoggedIn: {
+      handler(newValue, oldValue) {
+        if (newValue && !oldValue) {
+          // 用户刚登录，初始化 WebSocket
+          this.initializeWebSocket()
+        } else if (!newValue && oldValue) {
+          // 用户登出，销毁 WebSocket
+          this.cleanupWebSocket()
+        }
+      },
+      immediate: true
+    }
+  },
+
+  mounted() {
+    // 如果已登录，初始化 WebSocket
+    if (this.isLoggedIn) {
+      this.initializeWebSocket()
+    }
+  },
+
+  beforeDestroy() {
+    // 清理 WebSocket
+    this.cleanupWebSocket()
+  },
+
+  methods: {
+    ...mapActions('websocket', ['initWebSocket', 'connectWebSocket', 'destroyWebSocket']),
+
+    async initializeWebSocket() {
+      try {
+        console.log('[App] Initializing WebSocket...')
+        await this.initWebSocket()
+        await this.connectWebSocket()
+        console.log('[App] WebSocket initialized successfully')
+      } catch (error) {
+        console.error('[App] Failed to initialize WebSocket:', error)
+        // 不阻塞应用启动，WebSocket 失败不应影响其他功能
+      }
+    },
+
+    cleanupWebSocket() {
+      console.log('[App] Cleaning up WebSocket...')
+      this.destroyWebSocket()
+    }
+  }
 }
 </script>
 

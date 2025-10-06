@@ -117,6 +117,13 @@ const routes = [
         name: 'AdminTransactions',
         component: () => import('@/views/admin/transactions.vue'),
         meta: { title: '资金流水', icon: 'el-icon-notebook-2', group: 'admin', requireAdmin: true }
+      },
+      // WebSocket 测试页面
+      {
+        path: 'websocket-test',
+        name: 'WebSocketTest',
+        component: () => import('@/views/WebSocketTest.vue'),
+        meta: { title: 'WebSocket 测试', icon: 'el-icon-connection', group: 'system' }
       }
     ]
   }

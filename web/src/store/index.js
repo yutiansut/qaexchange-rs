@@ -2,9 +2,16 @@ import Vue from 'vue'
 import Vuex from 'vuex'
 import { getSystemMonitoring, login as apiLogin, getCurrentUser } from '@/api'
 
+// Vuex 模块
+import websocket from './modules/websocket'
+
 Vue.use(Vuex)
 
 export default new Vuex.Store({
+  modules: {
+    websocket
+  },
+
   state: {
     // 当前用户 ID
     currentUser: localStorage.getItem('currentUser') || '',
