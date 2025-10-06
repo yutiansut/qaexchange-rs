@@ -887,17 +887,29 @@ impl DiffHandler {
 
             MarketDataEvent::OrderBookUpdate { instrument_id, side, price, volume, timestamp } => {
                 // 增量更新转换为完整字段更新
-                let field_prefix = if side == "bid" { "bid" } else { "ask" };
-                Some(serde_json::json!({
-                    "quotes": {
-                        instrument_id: {
-                            "instrument_id": instrument_id,
-                            format!("{}_price1", field_prefix): price,
-                            format!("{}_volume1", field_prefix): volume,
-                            "datetime": timestamp,
+                if side == "bid" {
+                    Some(serde_json::json!({
+                        "quotes": {
+                            instrument_id: {
+                                "instrument_id": instrument_id,
+                                "bid_price1": price,
+                                "bid_volume1": volume,
+                                "datetime": timestamp,
+                            }
                         }
-                    }
-                }))
+                    }))
+                } else {
+                    Some(serde_json::json!({
+                        "quotes": {
+                            instrument_id: {
+                                "instrument_id": instrument_id,
+                                "ask_price1": price,
+                                "ask_volume1": volume,
+                                "datetime": timestamp,
+                            }
+                        }
+                    }))
+                }
             }
         }
     }
