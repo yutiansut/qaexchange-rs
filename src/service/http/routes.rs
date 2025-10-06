@@ -58,7 +58,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         // 成交记录查询
         .service(
             web::scope("/api/trades")
-                .route("/user/{user_id}", web::get().to(handlers::query_user_trades))
+                .route("/account/{account_id}", web::get().to(handlers::query_account_trades))  // 按account_id查询
+                .route("/user/{user_id}", web::get().to(handlers::query_user_trades))  // 按user_id查询所有
         )
 
         // 市场数据（行情）

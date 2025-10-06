@@ -159,11 +159,21 @@ export function queryUserOrders(userId) {
 // ============= 持仓查询 API =============
 
 /**
- * 查询持仓
+ * 查询用户持仓（跨所有账户）
  */
 export function queryPosition(userId) {
   return request({
-    url: `/position/${userId}`,
+    url: `/position/user/${userId}`,
+    method: 'get'
+  })
+}
+
+/**
+ * 查询账户持仓（单个账户）
+ */
+export function queryAccountPosition(accountId) {
+  return request({
+    url: `/position/account/${accountId}`,
     method: 'get'
   })
 }
@@ -171,11 +181,21 @@ export function queryPosition(userId) {
 // ============= 成交记录查询 API =============
 
 /**
- * 查询用户成交记录
+ * 查询用户成交记录（跨所有账户）
  */
 export function queryUserTrades(userId) {
   return request({
     url: `/trades/user/${userId}`,
+    method: 'get'
+  })
+}
+
+/**
+ * 查询账户成交记录（单个账户）
+ */
+export function queryAccountTrades(accountId) {
+  return request({
+    url: `/trades/account/${accountId}`,
     method: 'get'
   })
 }

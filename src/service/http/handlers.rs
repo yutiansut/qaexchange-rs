@@ -423,9 +423,36 @@ pub async fn query_user_trades(
     user_id: web::Path<String>,
     state: web::Data<Arc<AppState>>,
 ) -> Result<HttpResponse> {
-    let trades = state.trade_recorder.get_trades_by_user(&user_id);
+    // 按user_id查询：聚合该用户所有账户的成交记录
+    let accounts = state.account_mgr.get_accounts_by_user(&user_id);
 
-    log::info!("Querying trades for user: {}, found {} trades", user_id, trades.len());
+    let mut all_trades = Vec::new();
+    for account in accounts {
+        let acc = account.read();
+        let account_id = &acc.account_cookie;
+        let trades = state.trade_recorder.get_trades_by_user(account_id); // 注意：这里的by_user实际上是by_account
+        all_trades.extend(trades);
+    }
+
+    log::info!("Querying trades for user: {}, found {} trades", user_id, all_trades.len());
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(
+        serde_json::json!({
+            "trades": all_trades,
+            "total": all_trades.len()
+        })
+    )))
+}
+
+/// 查询账户成交记录（按account_id）
+pub async fn query_account_trades(
+    account_id: web::Path<String>,
+    state: web::Data<Arc<AppState>>,
+) -> Result<HttpResponse> {
+    // 注意：TradeRecorder.by_user 实际上索引的是 account_id
+    let trades = state.trade_recorder.get_trades_by_user(&account_id);
+
+    log::info!("Querying trades for account: {}, found {} trades", account_id, trades.len());
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(
         serde_json::json!({

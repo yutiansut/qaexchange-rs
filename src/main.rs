@@ -162,10 +162,13 @@ impl ExchangeServer {
         let matching_engine = Arc::new(ExchangeMatchingEngine::new());
         let instrument_registry = Arc::new(InstrumentRegistry::new());
 
-        // 1.3 创建交易网关并设置通知系统
+        // 1.3 创建交易网关并设置通知系统和成交记录器
         let mut trade_gateway_inner = TradeGateway::new(account_mgr.clone());
         trade_gateway_inner.set_notification_broker(notification_broker.clone());
-        let trade_gateway = Arc::new(trade_gateway_inner);
+
+        // 从 matching_engine 获取 trade_recorder 并设置到 trade_gateway
+        let trade_recorder = matching_engine.get_trade_recorder();
+        let trade_gateway = Arc::new(trade_gateway_inner.set_trade_recorder(trade_recorder.clone()));
 
         let market_broadcaster = Arc::new(MarketDataBroadcaster::new());
 

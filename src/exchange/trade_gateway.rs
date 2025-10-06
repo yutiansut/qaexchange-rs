@@ -127,6 +127,9 @@ pub struct TradeGateway {
     /// Phase 5: 存储分离 - 账户回报数据
     account_wal_managers: DashMap<String, Arc<WalManager>>,
 
+    /// 成交记录器（可选，用于查询历史成交）
+    trade_recorder: Option<Arc<crate::matching::trade_recorder::TradeRecorder>>,
+
     /// WAL 根目录
     wal_root: String,
 }
@@ -149,7 +152,14 @@ impl TradeGateway {
             instrument_wal_managers: DashMap::new(),
             account_wal_managers: DashMap::new(),
             wal_root: "./data/wal".to_string(), // 默认 WAL 根目录
+            trade_recorder: None,
         }
+    }
+
+    /// 设置成交记录器
+    pub fn set_trade_recorder(mut self, trade_recorder: Arc<crate::matching::trade_recorder::TradeRecorder>) -> Self {
+        self.trade_recorder = Some(trade_recorder);
+        self
     }
 
     /// 设置 WAL 根目录 (Phase 5)
@@ -685,6 +695,25 @@ impl TradeGateway {
         account_wal_mgr.append(response_record).map_err(|e| {
             ExchangeError::StorageError(format!("Failed to append ExchangeResponseRecord (Trade): {}", e))
         })?;
+
+        // 记录成交到 TradeRecorder（用于查询）
+        if let Some(recorder) = &self.trade_recorder {
+            // 注意：这里的 user_id 实际上是 account_id
+            // 由于没有对手方信息，暂时两边都用同一个 account_id
+            // 在完整实现中，应该从 opposite_order_id 查找对手方 account_id
+            let trading_day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+            recorder.record_trade(
+                instrument_id.to_string(),
+                user_id.to_string(),     // buy_account_id (如果是BUY方)
+                user_id.to_string(),     // sell_account_id (如果是SELL方，应该从对手方获取)
+                order_id.to_string(),
+                format!("opposite_{}", opposite_order_id.unwrap_or(0)),
+                price,
+                volume,
+                trading_day,
+            );
+        }
 
         // TODO: 推送回报给账户 (Phase 4)
 
