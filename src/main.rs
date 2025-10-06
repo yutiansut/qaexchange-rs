@@ -91,6 +91,9 @@ struct ExchangeServer {
     /// 市场数据广播器
     market_broadcaster: Arc<MarketDataBroadcaster>,
 
+    /// 市场数据服务（包含快照生成器）
+    market_data_service: Arc<qaexchange::market::MarketDataService>,
+
     /// 结算引擎
     settlement_engine: Arc<SettlementEngine>,
 
@@ -117,6 +120,9 @@ struct ExchangeServer {
 
     /// iceoryx2 管理器（零拷贝 IPC）
     iceoryx_manager: Option<Arc<parking_lot::RwLock<qaexchange::ipc::IceoryxManager>>>,
+
+    /// 快照生成器线程句柄
+    snapshot_generator_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl ExchangeServer {
@@ -171,7 +177,10 @@ impl ExchangeServer {
 
         // 从 matching_engine 获取 trade_recorder 并设置到 trade_gateway
         let trade_recorder = matching_engine.get_trade_recorder();
-        let trade_gateway = Arc::new(trade_gateway_inner.set_trade_recorder(trade_recorder.clone()));
+        trade_gateway_inner = trade_gateway_inner.set_trade_recorder(trade_recorder.clone());
+
+        // 先创建 trade_gateway Arc（后续会设置 market_data_service）
+        let trade_gateway = Arc::new(trade_gateway_inner);
 
         let market_broadcaster = Arc::new(MarketDataBroadcaster::new());
 
@@ -273,6 +282,40 @@ impl ExchangeServer {
         // 6. 创建风险监控器
         let risk_monitor = Arc::new(RiskMonitor::new(account_mgr.clone()));
 
+        // 7. 创建市场数据服务（包含快照生成器）
+        let market_data_service = {
+            let mut service = qaexchange::market::MarketDataService::new(matching_engine.clone());
+
+            // 设置存储（用于市场数据恢复）
+            service = service.with_storage(market_data_storage.clone());
+
+            // 设置 iceoryx2（如果启用）
+            if let Some(ref iceoryx_mgr) = iceoryx_manager {
+                service = service.with_iceoryx(iceoryx_mgr.clone());
+            }
+
+            // 配置快照生成器：订阅所有合约，每秒生成一次快照
+            let instruments = vec![
+                "IF2501".to_string(),
+                "IF2502".to_string(),
+                "IC2501".to_string(),
+                "IH2501".to_string(),
+            ];
+            service = service.with_snapshot_generator(instruments, 1000);
+
+            Arc::new(service)
+        };
+        log::info!("✅ Market data service with snapshot generator initialized");
+
+        // 7.1 设置 market_data_service 到 trade_gateway（用于更新快照统计）
+        // 由于 trade_gateway 已经是 Arc，需要使用 unsafe 获取可变引用
+        // 安全性：此时 trade_gateway 只有一个引用（刚创建），可以安全修改
+        unsafe {
+            let trade_gateway_ptr = Arc::as_ptr(&trade_gateway) as *mut TradeGateway;
+            (*trade_gateway_ptr).set_market_data_service(market_data_service.clone());
+        }
+        log::info!("✅ Market data service connected to trade gateway");
+
         log::info!("✅ Core components initialized");
         log::info!("✅ Market data broadcaster initialized");
         log::info!("✅ Settlement engine initialized");
@@ -288,6 +331,7 @@ impl ExchangeServer {
             trade_gateway,
             order_router,
             market_broadcaster,
+            market_data_service,
             settlement_engine,
             capital_mgr,
             risk_monitor,
@@ -297,6 +341,7 @@ impl ExchangeServer {
             storage_stats: None,
             conversion_mgr: None,
             iceoryx_manager,
+            snapshot_generator_handle: None,
         }
     }
 
@@ -401,6 +446,9 @@ impl ExchangeServer {
             // 设置初始结算价
             self.settlement_engine.set_settlement_price(inst.instrument_id.clone(), init_price);
 
+            // 设置快照生成器的昨收盘价（用于涨跌幅计算）
+            self.market_data_service.set_pre_close(&inst.instrument_id, init_price);
+
             log::info!("  ✓ {} @ {} (margin: {}%, commission: {}%)",
                 inst.instrument_id,
                 init_price,
@@ -410,6 +458,16 @@ impl ExchangeServer {
         }
 
         log::info!("✅ {} instruments initialized", instruments.len());
+    }
+
+    /// 启动快照生成器
+    fn start_snapshot_generator(&mut self) {
+        if let Some(handle) = self.market_data_service.start_snapshot_generator() {
+            self.snapshot_generator_handle = Some(handle);
+            log::info!("✅ Snapshot generator started (1s interval)");
+        } else {
+            log::warn!("⚠️  Snapshot generator not started (not configured)");
+        }
     }
 
     /// 启动存储订阅器
@@ -769,6 +827,9 @@ impl ExchangeServer {
     async fn run(mut self) -> io::Result<()> {
         // 1. 初始化合约
         self.init_instruments();
+
+        // 1.5. 启动快照生成器
+        self.start_snapshot_generator();
 
         // 2. 从WAL恢复用户数据（必须在账户恢复之前，因为账户需要绑定到用户）
         self.recover_from_user_wal();

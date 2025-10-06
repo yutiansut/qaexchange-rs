@@ -38,6 +38,10 @@
 - [查询引擎](./03_core_modules/storage/query_engine.md) - Polars SQL 查询
 - [复制系统](./03_core_modules/storage/replication.md) - 主从复制与故障转移
 
+#### 市场数据模块 ✨ **新增**
+- [市场数据模块](./03_core_modules/market/README.md) - 行情数据服务总览
+- [快照生成器](./03_core_modules/market/snapshot_generator.md) - 每秒级别市场快照
+
 #### 通知系统
 - [通知架构](./03_core_modules/notification/architecture.md) - 零拷贝通知推送
 - [订阅管理](./03_core_modules/notification/subscription.md) - 订阅过滤与路由
@@ -131,6 +135,7 @@
 ### 按主题查找
 - **性能优化**: [高性能架构](./02_architecture/high_performance.md), [解耦存储](./02_architecture/decoupled_storage.md)
 - **数据持久化**: [WAL](./03_core_modules/storage/wal.md), [SSTable](./03_core_modules/storage/sstable.md)
+- **市场数据**: [快照生成器](./03_core_modules/market/snapshot_generator.md), [市场数据模块](./03_core_modules/market/README.md) ✨ **新增**
 - **协议集成**: [DIFF 协议](./04_api/websocket/diff_protocol.md), [数据模型](./02_architecture/data_models.md)
 - **WebSocket**: [协议规范](./04_api/websocket/protocol.md), [前端集成](./05_integration/frontend/integration_guide.md)
 - **测试部署**: [测试指南](./06_development/testing.md), [部署指南](./06_development/deployment.md)

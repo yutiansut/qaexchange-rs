@@ -5,6 +5,7 @@
 
 pub mod broadcaster;
 pub mod snapshot_broadcaster;
+pub mod snapshot_generator;
 pub mod cache;
 pub mod recovery;
 
@@ -79,6 +80,8 @@ pub struct MarketDataService {
     storage: Option<Arc<crate::storage::hybrid::OltpHybridStorage>>,
     /// iceoryx2 管理器（零拷贝 IPC）
     iceoryx_manager: Option<Arc<RwLock<crate::ipc::IceoryxManager>>>,
+    /// 快照生成器（每秒级别市场快照）
+    snapshot_generator: Option<Arc<snapshot_generator::MarketSnapshotGenerator>>,
 }
 
 impl MarketDataService {
@@ -90,6 +93,7 @@ impl MarketDataService {
             instrument_configs: HashMap::new(),
             storage: None,
             iceoryx_manager: None,
+            snapshot_generator: None,
         }
     }
 
@@ -110,6 +114,64 @@ impl MarketDataService {
         self.iceoryx_manager = Some(manager);
         log::info!("✅ Market data service: iceoryx2 enabled");
         self
+    }
+
+    /// 设置快照生成器（每秒级别市场快照）
+    pub fn with_snapshot_generator(
+        mut self,
+        instruments: Vec<String>,
+        interval_ms: u64,
+    ) -> Self {
+        let config = snapshot_generator::SnapshotGeneratorConfig {
+            interval_ms,
+            enable_persistence: false, // WAL持久化后续实现
+            instruments,
+        };
+
+        let generator = Arc::new(snapshot_generator::MarketSnapshotGenerator::new(
+            self.matching_engine.clone(),
+            config,
+        ));
+
+        self.snapshot_generator = Some(generator);
+        log::info!("✅ Market data service: snapshot generator configured (interval: {}ms)", interval_ms);
+        self
+    }
+
+    /// 启动快照生成器（必须在配置后调用）
+    pub fn start_snapshot_generator(&self) -> Option<std::thread::JoinHandle<()>> {
+        if let Some(generator) = &self.snapshot_generator {
+            let handle = generator.clone().start();
+            log::info!("✅ Snapshot generator started");
+            Some(handle)
+        } else {
+            log::warn!("⚠️  Snapshot generator not configured");
+            None
+        }
+    }
+
+    /// 订阅市场快照
+    pub fn subscribe_snapshots(&self) -> Option<crossbeam::channel::Receiver<snapshot_generator::MarketSnapshot>> {
+        self.snapshot_generator.as_ref().map(|g| g.subscribe())
+    }
+
+    /// 更新成交统计（由TradeGateway调用）
+    pub fn update_trade_stats(&self, instrument_id: &str, volume: i64, turnover: f64) {
+        if let Some(generator) = &self.snapshot_generator {
+            generator.update_trade_stats(instrument_id, volume, turnover);
+        }
+    }
+
+    /// 设置昨收盘价（启动时调用）
+    pub fn set_pre_close(&self, instrument_id: &str, pre_close: f64) {
+        if let Some(generator) = &self.snapshot_generator {
+            generator.set_pre_close(instrument_id, pre_close);
+        }
+    }
+
+    /// 获取快照生成器引用（用于其他模块集成）
+    pub fn snapshot_generator(&self) -> Option<&Arc<snapshot_generator::MarketSnapshotGenerator>> {
+        self.snapshot_generator.as_ref()
     }
 
     /// 从WAL恢复最近N分钟的市场数据
@@ -148,6 +210,7 @@ impl MarketDataService {
             instrument_configs: HashMap::new(),
             storage: None,
             iceoryx_manager: None,
+            snapshot_generator: None,
         }
     }
 
@@ -528,5 +591,6 @@ impl MarketDataService {
 // 重新导出
 pub use broadcaster::{MarketDataBroadcaster, MarketDataEvent};
 pub use snapshot_broadcaster::SnapshotBroadcastService;
+pub use snapshot_generator::{MarketSnapshot, MarketSnapshotGenerator, SnapshotGeneratorConfig};
 pub use cache::{MarketDataCache, CacheStatsSnapshot};
 pub use recovery::{MarketDataRecovery, RecoveredMarketData, RecoveryStats};

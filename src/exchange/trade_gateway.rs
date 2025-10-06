@@ -132,6 +132,9 @@ pub struct TradeGateway {
 
     /// WAL 根目录
     wal_root: String,
+
+    /// 市场数据服务（用于更新快照统计）
+    market_data_service: Option<Arc<crate::market::MarketDataService>>,
 }
 
 impl TradeGateway {
@@ -153,6 +156,7 @@ impl TradeGateway {
             account_wal_managers: DashMap::new(),
             wal_root: "./data/wal".to_string(), // 默认 WAL 根目录
             trade_recorder: None,
+            market_data_service: None,
         }
     }
 
@@ -160,6 +164,11 @@ impl TradeGateway {
     pub fn set_trade_recorder(mut self, trade_recorder: Arc<crate::matching::trade_recorder::TradeRecorder>) -> Self {
         self.trade_recorder = Some(trade_recorder);
         self
+    }
+
+    /// 设置市场数据服务（用于更新快照统计）
+    pub fn set_market_data_service(&mut self, market_data_service: Arc<crate::market::MarketDataService>) {
+        self.market_data_service = Some(market_data_service);
     }
 
     /// 设置 WAL 根目录 (Phase 5)
@@ -713,6 +722,14 @@ impl TradeGateway {
                 volume,
                 trading_day,
             );
+        }
+
+        // 更新快照生成器的成交统计
+        if let Some(mds) = &self.market_data_service {
+            let turnover = price * volume;
+            mds.update_trade_stats(instrument_id, volume as i64, turnover);
+            log::trace!("Updated snapshot stats: {} volume={}, turnover={:.2}",
+                instrument_id, volume, turnover);
         }
 
         // TODO: 推送回报给账户 (Phase 4)

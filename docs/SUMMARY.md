@@ -35,6 +35,11 @@
 - [查询引擎](03_core_modules/storage/query_engine.md)
 - [复制系统](03_core_modules/storage/replication.md)
 
+## 市场数据模块
+
+- [市场数据模块](03_core_modules/market/README.md)
+- [快照生成器](03_core_modules/market/snapshot_generator.md)
+
 ## 通知系统
 
 - [架构设计](03_core_modules/notification/architecture.md)
