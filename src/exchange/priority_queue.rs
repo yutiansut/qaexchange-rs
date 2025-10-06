@@ -81,8 +81,8 @@ impl PriorityOrderQueue {
 
     /// 添加VIP用户
     pub fn add_vip_user(&self, user_id: String) {
-        self.vip_users.lock().push(user_id);
         log::info!("Added VIP user: {}", user_id);
+        self.vip_users.lock().push(user_id);
     }
 
     /// 批量添加VIP用户
@@ -134,13 +134,15 @@ impl PriorityOrderQueue {
 
         match priority {
             OrderPriority::Critical => {
+                let account_id = req.order.account_id.clone();
                 self.critical_queue.lock().push_back(req);
-                log::trace!("Enqueued CRITICAL order: {}", req.order.account_id);
+                log::trace!("Enqueued CRITICAL order: {}", account_id);
                 true
             }
             OrderPriority::Normal => {
+                let account_id = req.order.account_id.clone();
                 self.normal_queue.lock().push_back(req);
-                log::trace!("Enqueued NORMAL order: {}", req.order.account_id);
+                log::trace!("Enqueued NORMAL order: {}", account_id);
                 true
             }
             OrderPriority::Low => {
@@ -150,8 +152,9 @@ impl PriorityOrderQueue {
                         self.low_queue_limit);
                     return false;
                 }
+                let account_id = req.order.account_id.clone();
                 queue.push_back(req);
-                log::trace!("Enqueued LOW order: {}", req.order.account_id);
+                log::trace!("Enqueued LOW order: {}", account_id);
                 true
             }
         }

@@ -37,6 +37,21 @@ impl Default for PerformanceConfig {
     }
 }
 
+impl PerformanceConfig {
+    /// 从文件加载性能配置
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let content = fs::read_to_string(path.as_ref())
+            .map_err(|e| format!("Failed to read performance config file: {}", e))?;
+        toml::from_str(&content)
+            .map_err(|e| format!("Failed to parse performance config file: {}", e))
+    }
+
+    /// 加载默认性能配置文件
+    pub fn load_default() -> Result<Self, String> {
+        Self::load_from_file("config/performance.toml")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchWriteConfig {
     #[serde(default = "default_buffer_size")]

@@ -150,6 +150,12 @@ pub struct OrderRouter {
 
     /// 批量写入线程停止信号
     flush_stop_signal: Arc<AtomicBool>,
+
+    /// 优先级订单队列（可选）
+    priority_queue: Option<Arc<crate::exchange::PriorityOrderQueue>>,
+
+    /// 是否启用优先级队列
+    priority_queue_enabled: AtomicBool,
 }
 
 impl OrderRouter {
@@ -180,6 +186,8 @@ impl OrderRouter {
             snapshot_interval: Duration::from_secs(1),  // 默认1秒
             tick_buffer: Arc::new(Mutex::new(Vec::with_capacity(1000))),
             flush_stop_signal: Arc::new(AtomicBool::new(false)),
+            priority_queue: None,  // 默认不启用
+            priority_queue_enabled: AtomicBool::new(false),
         }
     }
 
@@ -191,6 +199,42 @@ impl OrderRouter {
     /// 设置存储管理器（用于持久化行情数据）
     pub fn set_storage(&mut self, storage: Arc<crate::storage::hybrid::OltpHybridStorage>) {
         self.storage = Some(storage);
+    }
+
+    /// 启用优先级队列
+    ///
+    /// # 参数
+    /// - `low_queue_limit`: 低优先级队列最大长度（默认100）
+    /// - `critical_amount_threshold`: 大额订单阈值（默认1,000,000.0）
+    pub fn enable_priority_queue(&mut self, low_queue_limit: usize, critical_amount_threshold: f64) {
+        let queue = Arc::new(crate::exchange::PriorityOrderQueue::new(
+            low_queue_limit,
+            critical_amount_threshold,
+        ));
+        self.priority_queue = Some(queue);
+        self.priority_queue_enabled.store(true, Ordering::SeqCst);
+        log::info!("✅ Priority queue enabled (low_limit={}, threshold={:.2})",
+            low_queue_limit, critical_amount_threshold);
+    }
+
+    /// 禁用优先级队列
+    pub fn disable_priority_queue(&mut self) {
+        self.priority_queue_enabled.store(false, Ordering::SeqCst);
+        log::info!("⚠️  Priority queue disabled");
+    }
+
+    /// 添加VIP用户到优先级队列
+    pub fn add_vip_user(&self, user_id: String) {
+        if let Some(ref queue) = self.priority_queue {
+            queue.add_vip_user(user_id);
+        }
+    }
+
+    /// 批量添加VIP用户
+    pub fn add_vip_users(&self, users: Vec<String>) {
+        if let Some(ref queue) = self.priority_queue {
+            queue.add_vip_users(users);
+        }
     }
 
     /// 创建带自定义风控检查器的路由器
@@ -220,6 +264,8 @@ impl OrderRouter {
             snapshot_interval: Duration::from_secs(1),  // 默认1秒
             tick_buffer: Arc::new(Mutex::new(Vec::with_capacity(1000))),
             flush_stop_signal: Arc::new(AtomicBool::new(false)),
+            priority_queue: None,  // 默认不启用
+            priority_queue_enabled: AtomicBool::new(false),
         }
     }
 
@@ -1302,6 +1348,11 @@ impl OrderRouter {
         self.flush_stop_signal.store(true, Ordering::SeqCst);
         // 等待线程退出（最多1秒）
         std::thread::sleep(Duration::from_millis(100));
+    }
+
+    /// 获取优先级队列统计信息
+    pub fn get_priority_queue_stats(&self) -> Option<crate::exchange::PriorityQueueStatistics> {
+        self.priority_queue.as_ref().map(|q| q.get_statistics())
     }
 
     /// 获取订单详细信息（包含时间戳和成交量）

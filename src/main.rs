@@ -118,7 +118,7 @@ struct ExchangeServer {
 
 impl ExchangeServer {
     /// 创建交易所服务
-    fn new(config: ExchangeConfig) -> Self {
+    fn new(config: ExchangeConfig, perf_config: qaexchange::utils::config::PerformanceConfig) -> Self {
         log::info!("Initializing Exchange Server...");
 
         // 1. 创建核心组件
@@ -200,6 +200,22 @@ impl ExchangeServer {
         // 启动批量刷新线程（性能优化：tick数据批量写入）
         order_router.start_batch_flush_worker();
         log::info!("✅ Batch flush worker started (10ms interval, max 1000 records/batch)");
+
+        // 配置优先级队列（如果启用）
+        if perf_config.priority_queue.enabled {
+            order_router.enable_priority_queue(
+                perf_config.priority_queue.low_queue_limit,
+                perf_config.priority_queue.critical_amount_threshold,
+            );
+            // 添加VIP用户
+            if !perf_config.priority_queue.vip_users.is_empty() {
+                order_router.add_vip_users(perf_config.priority_queue.vip_users.clone());
+                log::info!("✅ Added {} VIP users to priority queue",
+                    perf_config.priority_queue.vip_users.len());
+            }
+        } else {
+            log::info!("Priority queue disabled (set enabled=true in config/performance.toml to enable)");
+        }
 
         let order_router = Arc::new(order_router);
 
@@ -863,6 +879,18 @@ async fn main() -> io::Result<()> {
         }
     };
 
+    // 1.1 加载性能优化配置
+    let perf_config = match qaexchange::utils::config::PerformanceConfig::load_default() {
+        Ok(cfg) => {
+            log::info!("✅ Performance config loaded from config/performance.toml");
+            cfg
+        }
+        Err(e) => {
+            log::warn!("Failed to load performance config: {}, using defaults", e);
+            qaexchange::utils::config::PerformanceConfig::default()
+        }
+    };
+
     log::info!("Configuration loaded");
     log::info!("  Storage path: {}", toml_config.storage.base_path);
     log::info!("  Storage enabled: {}", toml_config.storage.enabled);
@@ -896,6 +924,6 @@ async fn main() -> io::Result<()> {
     }
 
     // 创建并运行服务器
-    let server = ExchangeServer::new(config);
+    let server = ExchangeServer::new(config, perf_config);
     server.run().await
 }
