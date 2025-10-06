@@ -1,2 +1,14 @@
-# 
+# Build artifacts
 target/
+output/
+
+# Test data
+data/
+
+# Temporary files
+*.tmp
+*.log
+
+CLAUDE.md
+.claude/
+CLAUDE.md

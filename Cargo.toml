@@ -2,9 +2,13 @@
 name = "qaexchange-rs"
 version = "0.1.0"
 edition = "2021"
-authors = ["QUANTAXIS Team"]
+authors = ["@yutiansut"]
 description = "High-performance quantitative exchange system built on QARS"
 license = "MIT"
+
+[features]
+default = []
+iceoryx2 = ["dep:iceoryx2"]
 
 [lib]
 name = "qaexchange"
@@ -23,6 +27,7 @@ actix = "0.13"
 actix-web = "4.4"
 actix-web-actors = "4.2"
 actix-files = "0.6"
+actix-cors = "0.7"
 
 # 异步运行时
 tokio = { version = "1.35", features = ["full"] }
@@ -31,13 +36,19 @@ futures = "0.3"
 # 并发数据结构
 dashmap = "5.5"
 parking_lot = "0.12"
-crossbeam = "0.8"
+crossbeam = { version = "0.8", features = ["crossbeam-channel"] }
 rayon = "1.8"
 
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde-big-array = "0.5"
 toml = "0.8"
+
+# 零拷贝序列化（rkyv）
+# 使用 size_64 以支持大型消息（>4GB），禁用默认特性避免与 size_32 冲突
+# bytecheck: 运行时类型检查
+rkyv = { version = "0.7", default-features = false, features = ["validation", "alloc", "size_64", "bytecheck", "std"] }
 
 # 日期时间
 chrono = "0.4"
@@ -53,6 +64,13 @@ anyhow = "1.0"
 # UUID
 uuid = { version = "1.6", features = ["v4", "serde"] }
 
+# 随机数生成
+rand = "0.8"
+
+# 密码加密
+bcrypt = "0.15"
+jsonwebtoken = "9.2"
+
 # 数据库 (复用 qars 的连接)
 mongodb = "2.7"
 # clickhouse = { version = "0.11", features = ["tokio_io"] }
@@ -63,13 +81,26 @@ config = "0.13"
 # 指标监控
 prometheus = "0.13"
 
-# 零拷贝 IPC (复用 qars 的 iceoryx2)
-# iceoryx2 = "0.3" # 已通过 qars 依赖
+# 存储相关
+crc32fast = "1.5.0"
+crossbeam-skiplist = "0.1.3"
+arrow2 = { version = "0.18", features = ["io_parquet", "io_parquet_compression"] }
+memmap2 = "0.9"  # mmap 零拷贝文件映射
+
+# 查询引擎
+polars = { version = "0.51", features = ["lazy", "sql", "parquet", "dtype-full", "is_in"] }
+
+# 零拷贝 IPC (可选)
+iceoryx2 = { version = "0.4", optional = true }  # 共享内存零拷贝通信
 
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.12"
 criterion = "0.5"
+tempfile = "3.23.0"
+reqwest = { version = "0.11", features = ["json"] }
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
 
 [profile.dev]
 opt-level = 0
@@ -116,3 +147,12 @@ path = "examples/client_demo.rs"
 [[example]]
 name = "stress_test"
 path = "examples/stress_test.rs"
+
+[[example]]
+name = "high_performance_demo"
+path = "examples/high_performance_demo.rs"
+
+[[bench]]
+name = "oltp_storage_bench"
+path = "benches/oltp_storage_bench.rs"
+harness = false

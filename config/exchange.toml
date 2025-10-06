@@ -1,58 +1,100 @@
-# QAEXCHANGE 交易所配置
+# QAExchange 交易所配置文件
 
 [server]
-# 服务器地址
-address = "127.0.0.1"
-# HTTP 端口
-http_port = 8080
-# WebSocket 端口
-ws_port = 8081
+name = "QAExchange"
+environment = "development"
+log_level = "info"
+worker_threads = 10
 
-[database]
-# MongoDB 连接
-mongodb_uri = "mongodb://localhost:27017"
-mongodb_db = "qaexchange"
+[http]
+host = "0.0.0.0"
+port = 8094
+request_timeout = 30
+max_request_size = 10
+enable_cors = true
+cors_origins = ["*"]
 
-# ClickHouse 连接 (可选)
-# clickhouse_uri = "tcp://localhost:9000"
-# clickhouse_db = "qaexchange"
+[websocket]
+host = "0.0.0.0"
+port = 8095
+heartbeat_interval = 5
+connection_timeout = 10
+max_message_size = 1024
+max_connections_per_user = 3
+
+[storage]
+enabled = true
+base_path = "/home/quantaxis/qaexchange-rs/output/qaexchange/storage"
+
+[storage.wal]
+directory = "wal"
+max_file_size = 256
+sync_mode = "async"
+sync_interval_ms = 100
+
+[storage.memtable]
+max_size_mb = 256
+estimated_entry_size = 256
+
+[storage.sstable]
+directory = "sstables"
+compression = "zstd"
+compression_level = 3
+
+[storage.subscriber]
+batch_size = 100
+batch_timeout_ms = 10
+buffer_size = 10000
 
 [matching]
-# 撮合引擎配置
-# 开盘集合竞价时间 (HH:MM)
-auction_start = "09:25"
-auction_end = "09:30"
-
-# 连续交易时间
-trading_start = "09:30"
-trading_end = "15:00"
+orderbook_depth = 100
+price_precision = 2
+volume_precision = 0
+min_order_volume = 1.0
+max_order_volume = 1000.0
+order_ttl = 0
 
 [risk]
-# 风控配置
-# 单账户最大持仓比例 (%)
-max_position_ratio = 50.0
+enabled = true
+max_position_ratio = 80.0
+max_leverage = 10.0
+liquidation_ratio = 100.0
+warning_ratio = 80.0
+max_order_amount = 1000.0
+max_daily_trades = 10000
 
-# 单笔订单最大金额
-max_order_amount = 10000000.0
+[account]
+default_init_cash = 10000000.0
+min_balance = 0.0
+commission_rate = 0.0003
+margin_rate = 0.15
 
-# 风险度阈值 (触发强平)
-risk_ratio_threshold = 1.0
+[[instruments]]
+instrument_id = "IF2501"
+name = "沪深300股指期货2501"
+exchange_id = "CFFEX"
+product_type = "futures"
+contract_multiplier = 300.0
+tick_size = 0.2
+init_price = 3800.0
+is_trading = true
 
-[settlement]
-# 结算配置
-# 结算时间 (HH:MM)
-settlement_time = "15:30"
+[[instruments]]
+instrument_id = "IC2501"
+name = "中证500股指期货2501"
+exchange_id = "CFFEX"
+product_type = "futures"
+contract_multiplier = 200.0
+tick_size = 0.2
+init_price = 5600.0
+is_trading = true
 
-# 是否自动强平
-auto_force_liquidation = true
-
-[market_data]
-# 行情推送配置
-# Level1 推送频率 (ms)
-level1_interval_ms = 100
-
-# Level2 推送频率 (ms)
-level2_interval_ms = 500
-
-# 最大订阅者数量
-max_subscribers = 1000
+[[instruments]]
+instrument_id = "IH2501"
+name = "上证50股指期货2501"
+exchange_id = "CFFEX"
+product_type = "futures"
+contract_multiplier = 300.0
+tick_size = 0.2
+init_price = 2800.0
+is_trading = true

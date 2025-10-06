@@ -6,7 +6,7 @@
 pub use qars::qamarket::matchengine::{
     domain::{Order as MatchOrder, OrderDirection, OrderType, OrderTrait},
     orderbook::{Orderbook, Success, Failed, TradingState, OrderProcessingResult},
-    orders::OrderRequest,
+    orders::{self, OrderRequest},
 };
 
 /// 交易所撮合引擎封装
@@ -17,3 +17,6 @@ pub mod auction;
 
 /// 成交记录器
 pub mod trade_recorder;
+
+/// 撮合引擎核心（独立进程版本）
+pub mod core;

@@ -1,0 +1,37 @@
+{
+  "name": "qaexchange-web",
+  "version": "1.0.0",
+  "description": "QAExchange Trading System Web Interface",
+  "scripts": {
+    "serve": "export NODE_OPTIONS=--openssl-legacy-provider && vue-cli-service serve --port 8096",
+    "start": "npm run serve",
+    "dev": "npm run serve",
+    "build": "export NODE_OPTIONS=--openssl-legacy-provider && vue-cli-service build"
+  },
+  "dependencies": {
+    "axios": "^0.19.0",
+    "core-js": "^3.4.3",
+    "dayjs": "^1.8.17",
+    "echarts": "^4.9.0",
+    "element-ui": "^2.13.1",
+    "hqchart": "^1.1.12448",
+    "jquery": "^3.7.1",
+    "js-cookie": "^2.2.1",
+    "lodash": "^4.17.15",
+    "nprogress": "^0.2.0",
+    "vue": "^2.6.11",
+    "vue-router": "^3.1.3",
+    "vuex": "^3.1.2",
+    "vxe-table": "^2.9.25",
+    "xe-utils": "^2.7.14"
+  },
+  "devDependencies": {
+    "@vue/cli-plugin-babel": "^4.1.0",
+    "@vue/cli-plugin-router": "^4.1.0",
+    "@vue/cli-plugin-vuex": "^4.1.0",
+    "@vue/cli-service": "^4.1.0",
+    "sass": "^1.23.7",
+    "sass-loader": "^8.0.0",
+    "vue-template-compiler": "^2.6.10"
+  }
+}

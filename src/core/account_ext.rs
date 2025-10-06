@@ -9,11 +9,20 @@ use serde::{Deserialize, Serialize};
 /// 开户请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAccountRequest {
+    /// 用户ID（用于绑定关系）
     pub user_id: String,
-    pub user_name: String,
+
+    /// 账户ID（可选，如果为空则自动生成）
+    pub account_id: Option<String>,
+
+    /// 账户名称
+    pub account_name: String,
+
+    /// 初始资金
     pub init_cash: f64,
+
+    /// 账户类型
     pub account_type: AccountType,
-    pub password: String, // 实际应该加密存储
 }
 
 /// 账户类型
@@ -30,7 +39,7 @@ pub enum AccountType {
 /// 入金请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepositRequest {
-    pub user_id: String,
+    pub account_id: String,
     pub amount: f64,
     pub reference: String, // 入金流水号
 }
@@ -38,7 +47,7 @@ pub struct DepositRequest {
 /// 出金请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WithdrawRequest {
-    pub user_id: String,
+    pub account_id: String,
     pub amount: f64,
     pub reference: String, // 出金流水号
 }

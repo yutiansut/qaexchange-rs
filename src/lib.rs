@@ -91,11 +91,17 @@ pub mod matching;
 /// 交易所核心业务逻辑
 pub mod exchange;
 
+/// 账户系统（高性能独立版本）
+pub mod account;
+
 /// 风控系统
 pub mod risk;
 
 /// 行情推送系统
 pub mod market;
+
+/// 用户管理系统
+pub mod user;
 
 /// 对外服务层 (WebSocket + HTTP)
 pub mod service;
@@ -108,6 +114,18 @@ pub mod protocol;
 
 /// 工具模块
 pub mod utils;
+
+/// 通知消息系统
+pub mod notification;
+
+// iceoryx2 零拷贝 IPC
+pub mod ipc;
+
+// 主从复制系统
+pub mod replication;
+
+// 查询引擎系统 (Phase 8)
+pub mod query;
 
 // ============================================================================
 // 重导出常用类型
@@ -139,6 +157,12 @@ pub use qars::qadata::broadcast_hub::{DataBroadcaster, BroadcastConfig, MarketDa
 /// 交易所错误类型
 #[derive(Debug, thiserror::Error)]
 pub enum ExchangeError {
+    #[error("User error: {0}")]
+    UserError(String),
+
+    #[error("Authentication error: {0}")]
+    AuthError(String),
+
     #[error("Account error: {0}")]
     AccountError(String),
 
@@ -154,6 +178,9 @@ pub enum ExchangeError {
     #[error("Settlement error: {0}")]
     SettlementError(String),
 
+    #[error("Instrument error: {0}")]
+    InstrumentError(String),
+
     #[error("Storage error: {0}")]
     StorageError(String),
 
@@ -165,6 +192,18 @@ pub enum ExchangeError {
 
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(String),
+
+    #[error("IO error: {0}")]
+    IOError(String),
+
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+
+    #[error("Insufficient balance: {0}")]
+    InsufficientBalance(String),
 }
 
 pub type Result<T> = std::result::Result<T, ExchangeError>;

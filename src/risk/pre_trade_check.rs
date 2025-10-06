@@ -94,6 +94,14 @@ pub struct OrderCheckRequest {
     pub price: f64,
 }
 
+/// 活动订单信息（用于自成交防范）
+#[derive(Debug, Clone)]
+struct ActiveOrderInfo {
+    order_id: String,
+    instrument_id: String,
+    direction: String,  // BUY/SELL
+}
+
 /// 盘前风控检查器
 pub struct PreTradeCheck {
     /// 账户管理器引用
@@ -102,8 +110,8 @@ pub struct PreTradeCheck {
     /// 风控配置
     config: Arc<RwLock<RiskConfig>>,
 
-    /// 活动订单追踪 (user_id -> order_id set)
-    active_orders: DashMap<String, Arc<RwLock<Vec<String>>>>,
+    /// 活动订单追踪 (user_id -> Vec<ActiveOrderInfo>)
+    active_orders: DashMap<String, Arc<RwLock<Vec<ActiveOrderInfo>>>>,
 }
 
 impl PreTradeCheck {
@@ -129,8 +137,8 @@ impl PreTradeCheck {
         // 1. 基础参数检查
         self.check_order_params(req)?;
 
-        // 2. 账户存在性检查
-        let account = self.account_mgr.get_account(&req.user_id)?;
+        // 2. 账户存在性检查（通过user_id获取默认账户）
+        let account = self.account_mgr.get_default_account(&req.user_id)?;
 
         // 3. 资金充足性检查
         if let Some(reject) = self.check_funds(&account, req)? {
@@ -213,11 +221,11 @@ impl PreTradeCheck {
             estimated_commission
         };
 
-        if acc.accounts.available < required_funds {
+        if acc.money < required_funds {
             return Ok(Some(RiskCheckResult::Reject {
                 reason: format!(
                     "Insufficient funds: available={:.2}, required={:.2}",
-                    acc.accounts.available, required_funds
+                    acc.money, required_funds
                 ),
                 code: RiskCheckCode::InsufficientFunds,
             }));
@@ -238,7 +246,7 @@ impl PreTradeCheck {
         // 如果是开仓，检查持仓限额
         if req.offset == "OPEN" {
             let current_position = acc.hold.get(&req.instrument_id)
-                .map(|pos| pos.volume_long + pos.volume_short)
+                .map(|pos| pos.volume_long_today + pos.volume_long_his + pos.volume_short_today + pos.volume_short_his)
                 .unwrap_or(0.0);
 
             let new_position = current_position + req.volume;
@@ -297,27 +305,63 @@ impl PreTradeCheck {
     /// 自成交防范检查
     fn check_self_trading(
         &self,
-        _req: &OrderCheckRequest,
+        req: &OrderCheckRequest,
     ) -> Result<Option<RiskCheckResult>, ExchangeError> {
-        // TODO: 实现自成交防范逻辑
-        // 需要检查同一账户是否在同一合约上有对手方向的订单
-        // 这需要访问订单簿，暂时返回 Pass
+        // 检查同一账户在同一合约上是否有对手方向的活动订单
+        if let Some(orders_arc) = self.active_orders.get(&req.user_id) {
+            let orders = orders_arc.read();
+
+            // 确定对手方向
+            let opposite_direction = if req.direction == "BUY" { "SELL" } else { "BUY" };
+
+            // 检查是否存在同合约的对手方向订单
+            for active_order in orders.iter() {
+                if active_order.instrument_id == req.instrument_id
+                    && active_order.direction == opposite_direction {
+                    log::warn!(
+                        "Self-trading prevented: user={}, instrument={}, new_order={}, existing_order={} ({})",
+                        req.user_id,
+                        req.instrument_id,
+                        req.direction,
+                        active_order.order_id,
+                        active_order.direction
+                    );
+
+                    return Ok(Some(RiskCheckResult::Reject {
+                        reason: format!(
+                            "Self-trading prevented: existing {} order {} on {}",
+                            active_order.direction,
+                            active_order.order_id,
+                            req.instrument_id
+                        ),
+                        code: RiskCheckCode::SelfTradingRisk,
+                    }));
+                }
+            }
+        }
+
         Ok(None)
     }
 
     /// 记录活动订单
-    pub fn register_active_order(&self, user_id: &str, order_id: String) {
+    pub fn register_active_order(&self, user_id: &str, order_id: String, instrument_id: String, direction: String) {
+        let order_info = ActiveOrderInfo {
+            order_id,
+            instrument_id,
+            direction,
+        };
+
         self.active_orders
             .entry(user_id.to_string())
             .or_insert_with(|| Arc::new(RwLock::new(Vec::new())))
             .write()
-            .push(order_id);
+            .push(order_info);
     }
 
     /// 移除活动订单
     pub fn remove_active_order(&self, user_id: &str, order_id: &str) {
         if let Some(orders) = self.active_orders.get(user_id) {
-            orders.write().retain(|id| id != order_id);
+            orders.write().retain(|order_info| order_info.order_id != order_id);
         }
     }
 
@@ -351,10 +395,10 @@ mod tests {
         // 创建测试账户
         let req = OpenAccountRequest {
             user_id: "test_user".to_string(),
-            user_name: "Test User".to_string(),
+            account_id: None,
+            account_name: "Test User".to_string(),
             init_cash: 100000.0,
             account_type: AccountType::Individual,
-            password: "test123".to_string(),
         };
 
         mgr.open_account(req).unwrap();
@@ -398,7 +442,7 @@ mod tests {
         let account_mgr = create_test_account_manager();
         let checker = PreTradeCheck::new(account_mgr.clone());
 
-        let account = account_mgr.get_account("test_user").unwrap();
+        let account = account_mgr.get_default_account("test_user").unwrap();
 
         // 资金充足
         let req = OrderCheckRequest {
@@ -452,11 +496,51 @@ mod tests {
 
         assert_eq!(checker.get_active_order_count("test_user"), 0);
 
-        checker.register_active_order("test_user", "order1".to_string());
-        checker.register_active_order("test_user", "order2".to_string());
+        checker.register_active_order("test_user", "order1".to_string(), "IX2301".to_string(), "BUY".to_string());
+        checker.register_active_order("test_user", "order2".to_string(), "IX2302".to_string(), "SELL".to_string());
         assert_eq!(checker.get_active_order_count("test_user"), 2);
 
         checker.remove_active_order("test_user", "order1");
         assert_eq!(checker.get_active_order_count("test_user"), 1);
+    }
+
+    #[test]
+    fn test_self_trading_prevention() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        // 注册一个 BUY 订单
+        checker.register_active_order("test_user", "order1".to_string(), "IX2301".to_string(), "BUY".to_string());
+
+        // 尝试提交同合约的 SELL 订单（应被拒绝）
+        let req = OrderCheckRequest {
+            user_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "SELL".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 100.0,
+        };
+
+        let result = checker.check(&req).unwrap();
+        assert!(matches!(result, RiskCheckResult::Reject { code: RiskCheckCode::SelfTradingRisk, .. }));
+
+        // 同方向订单应该通过
+        let req_same_direction = OrderCheckRequest {
+            direction: "BUY".to_string(),
+            ..req.clone()
+        };
+
+        let result = checker.check(&req_same_direction).unwrap();
+        assert!(matches!(result, RiskCheckResult::Pass));
+
+        // 不同合约应该通过
+        let req_different_instrument = OrderCheckRequest {
+            instrument_id: "IX2302".to_string(),
+            ..req
+        };
+
+        let result = checker.check(&req_different_instrument).unwrap();
+        assert!(matches!(result, RiskCheckResult::Pass));
     }
 }
