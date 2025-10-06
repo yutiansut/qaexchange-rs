@@ -276,6 +276,47 @@ impl AccountManager {
             .unwrap_or(0)
     }
 
+    /// 验证账户所有权
+    ///
+    /// 验证指定的 account_id 是否属于指定的 user_id
+    ///
+    /// # 参数
+    /// - `account_id`: 账户ID（如 "ACC_xxx"）
+    /// - `user_id`: 用户ID（UUID）
+    ///
+    /// # 返回
+    /// - `Ok(())` - 验证通过，账户属于该用户
+    /// - `Err(ExchangeError::AccountError)` - 账户不存在
+    /// - `Err(ExchangeError::PermissionDenied)` - 账户不属于该用户
+    ///
+    /// # 示例
+    /// ```ignore
+    /// account_mgr.verify_account_ownership("ACC_xxx", "user123")?;
+    /// ```
+    pub fn verify_account_ownership(
+        &self,
+        account_id: &str,
+        user_id: &str
+    ) -> Result<(), ExchangeError> {
+        // 1. 检查账户是否存在
+        let metadata = self.metadata.get(account_id)
+            .ok_or_else(|| ExchangeError::AccountError(
+                format!("Account not found: {}", account_id)
+            ))?;
+
+        // 2. 检查账户所有权
+        if metadata.user_id != user_id {
+            return Err(ExchangeError::PermissionDenied(
+                format!(
+                    "Account {} does not belong to user {} (owner: {})",
+                    account_id, user_id, metadata.user_id
+                )
+            ));
+        }
+
+        Ok(())
+    }
+
     /// 查询账户 QIFI 格式（实时 - 仅账户信息）
     /// 直接使用 qars 的 get_accountmessage() 方法获取实时账户数据
     pub fn get_account_qifi(&self, account_id: &str) -> Result<Account, ExchangeError> {
@@ -636,5 +677,49 @@ mod tests {
         assert_eq!(user_id, "user_001");
         assert_eq!(account_name, "My Trading Account");
         assert_eq!(account_type, AccountType::MarketMaker);
+    }
+
+    #[test]
+    fn test_verify_account_ownership() {
+        let mgr = AccountManager::new();
+
+        // 创建账户
+        let req = OpenAccountRequest {
+            user_id: "user_alice".to_string(),
+            account_id: Some("ACC_alice_001".to_string()),
+            account_name: "Alice's Account".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        let account_id = mgr.open_account(req).unwrap();
+        assert_eq!(account_id, "ACC_alice_001");
+
+        // 测试1: 正确的用户验证账户所有权 - 应该成功
+        let result = mgr.verify_account_ownership(&account_id, "user_alice");
+        assert!(result.is_ok(), "Alice should own her account");
+
+        // 测试2: 错误的用户验证账户所有权 - 应该失败
+        let result = mgr.verify_account_ownership(&account_id, "user_bob");
+        assert!(result.is_err(), "Bob should not own Alice's account");
+
+        match result {
+            Err(ExchangeError::PermissionDenied(msg)) => {
+                assert!(msg.contains("does not belong to"), "Error message should indicate ownership mismatch");
+                assert!(msg.contains("user_bob"), "Error message should mention the requesting user");
+            },
+            _ => panic!("Expected PermissionDenied error"),
+        }
+
+        // 测试3: 不存在的账户 - 应该失败
+        let result = mgr.verify_account_ownership("ACC_nonexistent", "user_alice");
+        assert!(result.is_err(), "Nonexistent account should fail");
+
+        match result {
+            Err(ExchangeError::AccountError(msg)) => {
+                assert!(msg.contains("not found"), "Error message should indicate account not found");
+            },
+            _ => panic!("Expected AccountError for nonexistent account"),
+        }
     }
 }

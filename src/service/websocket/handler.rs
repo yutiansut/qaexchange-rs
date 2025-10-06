@@ -95,6 +95,7 @@ impl WsMessageHandler {
 
         match msg.message {
             ClientMessage::SubmitOrder {
+                account_id: client_account_id,  // ✨ 新增字段（来自客户端）
                 instrument_id,
                 direction,
                 offset,
@@ -102,8 +103,26 @@ impl WsMessageHandler {
                 price,
                 order_type,
             } => {
+                // 服务层：将 user_id 转换为 account_id
+                let account_id = match self.account_mgr.get_default_account(&user_id) {
+                    Ok(account_arc) => {
+                        let acc = account_arc.read();
+                        acc.account_cookie.clone()
+                    },
+                    Err(e) => {
+                        let server_msg = ServerMessage::OrderResponse {
+                            success: false,
+                            order_id: None,
+                            error_code: Some(4000),
+                            error_message: Some(format!("Account not found for user {}: {}", user_id, e)),
+                        };
+                        session_addr.do_send(SendMessage(server_msg));
+                        return Ok(());  // 发送错误响应后返回
+                    }
+                };
+
                 let req = SubmitOrderRequest {
-                    user_id: user_id.clone(),
+                    account_id,  // 交易层只关心 account_id
                     instrument_id,
                     direction,
                     offset,
@@ -124,9 +143,27 @@ impl WsMessageHandler {
                 session_addr.do_send(SendMessage(server_msg));
             }
 
-            ClientMessage::CancelOrder { order_id } => {
+            ClientMessage::CancelOrder { account_id: client_account_id, order_id } => {
+                // 服务层：将 user_id 转换为 account_id
+                let account_id = match self.account_mgr.get_default_account(&user_id) {
+                    Ok(account_arc) => {
+                        let acc = account_arc.read();
+                        acc.account_cookie.clone()
+                    },
+                    Err(e) => {
+                        let server_msg = ServerMessage::OrderResponse {
+                            success: false,
+                            order_id: Some(order_id.clone()),
+                            error_code: Some(4000),
+                            error_message: Some(format!("Account not found for user {}: {}", user_id, e)),
+                        };
+                        session_addr.do_send(SendMessage(server_msg));
+                        return Ok(());  // 发送错误响应后返回
+                    }
+                };
+
                 let req = CancelOrderRequest {
-                    user_id: user_id.clone(),
+                    account_id,  // 交易层只关心 account_id
                     order_id: order_id.clone(),
                 };
 

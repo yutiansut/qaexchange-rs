@@ -108,6 +108,7 @@ impl DiffHandler {
 
             DiffClientMessage::InsertOrder {
                 user_id: order_user_id,
+                account_id,  // ✨ 新增字段
                 order_id,
                 exchange_id,
                 instrument_id,
@@ -135,7 +136,7 @@ impl DiffHandler {
                 ).await;
             }
 
-            DiffClientMessage::CancelOrder { user_id: cancel_user_id, order_id } => {
+            DiffClientMessage::CancelOrder { user_id: cancel_user_id, account_id, order_id } => {
                 log::info!("DIFF cancel order: user_id={}, order_id={}", cancel_user_id, order_id);
                 self.handle_cancel_order(user_id, cancel_user_id, order_id, ctx_addr).await;
             }
@@ -376,9 +377,27 @@ impl DiffHandler {
                 _ => "LIMIT",
             };
 
-            // 构造OrderRouter请求
+            // 服务层：将 user_id 转换为 account_id
+            let account_id = if let Some(ref user_mgr) = self.user_manager {
+                match user_mgr.get_user_accounts(&order_user_id) {
+                    Ok(accounts) if !accounts.is_empty() => accounts[0].clone(),  // 使用第一个账户
+                    Ok(_) => {
+                        log::warn!("DIFF insert order failed: no accounts found for user {}", order_user_id);
+                        return;
+                    },
+                    Err(e) => {
+                        log::warn!("DIFF insert order failed: user lookup error: {}", e);
+                        return;
+                    }
+                }
+            } else {
+                log::warn!("DIFF insert order failed: user_manager not available");
+                return;
+            };
+
+            // 构造OrderRouter请求（交易层只关心 account_id）
             let req = crate::exchange::order_router::SubmitOrderRequest {
-                user_id: order_user_id.clone(),
+                account_id,
                 instrument_id: instrument_id.clone(),
                 direction: direction.clone(),
                 offset: offset.clone(),
@@ -492,8 +511,26 @@ impl DiffHandler {
         }
 
         if let Some(ref order_router) = self.order_router {
+            // 服务层：将 user_id 转换为 account_id
+            let account_id = if let Some(ref user_mgr) = self.user_manager {
+                match user_mgr.get_user_accounts(&cancel_user_id) {
+                    Ok(accounts) if !accounts.is_empty() => accounts[0].clone(),  // 使用第一个账户
+                    Ok(_) => {
+                        log::warn!("DIFF cancel order failed: no accounts found for user {}", cancel_user_id);
+                        return;
+                    },
+                    Err(e) => {
+                        log::warn!("DIFF cancel order failed: user lookup error: {}", e);
+                        return;
+                    }
+                }
+            } else {
+                log::warn!("DIFF cancel order failed: user_manager not available");
+                return;
+            };
+
             let req = crate::exchange::order_router::CancelOrderRequest {
-                user_id: cancel_user_id.clone(),
+                account_id,  // 交易层只关心 account_id
                 order_id: order_id.clone(),
             };
 

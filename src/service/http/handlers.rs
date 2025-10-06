@@ -120,8 +120,34 @@ pub async fn submit_order(
     req: web::Json<SubmitOrderRequest>,
     state: web::Data<Arc<AppState>>,
 ) -> Result<HttpResponse> {
+    // 服务层：验证账户所有权并获取 account_id
+    let account_id = if let Some(ref acc_id) = req.account_id {
+        // ✅ 客户端明确传递了 account_id，验证所有权
+        if let Err(e) = state.account_mgr.verify_account_ownership(acc_id, &req.user_id) {
+            return Ok(HttpResponse::Forbidden().json(
+                ApiResponse::<()>::error(4003, format!("Account verification failed: {}", e))
+            ));
+        }
+        acc_id.clone()
+    } else {
+        // ⚠️ 向后兼容：客户端未传递 account_id，使用默认账户
+        log::warn!("DEPRECATED: Client did not provide account_id for user {}. This behavior will be removed in future versions.", req.user_id);
+
+        match state.account_mgr.get_default_account(&req.user_id) {
+            Ok(account_arc) => {
+                let acc = account_arc.read();
+                acc.account_cookie.clone()
+            },
+            Err(e) => {
+                return Ok(HttpResponse::BadRequest().json(
+                    ApiResponse::<()>::error(4000, format!("Account not found for user {}: {}", req.user_id, e))
+                ));
+            }
+        }
+    };
+
     let core_req = CoreSubmitOrderRequest {
-        user_id: req.user_id.clone(),
+        account_id,  // 交易层只关心 account_id
         instrument_id: req.instrument_id.clone(),
         direction: req.direction.clone(),
         offset: req.offset.clone(),
@@ -153,8 +179,34 @@ pub async fn cancel_order(
     req: web::Json<CancelOrderRequest>,
     state: web::Data<Arc<AppState>>,
 ) -> Result<HttpResponse> {
+    // 服务层：验证账户所有权并获取 account_id
+    let account_id = if let Some(ref acc_id) = req.account_id {
+        // ✅ 客户端明确传递了 account_id，验证所有权
+        if let Err(e) = state.account_mgr.verify_account_ownership(acc_id, &req.user_id) {
+            return Ok(HttpResponse::Forbidden().json(
+                ApiResponse::<()>::error(4003, format!("Account verification failed: {}", e))
+            ));
+        }
+        acc_id.clone()
+    } else {
+        // ⚠️ 向后兼容：客户端未传递 account_id，使用默认账户
+        log::warn!("DEPRECATED: Client did not provide account_id for user {}. This behavior will be removed in future versions.", req.user_id);
+
+        match state.account_mgr.get_default_account(&req.user_id) {
+            Ok(account_arc) => {
+                let acc = account_arc.read();
+                acc.account_cookie.clone()
+            },
+            Err(e) => {
+                return Ok(HttpResponse::BadRequest().json(
+                    ApiResponse::<()>::error(4000, format!("Account not found for user {}: {}", req.user_id, e))
+                ));
+            }
+        }
+    };
+
     let core_req = CoreCancelOrderRequest {
-        user_id: req.user_id.clone(),
+        account_id,  // 交易层只关心 account_id
         order_id: req.order_id.clone(),
     };
 

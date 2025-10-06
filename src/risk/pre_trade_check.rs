@@ -86,7 +86,7 @@ impl Default for RiskConfig {
 /// 订单风控检查请求
 #[derive(Debug, Clone)]
 pub struct OrderCheckRequest {
-    pub user_id: String,
+    pub account_id: String,     // 交易系统只关心账户ID
     pub instrument_id: String,
     pub direction: String,      // BUY/SELL
     pub offset: String,          // OPEN/CLOSE
@@ -137,8 +137,8 @@ impl PreTradeCheck {
         // 1. 基础参数检查
         self.check_order_params(req)?;
 
-        // 2. 账户存在性检查（通过user_id获取默认账户）
-        let account = self.account_mgr.get_default_account(&req.user_id)?;
+        // 2. 账户存在性检查（交易系统只关心account_id）
+        let account = self.account_mgr.get_account(&req.account_id)?;
 
         // 3. 资金充足性检查
         if let Some(reject) = self.check_funds(&account, req)? {
@@ -308,7 +308,7 @@ impl PreTradeCheck {
         req: &OrderCheckRequest,
     ) -> Result<Option<RiskCheckResult>, ExchangeError> {
         // 检查同一账户在同一合约上是否有对手方向的活动订单
-        if let Some(orders_arc) = self.active_orders.get(&req.user_id) {
+        if let Some(orders_arc) = self.active_orders.get(&req.account_id) {
             let orders = orders_arc.read();
 
             // 确定对手方向
@@ -319,8 +319,8 @@ impl PreTradeCheck {
                 if active_order.instrument_id == req.instrument_id
                     && active_order.direction == opposite_direction {
                     log::warn!(
-                        "Self-trading prevented: user={}, instrument={}, new_order={}, existing_order={} ({})",
-                        req.user_id,
+                        "Self-trading prevented: account={}, instrument={}, new_order={}, existing_order={} ({})",
+                        req.account_id,
                         req.instrument_id,
                         req.direction,
                         active_order.order_id,
@@ -344,7 +344,7 @@ impl PreTradeCheck {
     }
 
     /// 记录活动订单
-    pub fn register_active_order(&self, user_id: &str, order_id: String, instrument_id: String, direction: String) {
+    pub fn register_active_order(&self, account_id: &str, order_id: String, instrument_id: String, direction: String) {
         let order_info = ActiveOrderInfo {
             order_id,
             instrument_id,
@@ -352,23 +352,23 @@ impl PreTradeCheck {
         };
 
         self.active_orders
-            .entry(user_id.to_string())
+            .entry(account_id.to_string())
             .or_insert_with(|| Arc::new(RwLock::new(Vec::new())))
             .write()
             .push(order_info);
     }
 
     /// 移除活动订单
-    pub fn remove_active_order(&self, user_id: &str, order_id: &str) {
-        if let Some(orders) = self.active_orders.get(user_id) {
+    pub fn remove_active_order(&self, account_id: &str, order_id: &str) {
+        if let Some(orders) = self.active_orders.get(account_id) {
             orders.write().retain(|order_info| order_info.order_id != order_id);
         }
     }
 
     /// 获取账户活动订单数量
-    pub fn get_active_order_count(&self, user_id: &str) -> usize {
+    pub fn get_active_order_count(&self, account_id: &str) -> usize {
         self.active_orders
-            .get(user_id)
+            .get(account_id)
             .map(|orders| orders.read().len())
             .unwrap_or(0)
     }

@@ -17,7 +17,7 @@ use qaexchange::exchange::instrument_registry::{InstrumentInfo, InstrumentType, 
 use qaexchange::matching::engine::ExchangeMatchingEngine;
 use qaexchange::notification::broker::NotificationBroker;
 use qaexchange::market::{MarketDataBroadcaster, SnapshotBroadcastService};
-use qaexchange::service::http::HttpServer;
+// use qaexchange::service::http::HttpServer;  // 未使用
 use qaexchange::service::http::admin::AdminAppState;
 use qaexchange::service::http::management::ManagementAppState;
 use qaexchange::service::websocket::WebSocketServer;
@@ -505,6 +505,7 @@ impl ExchangeServer {
         let ws_server = Arc::new(WebSocketServer::new(
             self.order_router.clone(),
             self.account_mgr.clone(),
+            self.user_mgr.clone(),
             self.trade_gateway.clone(),
             self.market_broadcaster.clone(),
         ));

@@ -60,16 +60,19 @@ pub struct AccountInfo {
     pub created_at: i64,
 }
 
-/// 订单提交请求
+/// 订单提交请求（外部 HTTP API）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitOrderRequest {
-    pub user_id: String,
+    pub user_id: String,                    // 用户身份（用于验证）
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,         // 交易账户（推荐明确传递）✨
     pub instrument_id: String,
-    pub direction: String,  // BUY/SELL
-    pub offset: String,     // OPEN/CLOSE/CLOSETODAY
+    pub direction: String,                  // BUY/SELL
+    pub offset: String,                     // OPEN/CLOSE/CLOSETODAY
     pub volume: f64,
     pub price: f64,
-    pub order_type: String, // LIMIT/MARKET
+    pub order_type: String,                 // LIMIT/MARKET
 }
 
 /// 订单提交响应
@@ -79,10 +82,13 @@ pub struct SubmitOrderResponse {
     pub status: String,
 }
 
-/// 撤单请求
+/// 撤单请求（外部 HTTP API）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelOrderRequest {
-    pub user_id: String,
+    pub user_id: String,                    // 用户身份（用于验证）
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,         // 交易账户（推荐明确传递）✨
     pub order_id: String,
 }
 

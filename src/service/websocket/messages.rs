@@ -26,6 +26,9 @@ pub enum ClientMessage {
 
     /// 提交订单
     SubmitOrder {
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        account_id: Option<String>,  // 交易账户（推荐明确传递）✨
         instrument_id: String,
         direction: String,  // BUY/SELL
         offset: String,     // OPEN/CLOSE
@@ -36,6 +39,9 @@ pub enum ClientMessage {
 
     /// 撤单
     CancelOrder {
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        account_id: Option<String>,  // 交易账户（推荐明确传递）✨
         order_id: String,
     },
 

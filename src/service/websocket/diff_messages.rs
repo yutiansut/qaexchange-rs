@@ -37,14 +37,17 @@ pub enum DiffClientMessage {
 
     /// 下单
     InsertOrder {
-        user_id: String,
+        user_id: String,                   // 用户身份（用于验证）
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        account_id: Option<String>,        // 交易账户（推荐明确传递）✨
         order_id: String,
         exchange_id: String,
         instrument_id: String,
-        direction: String,      // BUY/SELL
-        offset: String,         // OPEN/CLOSE
+        direction: String,                 // BUY/SELL
+        offset: String,                    // OPEN/CLOSE
         volume: i64,
-        price_type: String,     // LIMIT/MARKET/ANY
+        price_type: String,                // LIMIT/MARKET/ANY
         #[serde(skip_serializing_if = "Option::is_none")]
         limit_price: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,7 +58,10 @@ pub enum DiffClientMessage {
 
     /// 撤单
     CancelOrder {
-        user_id: String,
+        user_id: String,                   // 用户身份（用于验证）
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        account_id: Option<String>,        // 交易账户（推荐明确传递）✨
         order_id: String,
     },
 

@@ -16,10 +16,10 @@ use parking_lot::RwLock;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
-/// 订单提交请求
+/// 订单提交请求（交易层 - 只关心账户）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitOrderRequest {
-    pub user_id: String,
+    pub account_id: String,     // 交易系统只关心账户ID
     pub instrument_id: String,
     pub direction: String,      // BUY/SELL
     pub offset: String,          // OPEN/CLOSE/CLOSETODAY
@@ -28,10 +28,10 @@ pub struct SubmitOrderRequest {
     pub order_type: String,      // LIMIT/MARKET
 }
 
-/// 撤单请求
+/// 撤单请求（交易层 - 只关心账户）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelOrderRequest {
-    pub user_id: String,
+    pub account_id: String,     // 交易系统只关心账户ID
     pub order_id: String,
 }
 
@@ -204,7 +204,7 @@ impl OrderRouter {
 
         // 2. 风控检查
         let risk_check_req = OrderCheckRequest {
-            user_id: req.user_id.clone(),
+            account_id: req.account_id.clone(),
             instrument_id: req.instrument_id.clone(),
             direction: req.direction.clone(),
             offset: req.offset.clone(),
@@ -243,7 +243,7 @@ impl OrderRouter {
         let current_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         let order = QAOrder::new(
-            req.user_id.clone(),
+            req.account_id.clone(),  // QAOrder 的第一个参数是 account_id
             req.instrument_id.clone(),
             towards,
             "EXCHANGE".to_string(), // exchange_id
@@ -254,10 +254,10 @@ impl OrderRouter {
         );
 
         // 3.5. 冻结资金/保证金 (方案B：在订单提交时冻结)
-        let account = match self.account_mgr.get_default_account(&req.user_id) {
+        let account = match self.account_mgr.get_account(&req.account_id) {
             Ok(acc) => acc,
             Err(e) => {
-                log::error!("Account not found for user {}: {}", req.user_id, e);
+                log::error!("Account not found: {}: {}", req.account_id, e);
                 return SubmitOrderResponse {
                     success: false,
                     order_id: Some(order_id),
@@ -286,8 +286,8 @@ impl OrderRouter {
 
         if acc.money < required_funds {
             log::warn!(
-                "Insufficient funds (double-check): user={}, available={:.2}, required={:.2}",
-                req.user_id, acc.money, required_funds
+                "Insufficient funds (double-check): account={}, available={:.2}, required={:.2}",
+                req.account_id, acc.money, required_funds
             );
             return SubmitOrderResponse {
                 success: false,
@@ -315,7 +315,7 @@ impl OrderRouter {
         let qa_order_id = match qa_order_result {
             Ok(ref qa_order) => qa_order.order_id.clone(),
             Err(e) => {
-                log::warn!("Order rejected - insufficient funds/margin for user {}: {:?}", req.user_id, e);
+                log::warn!("Order rejected - insufficient funds/margin for account {}: {:?}", req.account_id, e);
                 return SubmitOrderResponse {
                     success: false,
                     order_id: Some(order_id),
@@ -344,16 +344,16 @@ impl OrderRouter {
 
         self.orders.insert(order_id.clone(), Arc::new(RwLock::new(route_info)));
 
-        // 5. 更新用户订单索引
+        // 5. 更新账户订单索引
         self.user_orders
-            .entry(req.user_id.clone())
+            .entry(req.account_id.clone())
             .or_insert_with(|| Arc::new(RwLock::new(Vec::new())))
             .write()
             .push(order_id.clone());
 
         // 6. 注册活动订单 (风控追踪)
         self.risk_checker.register_active_order(
-            &req.user_id,
+            &req.account_id,
             order_id.clone(),
             req.instrument_id.clone(),
             req.direction.clone()
@@ -752,9 +752,9 @@ impl OrderRouter {
         let mut info = order_info.write();
 
         // 2. 验证订单所有权
-        if info.order.user_id != req.user_id {
+        if info.order.user_id != req.account_id {
             return Err(ExchangeError::OrderError(
-                "Order does not belong to this user".to_string()
+                "Order does not belong to this account".to_string()
             ));
         }
 

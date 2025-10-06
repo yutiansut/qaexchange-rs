@@ -163,6 +163,9 @@ pub enum ExchangeError {
     #[error("Authentication error: {0}")]
     AuthError(String),
 
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
+
     #[error("Account error: {0}")]
     AccountError(String),
 
