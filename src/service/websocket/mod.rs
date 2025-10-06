@@ -59,7 +59,7 @@ impl WebSocketServer {
         trade_gateway: Arc<TradeGateway>,
         market_broadcaster: Arc<MarketDataBroadcaster>,
     ) -> Self {
-        let (handler, sender, sessions) = create_handler(order_router.clone(), account_mgr);
+        let (handler, sender, sessions) = create_handler(order_router.clone(), account_mgr.clone());
 
         // 启动消息处理循环（消费 handler）
         handler.start();
@@ -67,7 +67,7 @@ impl WebSocketServer {
         // 创建 DIFF 协议处理器（零拷贝架构）
         let snapshot_mgr = Arc::new(SnapshotManager::new());
         let diff_handler = Arc::new(
-            DiffHandler::new(snapshot_mgr)
+            DiffHandler::new(snapshot_mgr, account_mgr)  // ✨ 传递 account_mgr
                 .with_user_manager(user_manager.clone())
                 .with_order_router(order_router)
                 .with_market_broadcaster(market_broadcaster.clone())

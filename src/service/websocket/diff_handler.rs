@@ -16,10 +16,12 @@
 //! ```rust
 //! use qaexchange::service::websocket::diff_handler::DiffHandler;
 //! use qaexchange::protocol::diff::snapshot::SnapshotManager;
+//! use qaexchange::exchange::AccountManager;
 //! use std::sync::Arc;
 //!
 //! let snapshot_mgr = Arc::new(SnapshotManager::new());
-//! let handler = DiffHandler::new(snapshot_mgr);
+//! let account_mgr = Arc::new(AccountManager::new());
+//! let handler = DiffHandler::new(snapshot_mgr, account_mgr);
 //! ```
 
 use actix::{Actor, ActorContext, AsyncContext, StreamHandler, Handler as ActixHandler, Message as ActixMessage, Addr, Context, WrapFuture};
@@ -31,7 +33,7 @@ use log;
 use super::diff_messages::{DiffClientMessage, DiffServerMessage};
 use crate::protocol::diff::snapshot::SnapshotManager;
 use crate::user::UserManager;
-use crate::exchange::OrderRouter;
+use crate::exchange::{OrderRouter, AccountManager};
 use crate::market::MarketDataBroadcaster;
 
 /// DIFF 协议消息处理器
@@ -42,6 +44,9 @@ pub struct DiffHandler {
     /// 用户管理器
     pub(crate) user_manager: Option<Arc<UserManager>>,
 
+    /// 账户管理器（用于账户所有权验证）✨ Phase 10
+    pub(crate) account_mgr: Arc<AccountManager>,
+
     /// 订单路由器
     pub(crate) order_router: Option<Arc<OrderRouter>>,
 
@@ -51,10 +56,11 @@ pub struct DiffHandler {
 
 impl DiffHandler {
     /// 创建新的 DIFF 处理器
-    pub fn new(snapshot_mgr: Arc<SnapshotManager>) -> Self {
+    pub fn new(snapshot_mgr: Arc<SnapshotManager>, account_mgr: Arc<AccountManager>) -> Self {
         Self {
             snapshot_mgr,
             user_manager: None,
+            account_mgr,
             order_router: None,
             market_broadcaster: None,
         }
@@ -120,10 +126,11 @@ impl DiffHandler {
                 volume_condition,
                 time_condition,
             } => {
-                log::info!("DIFF insert order: user_id={}, order_id={}", order_user_id, order_id);
+                log::info!("DIFF insert order: user_id={}, account_id={:?}, order_id={}", order_user_id, account_id, order_id);
                 self.handle_insert_order(
                     user_id,
                     order_user_id,
+                    account_id,  // ✨ 传递 account_id
                     order_id,
                     exchange_id,
                     instrument_id,
@@ -137,8 +144,8 @@ impl DiffHandler {
             }
 
             DiffClientMessage::CancelOrder { user_id: cancel_user_id, account_id, order_id } => {
-                log::info!("DIFF cancel order: user_id={}, order_id={}", cancel_user_id, order_id);
-                self.handle_cancel_order(user_id, cancel_user_id, order_id, ctx_addr).await;
+                log::info!("DIFF cancel order: user_id={}, account_id={:?}, order_id={}", cancel_user_id, account_id, order_id);
+                self.handle_cancel_order(user_id, cancel_user_id, account_id, order_id, ctx_addr).await;  // ✨ 传递 account_id
             }
 
             DiffClientMessage::SetChart { chart_id, ins_list, duration, view_width } => {
@@ -337,6 +344,7 @@ impl DiffHandler {
         &self,
         session_user_id: &str,
         order_user_id: String,
+        client_account_id: Option<String>,  // ✨ 新增参数
         order_id: String,
         exchange_id: String,
         instrument_id: String,
@@ -377,22 +385,50 @@ impl DiffHandler {
                 _ => "LIMIT",
             };
 
-            // 服务层：将 user_id 转换为 account_id
-            let account_id = if let Some(ref user_mgr) = self.user_manager {
-                match user_mgr.get_user_accounts(&order_user_id) {
-                    Ok(accounts) if !accounts.is_empty() => accounts[0].clone(),  // 使用第一个账户
-                    Ok(_) => {
-                        log::warn!("DIFF insert order failed: no accounts found for user {}", order_user_id);
-                        return;
-                    },
-                    Err(e) => {
-                        log::warn!("DIFF insert order failed: user lookup error: {}", e);
-                        return;
-                    }
+            // 服务层：验证账户所有权并获取 account_id
+            let account_id = if let Some(ref acc_id) = client_account_id {
+                // ✅ 客户端明确传递了 account_id，验证所有权
+                if let Err(e) = self.account_mgr.verify_account_ownership(acc_id, &order_user_id) {
+                    let notify_patch = serde_json::json!({
+                        "notify": {
+                            "order_error": {
+                                "type": "MESSAGE",
+                                "level": "ERROR",
+                                "code": 4003,
+                                "content": format!("Account verification failed: {}", e)
+                            }
+                        }
+                    });
+
+                    let rtn_data = DiffServerMessage::RtnData {
+                        data: vec![notify_patch],
+                    };
+
+                    ctx_addr.do_send(SendDiffMessage { message: rtn_data });
+                    log::warn!("DIFF insert order failed: account verification failed for user {}: {}", order_user_id, e);
+                    return;
                 }
+                acc_id.clone()
             } else {
-                log::warn!("DIFF insert order failed: user_manager not available");
-                return;
+                // ⚠️ 向后兼容：客户端未传递 account_id，使用用户的第一个账户
+                log::warn!("DEPRECATED: DIFF client did not provide account_id for user {}. This behavior will be removed in future versions.", order_user_id);
+
+                if let Some(ref user_mgr) = self.user_manager {
+                    match user_mgr.get_user_accounts(&order_user_id) {
+                        Ok(accounts) if !accounts.is_empty() => accounts[0].clone(),
+                        Ok(_) => {
+                            log::warn!("DIFF insert order failed: no accounts found for user {}", order_user_id);
+                            return;
+                        },
+                        Err(e) => {
+                            log::warn!("DIFF insert order failed: user lookup error: {}", e);
+                            return;
+                        }
+                    }
+                } else {
+                    log::warn!("DIFF insert order failed: user_manager not available");
+                    return;
+                }
             };
 
             // 构造OrderRouter请求（交易层只关心 account_id）
@@ -485,6 +521,7 @@ impl DiffHandler {
         &self,
         session_user_id: &str,
         cancel_user_id: String,
+        client_account_id: Option<String>,  // ✨ 新增参数
         order_id: String,
         ctx_addr: Addr<DiffWebsocketSession>,
     ) {
@@ -511,22 +548,50 @@ impl DiffHandler {
         }
 
         if let Some(ref order_router) = self.order_router {
-            // 服务层：将 user_id 转换为 account_id
-            let account_id = if let Some(ref user_mgr) = self.user_manager {
-                match user_mgr.get_user_accounts(&cancel_user_id) {
-                    Ok(accounts) if !accounts.is_empty() => accounts[0].clone(),  // 使用第一个账户
-                    Ok(_) => {
-                        log::warn!("DIFF cancel order failed: no accounts found for user {}", cancel_user_id);
-                        return;
-                    },
-                    Err(e) => {
-                        log::warn!("DIFF cancel order failed: user lookup error: {}", e);
-                        return;
-                    }
+            // 服务层：验证账户所有权并获取 account_id
+            let account_id = if let Some(ref acc_id) = client_account_id {
+                // ✅ 客户端明确传递了 account_id，验证所有权
+                if let Err(e) = self.account_mgr.verify_account_ownership(acc_id, &cancel_user_id) {
+                    let notify_patch = serde_json::json!({
+                        "notify": {
+                            "cancel_error": {
+                                "type": "MESSAGE",
+                                "level": "ERROR",
+                                "code": 4003,
+                                "content": format!("Account verification failed: {}", e)
+                            }
+                        }
+                    });
+
+                    let rtn_data = DiffServerMessage::RtnData {
+                        data: vec![notify_patch],
+                    };
+
+                    ctx_addr.do_send(SendDiffMessage { message: rtn_data });
+                    log::warn!("DIFF cancel order failed: account verification failed for user {}: {}", cancel_user_id, e);
+                    return;
                 }
+                acc_id.clone()
             } else {
-                log::warn!("DIFF cancel order failed: user_manager not available");
-                return;
+                // ⚠️ 向后兼容：客户端未传递 account_id，使用用户的第一个账户
+                log::warn!("DEPRECATED: DIFF client did not provide account_id for user {}. This behavior will be removed in future versions.", cancel_user_id);
+
+                if let Some(ref user_mgr) = self.user_manager {
+                    match user_mgr.get_user_accounts(&cancel_user_id) {
+                        Ok(accounts) if !accounts.is_empty() => accounts[0].clone(),
+                        Ok(_) => {
+                            log::warn!("DIFF cancel order failed: no accounts found for user {}", cancel_user_id);
+                            return;
+                        },
+                        Err(e) => {
+                            log::warn!("DIFF cancel order failed: user lookup error: {}", e);
+                            return;
+                        }
+                    }
+                } else {
+                    log::warn!("DIFF cancel order failed: user_manager not available");
+                    return;
+                }
             };
 
             let req = crate::exchange::order_router::CancelOrderRequest {
@@ -896,8 +961,11 @@ mod tests {
 
     #[test]
     fn test_diff_handler_creation() {
+        use crate::exchange::AccountManager;
+
         let snapshot_mgr = Arc::new(SnapshotManager::new());
-        let handler = DiffHandler::new(snapshot_mgr);
+        let account_mgr = Arc::new(AccountManager::new());
+        let handler = DiffHandler::new(snapshot_mgr, account_mgr);
 
         assert!(Arc::strong_count(&handler.snapshot_mgr) >= 1);
     }

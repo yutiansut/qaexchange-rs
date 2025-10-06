@@ -103,21 +103,39 @@ impl WsMessageHandler {
                 price,
                 order_type,
             } => {
-                // 服务层：将 user_id 转换为 account_id
-                let account_id = match self.account_mgr.get_default_account(&user_id) {
-                    Ok(account_arc) => {
-                        let acc = account_arc.read();
-                        acc.account_cookie.clone()
-                    },
-                    Err(e) => {
+                // 服务层：验证账户所有权并获取 account_id
+                let account_id = if let Some(ref acc_id) = client_account_id {
+                    // ✅ 客户端明确传递了 account_id，验证所有权
+                    if let Err(e) = self.account_mgr.verify_account_ownership(acc_id, user_id) {
                         let server_msg = ServerMessage::OrderResponse {
                             success: false,
                             order_id: None,
-                            error_code: Some(4000),
-                            error_message: Some(format!("Account not found for user {}: {}", user_id, e)),
+                            error_code: Some(4003),
+                            error_message: Some(format!("Account verification failed: {}", e)),
                         };
                         session_addr.do_send(SendMessage(server_msg));
-                        return Ok(());  // 发送错误响应后返回
+                        return Ok(());
+                    }
+                    acc_id.clone()
+                } else {
+                    // ⚠️ 向后兼容：客户端未传递 account_id，使用默认账户
+                    log::warn!("DEPRECATED: WebSocket client did not provide account_id for user {}. This behavior will be removed in future versions.", user_id);
+
+                    match self.account_mgr.get_default_account(user_id) {
+                        Ok(account_arc) => {
+                            let acc = account_arc.read();
+                            acc.account_cookie.clone()
+                        },
+                        Err(e) => {
+                            let server_msg = ServerMessage::OrderResponse {
+                                success: false,
+                                order_id: None,
+                                error_code: Some(4000),
+                                error_message: Some(format!("Account not found for user {}: {}", user_id, e)),
+                            };
+                            session_addr.do_send(SendMessage(server_msg));
+                            return Ok(());
+                        }
                     }
                 };
 
@@ -144,21 +162,39 @@ impl WsMessageHandler {
             }
 
             ClientMessage::CancelOrder { account_id: client_account_id, order_id } => {
-                // 服务层：将 user_id 转换为 account_id
-                let account_id = match self.account_mgr.get_default_account(&user_id) {
-                    Ok(account_arc) => {
-                        let acc = account_arc.read();
-                        acc.account_cookie.clone()
-                    },
-                    Err(e) => {
+                // 服务层：验证账户所有权并获取 account_id
+                let account_id = if let Some(ref acc_id) = client_account_id {
+                    // ✅ 客户端明确传递了 account_id，验证所有权
+                    if let Err(e) = self.account_mgr.verify_account_ownership(acc_id, user_id) {
                         let server_msg = ServerMessage::OrderResponse {
                             success: false,
                             order_id: Some(order_id.clone()),
-                            error_code: Some(4000),
-                            error_message: Some(format!("Account not found for user {}: {}", user_id, e)),
+                            error_code: Some(4003),
+                            error_message: Some(format!("Account verification failed: {}", e)),
                         };
                         session_addr.do_send(SendMessage(server_msg));
-                        return Ok(());  // 发送错误响应后返回
+                        return Ok(());
+                    }
+                    acc_id.clone()
+                } else {
+                    // ⚠️ 向后兼容：客户端未传递 account_id，使用默认账户
+                    log::warn!("DEPRECATED: WebSocket client did not provide account_id for user {}. This behavior will be removed in future versions.", user_id);
+
+                    match self.account_mgr.get_default_account(user_id) {
+                        Ok(account_arc) => {
+                            let acc = account_arc.read();
+                            acc.account_cookie.clone()
+                        },
+                        Err(e) => {
+                            let server_msg = ServerMessage::OrderResponse {
+                                success: false,
+                                order_id: Some(order_id.clone()),
+                                error_code: Some(4000),
+                                error_message: Some(format!("Account not found for user {}: {}", user_id, e)),
+                            };
+                            session_addr.do_send(SendMessage(server_msg));
+                            return Ok(());
+                        }
                     }
                 };
 
