@@ -360,11 +360,12 @@ export default {
 
       try {
         const data = await queryUserOrders(this.selectedAccountId)
-        // 过滤未完成的订单：Submitted(提交), PartiallyFilled(部分成交)
-        // 不包括：Filled(已成交), Cancelled(已撤销), Rejected(已拒绝)
-        this.pendingOrders = (data.orders || []).filter(o =>
-          o.status === 'Submitted' || o.status === 'PartiallyFilled'
-        )
+        // 过滤活跃订单：排除已完成(Filled)、已撤销(Cancelled)、已拒绝(Rejected)
+        // 包括：PendingRisk, PendingRoute, Submitted, PartiallyFilled
+        this.pendingOrders = (data.orders || []).filter(o => {
+          const status = o.status
+          return status !== 'Filled' && status !== 'Cancelled' && status !== 'Rejected'
+        })
       } catch (error) {
         console.error('Failed to load orders:', error)
       }
@@ -458,6 +459,8 @@ export default {
 
     getStatusType(status) {
       const map = {
+        'PendingRisk': 'warning',
+        'PendingRoute': 'warning',
         'Submitted': 'warning',
         'PartiallyFilled': 'info',
         'Filled': 'success',
@@ -469,6 +472,8 @@ export default {
 
     getStatusText(status) {
       const map = {
+        'PendingRisk': '风控中',
+        'PendingRoute': '路由中',
         'Submitted': '已提交',
         'PartiallyFilled': '部分成交',
         'Filled': '已成交',
