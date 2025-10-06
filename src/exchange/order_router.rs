@@ -10,11 +10,13 @@ use crate::risk::pre_trade_check::{PreTradeCheck, OrderCheckRequest, RiskCheckRe
 use crate::market::MarketDataBroadcaster;
 use crate::ExchangeError;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use dashmap::DashMap;
-use parking_lot::RwLock;
+use parking_lot::{RwLock, Mutex};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
+use std::collections::VecDeque;
 
 /// 订单提交请求（交易层 - 只关心账户）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +136,20 @@ pub struct OrderRouter {
 
     /// 统计：总成交金额
     trade_amount: parking_lot::RwLock<f64>,
+
+    // ========== 性能优化字段 ==========
+
+    /// 快照频率控制：记录每个合约的上次快照时间
+    last_snapshot_time: Arc<DashMap<String, Instant>>,
+
+    /// 快照写入间隔（默认1秒）
+    snapshot_interval: Duration,
+
+    /// Tick数据批量缓冲区
+    tick_buffer: Arc<Mutex<Vec<crate::storage::wal::record::WalRecord>>>,
+
+    /// 批量写入线程停止信号
+    flush_stop_signal: Arc<AtomicBool>,
 }
 
 impl OrderRouter {
@@ -159,6 +175,11 @@ impl OrderRouter {
             trade_count: AtomicU64::new(0),
             trade_volume: parking_lot::RwLock::new(0.0),
             trade_amount: parking_lot::RwLock::new(0.0),
+            // 性能优化字段初始化
+            last_snapshot_time: Arc::new(DashMap::new()),
+            snapshot_interval: Duration::from_secs(1),  // 默认1秒
+            tick_buffer: Arc::new(Mutex::new(Vec::with_capacity(1000))),
+            flush_stop_signal: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -194,6 +215,11 @@ impl OrderRouter {
             trade_count: AtomicU64::new(0),
             trade_volume: parking_lot::RwLock::new(0.0),
             trade_amount: parking_lot::RwLock::new(0.0),
+            // 性能优化字段初始化
+            last_snapshot_time: Arc::new(DashMap::new()),
+            snapshot_interval: Duration::from_secs(1),  // 默认1秒
+            tick_buffer: Arc::new(Mutex::new(Vec::with_capacity(1000))),
+            flush_stop_signal: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1008,11 +1034,11 @@ impl OrderRouter {
                 timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
             };
 
-            // 写入WAL（OltpHybridStorage会自动处理序列号）
-            if let Err(e) = storage.write(tick_record) {
-                log::warn!("Failed to persist tick data to WAL: {}", e);
-                // 不影响交易流程，只记录警告
-            }
+            // ========== 性能优化：批量写入缓冲 ==========
+            // 将tick数据写入缓冲区，由异步线程定期刷新（10ms间隔）
+            self.tick_buffer.lock().push(tick_record);
+            log::trace!("Buffered tick data for {} (buffer size: {})",
+                instrument_id, self.tick_buffer.lock().len());
         }
 
         Ok(())
@@ -1065,11 +1091,11 @@ impl OrderRouter {
                 timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
             };
 
-            // 写入WAL（OltpHybridStorage会自动处理序列号）
-            if let Err(e) = storage.write(tick_record) {
-                log::warn!("Failed to persist orderbook tick data to WAL: {}", e);
-                // 不影响交易流程，只记录警告
-            }
+            // ========== 性能优化：批量写入缓冲 ==========
+            // 将订单簿tick数据写入缓冲区，由异步线程定期刷新
+            self.tick_buffer.lock().push(tick_record);
+            log::trace!("Buffered orderbook tick for {} (buffer size: {})",
+                instrument_id, self.tick_buffer.lock().len());
         }
 
         Ok(())
@@ -1077,6 +1103,18 @@ impl OrderRouter {
 
     /// 持久化订单簿快照到WAL
     fn persist_orderbook_snapshot(&self, instrument_id: &str) -> Result<(), ExchangeError> {
+        // ========== 性能优化：快照频率控制 ==========
+        // 限流：最多每秒1次快照（防止高频写入）
+        let now = Instant::now();
+        if let Some(last_time) = self.last_snapshot_time.get(instrument_id) {
+            if now.duration_since(*last_time) < self.snapshot_interval {
+                // 跳过此次快照（距离上次快照时间太短）
+                log::trace!("Skipping snapshot for {} (last snapshot: {:?} ago)",
+                    instrument_id, now.duration_since(*last_time));
+                return Ok(());
+            }
+        }
+
         if let Some(ref storage) = self.storage {
             use crate::storage::wal::record::WalRecord;
 
@@ -1129,6 +1167,8 @@ impl OrderRouter {
                     log::warn!("Failed to persist orderbook snapshot to WAL: {}", e);
                     // 不影响交易流程，只记录警告
                 } else {
+                    // 更新快照时间
+                    self.last_snapshot_time.insert(instrument_id.to_string(), now);
                     log::debug!("Persisted orderbook snapshot for {}: {} bids, {} asks",
                         instrument_id, bids.len(), asks.len());
                 }
@@ -1174,6 +1214,94 @@ impl OrderRouter {
             total_volume: *self.trade_volume.read(),
             total_amount: *self.trade_amount.read(),
         }
+    }
+
+    // ========== 性能优化：批量刷新线程 ==========
+
+    /// 启动批量刷新线程（异步定期刷新tick缓冲区）
+    ///
+    /// 性能优势：
+    /// - 将多个单次写入合并为一次批量写入
+    /// - 10ms刷新间隔，平衡延迟和吞吐量
+    /// - 批量大小自适应（最多1000条/批）
+    pub fn start_batch_flush_worker(&self) {
+        if let Some(ref storage) = self.storage {
+            let storage = storage.clone();
+            let tick_buffer = self.tick_buffer.clone();
+            let stop_signal = self.flush_stop_signal.clone();
+
+            // 重置停止信号
+            stop_signal.store(false, Ordering::SeqCst);
+
+            // 启动后台刷新线程
+            std::thread::spawn(move || {
+                log::info!("Batch flush worker started (interval: 10ms, max_batch: 1000)");
+
+                loop {
+                    // 检查停止信号
+                    if stop_signal.load(Ordering::SeqCst) {
+                        log::info!("Batch flush worker received stop signal, exiting...");
+                        break;
+                    }
+
+                    // 睡眠10ms
+                    std::thread::sleep(Duration::from_millis(10));
+
+                    // 从缓冲区取出所有记录
+                    let mut buffer = tick_buffer.lock();
+                    if buffer.is_empty() {
+                        drop(buffer);  // 尽早释放锁
+                        continue;
+                    }
+
+                    // 取出缓冲区数据（最多1000条）
+                    let batch_size = buffer.len().min(1000);
+                    let batch: Vec<_> = buffer.drain(..batch_size).collect();
+                    drop(buffer);  // 释放锁
+
+                    // 批量写入WAL
+                    match storage.write_batch(batch.clone()) {
+                        Ok(sequences) => {
+                            log::debug!("Batch flushed {} tick records to WAL (seq: {} - {})",
+                                batch.len(), sequences.first().unwrap_or(&0), sequences.last().unwrap_or(&0));
+                        }
+                        Err(e) => {
+                            log::error!("Batch flush failed: {}, retrying...", e);
+                            // 写入失败，重新放回缓冲区
+                            let mut buffer = tick_buffer.lock();
+                            for record in batch.into_iter().rev() {
+                                buffer.insert(0, record);
+                            }
+                        }
+                    }
+                }
+
+                // 线程退出前，刷新剩余数据
+                let mut buffer = tick_buffer.lock();
+                if !buffer.is_empty() {
+                    let remaining: Vec<_> = buffer.drain(..).collect();
+                    drop(buffer);
+                    if let Err(e) = storage.write_batch(remaining.clone()) {
+                        log::error!("Failed to flush remaining {} records on shutdown: {}",
+                            remaining.len(), e);
+                    } else {
+                        log::info!("Flushed remaining {} records on shutdown", remaining.len());
+                    }
+                }
+
+                log::info!("Batch flush worker stopped");
+            });
+        } else {
+            log::warn!("Cannot start batch flush worker: storage not set");
+        }
+    }
+
+    /// 停止批量刷新线程
+    pub fn stop_batch_flush_worker(&self) {
+        log::info!("Stopping batch flush worker...");
+        self.flush_stop_signal.store(true, Ordering::SeqCst);
+        // 等待线程退出（最多1秒）
+        std::thread::sleep(Duration::from_millis(100));
     }
 
     /// 获取订单详细信息（包含时间戳和成交量）
