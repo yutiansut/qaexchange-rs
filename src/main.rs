@@ -114,6 +114,9 @@ struct ExchangeServer {
 
     /// OLAP 转换管理器
     conversion_mgr: Option<Arc<parking_lot::Mutex<ConversionManager>>>,
+
+    /// iceoryx2 管理器（零拷贝 IPC）
+    iceoryx_manager: Option<Arc<parking_lot::RwLock<qaexchange::ipc::IceoryxManager>>>,
 }
 
 impl ExchangeServer {
@@ -171,6 +174,48 @@ impl ExchangeServer {
         let trade_gateway = Arc::new(trade_gateway_inner.set_trade_recorder(trade_recorder.clone()));
 
         let market_broadcaster = Arc::new(MarketDataBroadcaster::new());
+
+        // 1.4 创建 iceoryx2 管理器（如果启用）
+        let iceoryx_manager: Option<Arc<parking_lot::RwLock<qaexchange::ipc::IceoryxManager>>> = if perf_config.iceoryx.enabled {
+            log::info!("Initializing iceoryx2 manager...");
+            let ipc_config = qaexchange::ipc::IpcConfig {
+                service_prefix: perf_config.iceoryx.service_prefix.clone(),
+                max_subscribers: perf_config.iceoryx.max_subscribers,
+                queue_capacity: perf_config.iceoryx.queue_capacity,
+                max_message_size: perf_config.iceoryx.max_message_size,
+            };
+
+            #[cfg(feature = "iceoryx2")]
+            let manager = {
+                let mut manager = qaexchange::ipc::IceoryxManager::new(ipc_config);
+
+                // 启动市场数据发布者（需要 iceoryx2 特性）
+                if let Err(e) = manager.start_market_data_publisher() {
+                    log::error!("Failed to start iceoryx2 market data publisher: {}", e);
+                } else {
+                    log::info!("✅ iceoryx2 market data publisher started");
+                }
+
+                if let Err(e) = manager.start_notification_publisher() {
+                    log::error!("Failed to start iceoryx2 notification publisher: {}", e);
+                } else {
+                    log::info!("✅ iceoryx2 notification publisher started");
+                }
+
+                manager
+            };
+
+            #[cfg(not(feature = "iceoryx2"))]
+            let manager = {
+                log::warn!("⚠️  iceoryx2 enabled in config but feature not compiled (use --features iceoryx2)");
+                qaexchange::ipc::IceoryxManager::new(ipc_config)
+            };
+
+            Some(Arc::new(parking_lot::RwLock::new(manager)))
+        } else {
+            log::info!("iceoryx2 disabled (set enabled=true in config/performance.toml to enable)");
+            None
+        };
 
         // 2. 创建订单路由器
         let mut order_router = OrderRouter::new(
@@ -251,6 +296,7 @@ impl ExchangeServer {
             market_data_storage,
             storage_stats: None,
             conversion_mgr: None,
+            iceoryx_manager,
         }
     }
 
@@ -476,8 +522,13 @@ impl ExchangeServer {
 
         // 创建市场数据服务（解耦：业务逻辑与网络层分离）
         // 传递 market_data_storage 以支持从 WAL 恢复历史行情
-        let market_service = qaexchange::market::MarketDataService::new(self.matching_engine.clone())
+        let mut market_service = qaexchange::market::MarketDataService::new(self.matching_engine.clone())
             .with_storage(self.market_data_storage.clone());
+
+        // 如果启用了 iceoryx2，将 manager 传递给 MarketDataService
+        if let Some(ref manager) = self.iceoryx_manager {
+            market_service = market_service.with_iceoryx(manager.clone());
+        }
 
         // 创建管理端状态（合约管理、结算管理）
         let admin_state = AdminAppState {

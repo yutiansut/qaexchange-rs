@@ -10,6 +10,7 @@
 //! 注意：当前版本使用条件编译，如果iceoryx2不可用则fallback到crossbeam
 
 pub mod types;
+pub mod manager;
 
 #[cfg(feature = "iceoryx2")]
 pub mod publisher;
@@ -22,6 +23,7 @@ pub use publisher::IceoryxPublisher;
 pub use subscriber::IceoryxSubscriber;
 
 pub use types::{IpcNotification, IpcMarketData};
+pub use manager::IceoryxManager;
 
 /// iceoryx2 服务配置
 #[derive(Debug, Clone)]
@@ -47,5 +49,28 @@ impl Default for IpcConfig {
             queue_capacity: 1024,
             max_message_size: 4096,
         }
+    }
+}
+
+/// 生成 iceoryx2 服务名称
+///
+/// # 参数
+/// - `prefix`: 服务名称前缀（如 "qaexchange"）
+/// - `topic`: 主题名称（如 "market_data/ticks"）
+///
+/// # 返回
+/// 完整的服务名称（如 "qaexchange/market_data/ticks"）
+pub fn make_service_name(prefix: &str, topic: &str) -> String {
+    format!("{}/{}", prefix, topic)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_make_service_name() {
+        let name = make_service_name("qaexchange", "market_data/ticks");
+        assert_eq!(name, "qaexchange/market_data/ticks");
     }
 }

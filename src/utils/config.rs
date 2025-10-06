@@ -24,6 +24,8 @@ pub struct PerformanceConfig {
     pub priority_queue: PriorityQueueConfig,
     #[serde(default)]
     pub memtable: MemTableConfig,
+    #[serde(default)]
+    pub iceoryx: IceoryxConfig,
 }
 
 impl Default for PerformanceConfig {
@@ -33,6 +35,7 @@ impl Default for PerformanceConfig {
             websocket: WebSocketPerfConfig::default(),
             priority_queue: PriorityQueueConfig::default(),
             memtable: MemTableConfig::default(),
+            iceoryx: IceoryxConfig::default(),
         }
     }
 }
@@ -135,6 +138,41 @@ impl Default for MemTableConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IceoryxConfig {
+    /// 是否启用 iceoryx2 零拷贝 IPC
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+
+    /// 服务名称前缀
+    #[serde(default = "default_service_prefix")]
+    pub service_prefix: String,
+
+    /// 最大订阅者数量
+    #[serde(default = "default_max_subscribers")]
+    pub max_subscribers: usize,
+
+    /// 消息队列容量
+    #[serde(default = "default_queue_capacity")]
+    pub queue_capacity: usize,
+
+    /// 最大消息大小（字节）
+    #[serde(default = "default_max_message_size")]
+    pub max_message_size: usize,
+}
+
+impl Default for IceoryxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            service_prefix: "qaexchange".to_string(),
+            max_subscribers: 1000,
+            queue_capacity: 1024,
+            max_message_size: 4096,
+        }
+    }
+}
+
 // 默认值函数
 fn default_buffer_size() -> usize { 1000 }
 fn default_flush_interval() -> u64 { 10 }
@@ -143,10 +181,15 @@ fn default_snapshot_interval() -> u64 { 1000 }
 fn default_ws_batch_size() -> usize { 100 }
 fn default_queue_threshold() -> usize { 500 }
 fn default_true() -> bool { true }
+fn default_false() -> bool { false }
 fn default_low_queue_limit() -> usize { 100 }
 fn default_critical_threshold() -> f64 { 1_000_000.0 }
 fn default_memtable_size() -> usize { 64 }
 fn default_entry_size() -> usize { 256 }
+fn default_service_prefix() -> String { "qaexchange".to_string() }
+fn default_max_subscribers() -> usize { 1000 }
+fn default_queue_capacity() -> usize { 1024 }
+fn default_max_message_size() -> usize { 4096 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {

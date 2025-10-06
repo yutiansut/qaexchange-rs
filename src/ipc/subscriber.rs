@@ -2,19 +2,22 @@
 
 use super::{IpcConfig, IpcNotification, IpcMarketData, make_service_name};
 use iceoryx2::prelude::*;
+use iceoryx2::port::subscriber::Subscriber;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
 /// iceoryx2 订阅者
-pub struct IceoryxSubscriber<T: Copy> {
+pub struct IceoryxSubscriber<T: Copy + std::fmt::Debug> {
     subscriber: Arc<Mutex<Subscriber<ipc::Service, T, ()>>>,
     service_name: String,
 }
 
-impl<T: Copy> IceoryxSubscriber<T> {
+impl<T: Copy + std::fmt::Debug> IceoryxSubscriber<T> {
     /// 创建新的订阅者
     pub fn new(config: &IpcConfig, topic: &str) -> Result<Self, String> {
-        let service_name = make_service_name(&config.service_prefix, topic);
+        let service_name_str = make_service_name(&config.service_prefix, topic);
+        let service_name = ServiceName::new(&service_name_str)
+            .map_err(|e| format!("Invalid service name: {:?}", e))?;
 
         // 打开已存在的服务
         let service = ipc::Service::new(&service_name)
@@ -29,7 +32,7 @@ impl<T: Copy> IceoryxSubscriber<T> {
 
         Ok(Self {
             subscriber: Arc::new(Mutex::new(subscriber)),
-            service_name: service_name.to_string(),
+            service_name: service_name_str,
         })
     }
 

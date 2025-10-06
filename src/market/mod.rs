@@ -77,6 +77,8 @@ pub struct MarketDataService {
     instrument_configs: HashMap<String, InstrumentConfig>,
     /// WAL 存储（用于恢复历史行情数据）
     storage: Option<Arc<crate::storage::hybrid::OltpHybridStorage>>,
+    /// iceoryx2 管理器（零拷贝 IPC）
+    iceoryx_manager: Option<Arc<RwLock<crate::ipc::IceoryxManager>>>,
 }
 
 impl MarketDataService {
@@ -87,6 +89,7 @@ impl MarketDataService {
             cache: Arc::new(cache::MarketDataCache::new(100)), // 100ms TTL
             instrument_configs: HashMap::new(),
             storage: None,
+            iceoryx_manager: None,
         }
     }
 
@@ -99,6 +102,13 @@ impl MarketDataService {
             log::warn!("Failed to recover market data from WAL: {}", e);
         }
 
+        self
+    }
+
+    /// 设置 iceoryx2 管理器（零拷贝 IPC）
+    pub fn with_iceoryx(mut self, manager: Arc<RwLock<crate::ipc::IceoryxManager>>) -> Self {
+        self.iceoryx_manager = Some(manager);
+        log::info!("✅ Market data service: iceoryx2 enabled");
         self
     }
 
@@ -137,6 +147,7 @@ impl MarketDataService {
             cache: Arc::new(cache::MarketDataCache::new(cache_ttl_ms)),
             instrument_configs: HashMap::new(),
             storage: None,
+            iceoryx_manager: None,
         }
     }
 

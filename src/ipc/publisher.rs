@@ -1,21 +1,23 @@
 //! iceoryx2 发布者实现
 
-use super::{IpcConfig, IpcNotification, IpcMarketData};
+use super::{IpcConfig, IpcNotification, IpcMarketData, make_service_name};
 use iceoryx2::prelude::*;
-use iceoryx2::service::port_factory::publisher::Publisher;
+use iceoryx2::port::publisher::Publisher;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
 /// iceoryx2 发布者
-pub struct IceoryxPublisher<T: Copy> {
+pub struct IceoryxPublisher<T: Copy + std::fmt::Debug> {
     publisher: Arc<Mutex<Publisher<ipc::Service, T, ()>>>,
     service_name: String,
 }
 
-impl<T: Copy> IceoryxPublisher<T> {
+impl<T: Copy + std::fmt::Debug> IceoryxPublisher<T> {
     /// 创建新的发布者
     pub fn new(config: &IpcConfig, topic: &str) -> Result<Self, String> {
-        let service_name = make_service_name(&config.service_prefix, topic);
+        let service_name_str = make_service_name(&config.service_prefix, topic);
+        let service_name = ServiceName::new(&service_name_str)
+            .map_err(|e| format!("Invalid service name: {:?}", e))?;
 
         // 创建或打开 iceoryx2 服务
         let service = ipc::Service::new(&service_name)
@@ -32,7 +34,7 @@ impl<T: Copy> IceoryxPublisher<T> {
 
         Ok(Self {
             publisher: Arc::new(Mutex::new(publisher)),
-            service_name: service_name.to_string(),
+            service_name: service_name_str,
         })
     }
 

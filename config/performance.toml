@@ -53,6 +53,14 @@ stats_interval_sec = 60           # 统计信息输出间隔（秒）
 enable_detailed_logging = false   # 是否启用详细日志（影响性能）
 log_slow_operations_ms = 100      # 慢操作日志阈值（毫秒）
 
+[iceoryx]
+# iceoryx2 零拷贝 IPC 配置
+enabled = false                   # 是否启用 iceoryx2（需编译特性：--features iceoryx2）
+service_prefix = "qaexchange"     # 服务名称前缀
+max_subscribers = 1000            # 最大订阅者数量
+queue_capacity = 1024             # 消息队列容量
+max_message_size = 4096           # 最大消息大小（字节）
+
 [advanced]
 # 高级配置（谨慎修改）
 worker_threads = 4                # 工作线程数（默认为CPU核心数）

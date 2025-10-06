@@ -108,6 +108,7 @@ mod tests {
     #[test]
     fn test_insert_order_serialization() {
         let msg = DiffClientMessage::InsertOrder {
+            account_id: Some("account123".to_string()),
             user_id: "user123".to_string(),
             order_id: "order1".to_string(),
             exchange_id: "SHFE".to_string(),

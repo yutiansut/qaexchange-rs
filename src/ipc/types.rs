@@ -23,6 +23,14 @@ pub struct IpcNotification {
     pub data: IpcNotificationData,
 }
 
+impl std::fmt::Debug for IpcNotification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IpcNotification")
+            .field("notification_type", &self.notification_type)
+            .finish()
+    }
+}
+
 /// 通知数据联合体
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -34,7 +42,7 @@ pub union IpcNotificationData {
 
 /// 成交通知
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct IpcTrade {
     /// 成交ID
     pub trade_id: [u8; 64],
@@ -66,7 +74,7 @@ pub struct IpcTrade {
 
 /// 订单状态通知
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct IpcOrderStatus {
     /// 订单ID
     pub order_id: [u8; 64],
@@ -89,7 +97,7 @@ pub struct IpcOrderStatus {
 
 /// 账户更新通知
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct IpcAccountUpdate {
     /// 用户ID
     pub user_id: [u8; 64],
@@ -133,6 +141,15 @@ pub struct IpcMarketData {
     pub data: IpcMarketDataContent,
 }
 
+impl std::fmt::Debug for IpcMarketData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IpcMarketData")
+            .field("data_type", &self.data_type)
+            .field("timestamp", &self.timestamp)
+            .finish()
+    }
+}
+
 /// 市场数据内容联合体
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -144,7 +161,7 @@ pub union IpcMarketDataContent {
 
 /// 订单簿快照（5档）
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct IpcOrderBook {
     /// 买盘价格
     pub bid_prices: [f64; 5],
@@ -161,7 +178,7 @@ pub struct IpcOrderBook {
 
 /// Tick成交数据
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct IpcTick {
     /// 成交价
     pub price: f64,
@@ -178,7 +195,7 @@ pub struct IpcTick {
 
 /// 最新价
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct IpcLastPrice {
     /// 最新价
     pub price: f64,
