@@ -111,6 +111,7 @@ pub struct OrderInfo {
 /// 持仓查询响应
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionInfo {
+    pub account_id: String,         // 账户ID（用于平仓时指定账户）
     pub instrument_id: String,
     pub volume_long: f64,
     pub volume_short: f64,

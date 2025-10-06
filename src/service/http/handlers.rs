@@ -299,6 +299,7 @@ pub async fn query_position(
             let mut positions = Vec::new();
             for (code, pos) in acc.hold.iter_mut() {
                 positions.push(PositionInfo {
+                    account_id: account_id.to_string(),  // 添加account_id
                     instrument_id: code.clone(),
                     volume_long: pos.volume_long_today + pos.volume_long_his,
                     volume_short: pos.volume_short_today + pos.volume_short_his,
@@ -336,8 +337,10 @@ pub async fn query_positions_by_user(
     let mut all_positions = Vec::new();
     for account in accounts {
         let mut acc = account.write();
+        let acc_id = acc.account_cookie.clone();  // 获取account_id
         for (code, pos) in acc.hold.iter_mut() {
             all_positions.push(PositionInfo {
+                account_id: acc_id.clone(),  // 添加account_id
                 instrument_id: code.clone(),
                 volume_long: pos.volume_long_today + pos.volume_long_his,
                 volume_short: pos.volume_short_today + pos.volume_short_his,

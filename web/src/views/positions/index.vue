@@ -176,6 +176,7 @@ export default {
       positionList: [],
       closeDialogVisible: false,
       closeForm: {
+        account_id: '',  // 添加account_id字段
         instrument_id: '',
         direction: '',
         direction_text: '',
@@ -229,6 +230,7 @@ export default {
           // 如果有多头持仓
           if (pos.volume_long > 0) {
             positions.push({
+              account_id: pos.account_id,  // 保存account_id（用于平仓）
               instrument_id: pos.instrument_id,
               direction: 'LONG',
               volume: pos.volume_long,
@@ -245,6 +247,7 @@ export default {
           // 如果有空头持仓
           if (pos.volume_short > 0) {
             positions.push({
+              account_id: pos.account_id,  // 保存account_id（用于平仓）
               instrument_id: pos.instrument_id,
               direction: 'SHORT',
               volume: pos.volume_short,
@@ -283,6 +286,7 @@ export default {
 
     handleClosePosition(row) {
       this.closeForm = {
+        account_id: row.account_id,  // 设置account_id
         instrument_id: row.instrument_id,
         direction: row.direction,
         direction_text: row.direction === 'LONG' ? '多头' : '空头',
@@ -299,6 +303,7 @@ export default {
 
       const orderData = {
         user_id: this.currentUser,
+        account_id: this.closeForm.account_id,  // 添加account_id（必需）
         instrument_id: this.closeForm.instrument_id,
         direction: this.closeForm.direction === 'LONG' ? 'SELL' : 'BUY',
         offset: 'CLOSE',

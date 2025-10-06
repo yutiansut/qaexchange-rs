@@ -222,7 +222,8 @@ export default {
           this.submitting = true
 
           const orderData = {
-            user_id: this.form.account_id,  // 注意：后端字段名是user_id，但实际传的是account_id
+            user_id: this.currentUser,      // 用户ID（用于验证）
+            account_id: this.form.account_id,  // 交易账户ID（必需）✨
             direction: this.form.direction === 'LONG' ? 'SELL' : 'BUY',
             offset: 'CLOSE',
             order_type: this.form.order_type,
