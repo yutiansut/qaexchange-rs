@@ -240,8 +240,10 @@ export default {
         if (valid) {
           this.submitting = true
 
+          // ✨ Phase 10: 同时发送 user_id 和 account_id
           const orderData = {
-            user_id: this.form.account_id,  // 注意：后端字段名是user_id，但实际传的是account_id
+            user_id: this.currentUser,        // 真实用户ID
+            account_id: this.form.account_id, // 交易账户ID
             direction: this.direction,
             offset: this.offset,
             order_type: this.form.order_type,

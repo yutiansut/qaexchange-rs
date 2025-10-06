@@ -74,6 +74,8 @@ pub struct MarketDataService {
     matching_engine: Arc<ExchangeMatchingEngine>,
     cache: Arc<cache::MarketDataCache>,
     instrument_configs: HashMap<String, InstrumentConfig>,
+    /// WAL 存储（用于恢复历史行情数据）
+    storage: Option<Arc<crate::storage::hybrid::OltpHybridStorage>>,
 }
 
 impl MarketDataService {
@@ -83,7 +85,14 @@ impl MarketDataService {
             matching_engine,
             cache: Arc::new(cache::MarketDataCache::new(100)), // 100ms TTL
             instrument_configs: HashMap::new(),
+            storage: None,
         }
+    }
+
+    /// 设置存储（用于从 WAL 恢复数据）
+    pub fn with_storage(mut self, storage: Arc<crate::storage::hybrid::OltpHybridStorage>) -> Self {
+        self.storage = Some(storage);
+        self
     }
 
     /// 设置合约配置
@@ -99,6 +108,7 @@ impl MarketDataService {
             matching_engine,
             cache: Arc::new(cache::MarketDataCache::new(cache_ttl_ms)),
             instrument_configs: HashMap::new(),
+            storage: None,
         }
     }
 

@@ -16,6 +16,10 @@ const state = {
   // 业务截面（完整的实时数据）
   snapshot: {},
 
+  // ✨ Phase 10: 账户管理
+  currentAccountId: null,  // 当前选中的账户ID
+  userAccounts: [],        // 用户的所有账户列表
+
   // 配置
   config: {
     url: process.env.VUE_APP_WS_URL || 'ws://localhost:8001/ws',
@@ -52,6 +56,17 @@ const mutations = {
     state.snapshot = { ...state.snapshot, ...updates }
   },
 
+  // ✨ Phase 10: 账户管理 mutations
+  SET_CURRENT_ACCOUNT(state, accountId) {
+    state.currentAccountId = accountId
+    console.log('[WebSocket] Current account set to:', accountId)
+  },
+
+  SET_USER_ACCOUNTS(state, accounts) {
+    state.userAccounts = accounts
+    console.log('[WebSocket] User accounts loaded:', accounts.length)
+  },
+
   SET_SUBSCRIBED_INSTRUMENTS(state, instruments) {
     state.subscribedInstruments = instruments
   },
@@ -69,6 +84,8 @@ const mutations = {
     state.ws = null
     state.connectionState = 'DISCONNECTED'
     state.snapshot = {}
+    state.currentAccountId = null        // ✨ Phase 10
+    state.userAccounts = []              // ✨ Phase 10
     state.subscribedInstruments = []
     state.unsubscribers.forEach(unsubscribe => unsubscribe())
     state.unsubscribers = []
@@ -79,7 +96,7 @@ const actions = {
   /**
    * 初始化 WebSocket
    */
-  initWebSocket({ commit, rootState, dispatch }) {
+  async initWebSocket({ commit, rootState, dispatch }) {
     console.log('[WebSocket] Initializing...')
 
     // 获取当前用户 ID
@@ -87,6 +104,14 @@ const actions = {
     if (!userId) {
       console.error('[WebSocket] No user ID available')
       throw new Error('No user ID available')
+    }
+
+    // ✨ Phase 10: 获取用户账户列表
+    try {
+      await dispatch('fetchUserAccounts', userId)
+    } catch (error) {
+      console.error('[WebSocket] Failed to fetch user accounts:', error)
+      // 继续初始化，即使获取账户失败
     }
 
     // 创建 WebSocket 管理器
@@ -215,17 +240,24 @@ const actions = {
       throw new Error('WebSocket not connected')
     }
 
-    // 自动填充 user_id
-    const orderWithUserId = {
+    // ✨ Phase 10: 自动填充 user_id 和 account_id
+    const orderWithMeta = {
       user_id: rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id),
+      account_id: state.currentAccountId,  // ✨ 明确传递账户ID
       order_id: `order_${Date.now()}`,
       ...order
     }
 
-    console.log('[WebSocket] Inserting order:', orderWithUserId)
-    state.ws.insertOrder(orderWithUserId)
+    // 验证 account_id
+    if (!orderWithMeta.account_id) {
+      console.warn('[WebSocket] No account selected, order may fail')
+      // 可以选择抛出错误或继续（向后兼容模式）
+    }
 
-    return orderWithUserId.order_id
+    console.log('[WebSocket] Inserting order:', orderWithMeta)
+    state.ws.insertOrder(orderWithMeta)
+
+    return orderWithMeta.order_id
   },
 
   /**
@@ -238,8 +270,15 @@ const actions = {
     }
 
     const userId = rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id)
-    console.log('[WebSocket] Cancelling order:', orderId)
-    state.ws.cancelOrder(userId, orderId)
+    const accountId = state.currentAccountId  // ✨ Phase 10: 传递账户ID
+
+    // 验证 account_id
+    if (!accountId) {
+      console.warn('[WebSocket] No account selected, cancel may fail')
+    }
+
+    console.log('[WebSocket] Cancelling order:', orderId, 'account:', accountId)
+    state.ws.cancelOrder(userId, orderId, accountId)  // ✨ Phase 10: 传递第三个参数
   },
 
   /**
@@ -299,6 +338,59 @@ const actions = {
     } else if (newState === 'DISCONNECTED') {
       console.log('[WebSocket] Disconnected')
     }
+  },
+
+  // ✨ Phase 10: 账户管理 actions
+
+  /**
+   * 获取用户账户列表
+   */
+  async fetchUserAccounts({ commit }, userId) {
+    try {
+      console.log('[WebSocket] Fetching accounts for user:', userId)
+
+      // 调用 HTTP API 获取账户列表
+      const apiUrl = process.env.VUE_APP_API_URL || 'http://localhost:8001'
+      const response = await fetch(`${apiUrl}/api/user/${userId}/accounts`)
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+
+      if (result.success && result.data) {
+        const accounts = result.data.accounts || []
+        commit('SET_USER_ACCOUNTS', accounts)
+
+        // 自动选择第一个账户（如果有）
+        if (accounts.length > 0 && !state.currentAccountId) {
+          commit('SET_CURRENT_ACCOUNT', accounts[0].account_id)
+        }
+
+        return accounts
+      } else {
+        throw new Error(result.error || 'Failed to fetch accounts')
+      }
+    } catch (error) {
+      console.error('[WebSocket] Error fetching accounts:', error)
+      throw error
+    }
+  },
+
+  /**
+   * 切换当前账户
+   */
+  switchAccount({ commit, state }, accountId) {
+    // 验证账户ID是否在账户列表中
+    const account = state.userAccounts.find(acc => acc.account_id === accountId)
+    if (!account) {
+      console.error('[WebSocket] Invalid account ID:', accountId)
+      throw new Error(`Account not found: ${accountId}`)
+    }
+
+    console.log('[WebSocket] Switching to account:', accountId)
+    commit('SET_CURRENT_ACCOUNT', accountId)
   }
 }
 
@@ -314,6 +406,18 @@ const getters = {
 
   // 业务截面
   snapshot: state => state.snapshot,
+
+  // ✨ Phase 10: 账户管理 getters
+  currentAccountId: state => state.currentAccountId,
+
+  userAccounts: state => state.userAccounts,
+
+  currentAccount: state => {
+    if (!state.currentAccountId) return null
+    return state.userAccounts.find(acc => acc.account_id === state.currentAccountId)
+  },
+
+  hasAccounts: state => state.userAccounts.length > 0,
 
   // 账户信息
   account: state => (currency = 'CNY') => {

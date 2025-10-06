@@ -218,6 +218,8 @@ ws.send(JSON.stringify({
 ```json
 {
   "type": "submit_order",
+  "user_id": "user001",
+  "account_id": "ACC_user001_01",  // ✨ Phase 10: 必填，指定交易账户
   "instrument_id": "IX2301",
   "direction": "BUY",
   "offset": "OPEN",
@@ -227,12 +229,25 @@ ws.send(JSON.stringify({
 }
 ```
 
+**字段说明**:
+- `user_id` (string, required): 用户ID，用于身份验证
+- `account_id` (string, required): 交易账户ID，指定使用哪个账户交易
+  - ⚠️ 系统会验证 `account_id` 是否属于 `user_id`，防止跨账户操作
+- `instrument_id` (string, required): 合约代码
+- `direction` (string, required): 买卖方向（`BUY` | `SELL`）
+- `offset` (string, required): 开平标志（`OPEN` | `CLOSE` | `CLOSETODAY`）
+- `volume` (number, required): 委托数量
+- `price` (number, optional): 委托价格（限价单必填）
+- `order_type` (string, required): 订单类型（`LIMIT` | `MARKET`）
+
 **示例**:
 ```javascript
-// 提交买单
+// 提交买单（✨ Phase 10: 必须包含 account_id）
 function submitOrder() {
   ws.send(JSON.stringify({
     type: 'submit_order',
+    user_id: 'user001',
+    account_id: 'ACC_user001_01',  // ✨ 指定交易账户
     instrument_id: 'IX2301',
     direction: 'BUY',
     offset: 'OPEN',
@@ -248,7 +263,28 @@ function submitOrder() {
 ```json
 {
   "type": "cancel_order",
+  "user_id": "user001",
+  "account_id": "ACC_user001_01",  // ✨ Phase 10: 必填，指定交易账户
   "order_id": "O17251234567890000001"
+}
+```
+
+**字段说明**:
+- `user_id` (string, required): 用户ID，用于身份验证
+- `account_id` (string, required): 交易账户ID
+  - ⚠️ 系统会验证订单是否属于该账户，防止跨账户撤单
+- `order_id` (string, required): 订单ID
+
+**示例**:
+```javascript
+// 撤单（✨ Phase 10: 必须包含 account_id）
+function cancelOrder(orderId) {
+  ws.send(JSON.stringify({
+    type: 'cancel_order',
+    user_id: 'user001',
+    account_id: 'ACC_user001_01',  // ✨ 指定账户ID
+    order_id: orderId
+  }));
 }
 ```
 

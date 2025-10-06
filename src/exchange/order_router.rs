@@ -591,6 +591,9 @@ impl OrderRouter {
                 )?;
 
                 log::debug!("Order {} accepted, exchange_order_id={}", order_id, exchange_order_id);
+
+                // 持久化订单簿快照（订单已进入订单簿）
+                self.persist_orderbook_snapshot(&order.instrument_id)?;
             }
             Success::Filled { order_id: match_order_id, direction, order_type, price, volume, ts, opposite_order_id } => {
                 // 订单完全成交
@@ -623,6 +626,9 @@ impl OrderRouter {
 
                 // 持久化Tick数据到WAL
                 self.persist_tick_data(&order.instrument_id, price, volume)?;
+
+                // 持久化订单簿快照（订单成交后订单簿发生变化）
+                self.persist_orderbook_snapshot(&order.instrument_id)?;
 
                 // 获取 qars 订单ID
                 let qa_order_id = if let Some(order_info) = self.orders.get(order_id) {
@@ -685,6 +691,9 @@ impl OrderRouter {
                 // 持久化Tick数据到WAL
                 self.persist_tick_data(&order.instrument_id, price, volume)?;
 
+                // 持久化订单簿快照（订单成交后订单簿发生变化）
+                self.persist_orderbook_snapshot(&order.instrument_id)?;
+
                 // 获取 qars 订单ID
                 let qa_order_id = if let Some(order_info) = self.orders.get(order_id) {
                     order_info.read().qa_order_id.clone()
@@ -729,6 +738,9 @@ impl OrderRouter {
                 )?;
 
                 log::debug!("Order {} cancel accepted, exchange_order_id={}", order_id, id);
+
+                // 持久化订单簿快照（撤单后订单簿发生变化）
+                self.persist_orderbook_snapshot(&order.instrument_id)?;
 
                 // 从活动订单追踪中移除
                 self.risk_checker.remove_active_order(&order.user_id, order_id);
@@ -944,6 +956,69 @@ impl OrderRouter {
             if let Err(e) = storage.write(tick_record) {
                 log::warn!("Failed to persist tick data to WAL: {}", e);
                 // 不影响交易流程，只记录警告
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 持久化订单簿快照到WAL
+    fn persist_orderbook_snapshot(&self, instrument_id: &str) -> Result<(), ExchangeError> {
+        if let Some(ref storage) = self.storage {
+            use crate::storage::wal::record::WalRecord;
+
+            // 获取订单簿快照
+            if let Some(orderbook) = self.matching_engine.get_orderbook(instrument_id) {
+                let ob = orderbook.read();
+
+                // 获取买卖队列的前10档数据
+                let bids = ob.bid_queue.get_sorted_orders()
+                    .map(|orders| {
+                        orders.iter().take(10).map(|o| (o.price, o.volume as i64)).collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                let asks = ob.ask_queue.get_sorted_orders()
+                    .map(|orders| {
+                        orders.iter().take(10).map(|o| (o.price, o.volume as i64)).collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                // 创建OrderBookSnapshot记录（10档，不足的用 (0.0, 0) 填充）
+                let mut bids_array = [(0.0, 0i64); 10];
+                let mut asks_array = [(0.0, 0i64); 10];
+
+                for (i, (price, volume)) in bids.iter().enumerate() {
+                    if i >= 10 { break; }
+                    bids_array[i] = (*price, *volume);
+                }
+
+                for (i, (price, volume)) in asks.iter().enumerate() {
+                    if i >= 10 { break; }
+                    asks_array[i] = (*price, *volume);
+                }
+
+                // 获取最新价（从订单簿的第一档或0.0）
+                let last_price = bids.first().map(|(p, _)| *p)
+                    .or_else(|| asks.first().map(|(p, _)| *p))
+                    .unwrap_or(0.0);
+
+                let snapshot_record = WalRecord::OrderBookSnapshot {
+                    instrument_id: WalRecord::to_fixed_array_16(instrument_id),
+                    bids: bids_array,
+                    asks: asks_array,
+                    last_price,
+                    timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                };
+
+                // 写入WAL
+                if let Err(e) = storage.write(snapshot_record) {
+                    log::warn!("Failed to persist orderbook snapshot to WAL: {}", e);
+                    // 不影响交易流程，只记录警告
+                } else {
+                    log::debug!("Persisted orderbook snapshot for {}: {} bids, {} asks",
+                        instrument_id, bids.len(), asks.len());
+                }
             }
         }
 

@@ -106,6 +106,9 @@ struct ExchangeServer {
     /// 用户存储（用于恢复）
     user_storage: Arc<qaexchange::storage::hybrid::OltpHybridStorage>,
 
+    /// 市场数据存储（用于持久化 TickData 和 OrderBookSnapshot）
+    market_data_storage: Arc<qaexchange::storage::hybrid::OltpHybridStorage>,
+
     /// 存储订阅器统计信息
     storage_stats: Option<Arc<parking_lot::Mutex<qaexchange::storage::subscriber::SubscriberStats>>>,
 
@@ -174,8 +177,22 @@ impl ExchangeServer {
             trade_gateway.clone(),
         );
 
-        // 3. 设置市场数据广播器到订单路由器
+        // 2.1 为订单路由器创建市场数据存储（用于持久化 TickData 和 OrderBookSnapshot）
+        let market_data_storage = Arc::new(
+            qaexchange::storage::hybrid::OltpHybridStorage::create(
+                "market_data",
+                qaexchange::storage::hybrid::oltp::OltpHybridConfig {
+                    base_path: config.storage_path.clone(),
+                    memtable_size_bytes: 64 * 1024 * 1024,  // 64MB（市场数据量大）
+                    estimated_entry_size: 256,  // TickData + OrderBookSnapshot 平均大小
+                },
+            ).expect("Failed to create market data storage")
+        );
+
+        // 3. 设置市场数据广播器和存储到订单路由器
         order_router.set_market_broadcaster(market_broadcaster.clone());
+        order_router.set_storage(market_data_storage.clone());
+        log::info!("✅ OrderRouter market data storage initialized");
 
         let order_router = Arc::new(order_router);
 
@@ -208,6 +225,7 @@ impl ExchangeServer {
             risk_monitor,
             user_mgr,
             user_storage,
+            market_data_storage,
             storage_stats: None,
             conversion_mgr: None,
         }
@@ -434,9 +452,11 @@ impl ExchangeServer {
         });
 
         // 创建市场数据服务（解耦：业务逻辑与网络层分离）
-        let market_service = Arc::new(qaexchange::market::MarketDataService::new(
-            self.matching_engine.clone()
-        ));
+        // 传递 market_data_storage 以支持从 WAL 恢复历史行情
+        let market_service = Arc::new(
+            qaexchange::market::MarketDataService::new(self.matching_engine.clone())
+                .with_storage(self.market_data_storage.clone())
+        );
 
         // 创建管理端状态（合约管理、结算管理）
         let admin_state = AdminAppState {

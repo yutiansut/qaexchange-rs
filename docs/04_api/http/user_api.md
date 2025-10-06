@@ -286,6 +286,7 @@ const result = await deposit('user001', 100000);
 ```json
 {
   "user_id": "user001",
+  "account_id": "ACC_user001_01",  // ✨ Phase 10: 必填，指定交易账户
   "instrument_id": "IX2301",
   "direction": "BUY",          // "BUY" | "SELL"
   "offset": "OPEN",             // "OPEN" | "CLOSE" | "CLOSETODAY"
@@ -296,6 +297,9 @@ const result = await deposit('user001', 100000);
 ```
 
 **字段说明**:
+- `user_id` (string, required): 用户ID，用于身份验证
+- `account_id` (string, required): 交易账户ID，指定使用哪个账户交易
+  - ⚠️ 系统会验证 `account_id` 是否属于 `user_id`，防止跨账户操作
 - `direction`:
   - `BUY`: 买入
   - `SELL`: 卖出
@@ -343,9 +347,10 @@ async function submitOrder(params) {
   return await response.json();
 }
 
-// 买入开仓
+// 买入开仓（✨ Phase 10: 必须包含 account_id）
 const buyOrder = await submitOrder({
   user_id: 'user001',
+  account_id: 'ACC_user001_01',  // ✨ 指定交易账户
   instrument_id: 'IX2301',
   direction: 'BUY',
   offset: 'OPEN',
@@ -357,6 +362,7 @@ const buyOrder = await submitOrder({
 // 卖出平仓
 const sellOrder = await submitOrder({
   user_id: 'user001',
+  account_id: 'ACC_user001_01',  // ✨ 指定交易账户
   instrument_id: 'IX2301',
   direction: 'SELL',
   offset: 'CLOSE',
@@ -367,11 +373,12 @@ const sellOrder = await submitOrder({
 ```
 
 ```python
-# Python - 提交订单
-def submit_order(user_id, instrument_id, direction, offset, volume, price):
+# Python - 提交订单（✨ Phase 10: 添加 account_id 参数）
+def submit_order(user_id, account_id, instrument_id, direction, offset, volume, price):
     url = 'http://localhost:8080/api/order/submit'
     data = {
         'user_id': user_id,
+        'account_id': account_id,  # ✨ 交易账户ID
         'instrument_id': instrument_id,
         'direction': direction,
         'offset': offset,
@@ -383,7 +390,7 @@ def submit_order(user_id, instrument_id, direction, offset, volume, price):
     return response.json()
 
 # 使用
-result = submit_order('user001', 'IX2301', 'BUY', 'OPEN', 10, 120.0)
+result = submit_order('user001', 'ACC_user001_01', 'IX2301', 'BUY', 'OPEN', 10, 120.0)
 print(f"订单ID: {result['data']['order_id']}")
 ```
 
@@ -399,9 +406,16 @@ print(f"订单ID: {result['data']['order_id']}")
 ```json
 {
   "user_id": "user001",
+  "account_id": "ACC_user001_01",  // ✨ Phase 10: 必填，指定交易账户
   "order_id": "O17251234567890000001"
 }
 ```
+
+**字段说明**:
+- `user_id` (string, required): 用户ID，用于身份验证
+- `account_id` (string, required): 交易账户ID
+  - ⚠️ 系统会验证订单是否属于该账户，防止跨账户撤单
+- `order_id` (string, required): 订单ID
 
 **响应**:
 ```json
@@ -428,18 +442,22 @@ print(f"订单ID: {result['data']['order_id']}")
 
 **示例**:
 ```javascript
-// JavaScript
-async function cancelOrder(userId, orderId) {
+// JavaScript（✨ Phase 10: 添加 account_id 参数）
+async function cancelOrder(userId, accountId, orderId) {
   const response = await fetch('http://localhost:8080/api/order/cancel', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, order_id: orderId })
+    body: JSON.stringify({
+      user_id: userId,
+      account_id: accountId,  // ✨ 指定账户ID
+      order_id: orderId
+    })
   });
   return await response.json();
 }
 
 // 使用
-const result = await cancelOrder('user001', 'O17251234567890000001');
+const result = await cancelOrder('user001', 'ACC_user001_01', 'O17251234567890000001');
 ```
 
 ---
@@ -798,6 +816,7 @@ function TradingApp() {
       <div className="order-form">
         <button onClick={() => submitOrder({
           user_id: 'user001',
+          account_id: 'ACC_user001_01',  // ✨ Phase 10: 必须指定账户
           instrument_id: 'IX2301',
           direction: 'BUY',
           offset: 'OPEN',
