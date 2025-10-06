@@ -84,7 +84,6 @@ fn main() {
     println!("   (等待 5 秒，每秒接收一次快照)\n");
 
     let start_time = std::time::Instant::now();
-    let mut snapshot_count = 0;
 
     // 启动3个消费者线程
     let consumer1 = std::thread::spawn(move || {
