@@ -27,10 +27,16 @@ pub async fn get_orderbook(
     query: web::Query<OrderBookQuery>,
     market_service: web::Data<MarketDataService>,
 ) -> Result<HttpResponse> {
+    log::info!("🔍 [HTTP API] GET /api/market/orderbook/{}?depth={}", instrument_id, query.depth);
+
     match market_service.get_orderbook_snapshot(&instrument_id, query.depth) {
-        Ok(snapshot) => Ok(HttpResponse::Ok().json(ApiResponse::success(snapshot))),
+        Ok(snapshot) => {
+            log::info!("✅ [HTTP API] Orderbook found for {}: {} bids, {} asks",
+                instrument_id, snapshot.bids.len(), snapshot.asks.len());
+            Ok(HttpResponse::Ok().json(ApiResponse::success(snapshot)))
+        }
         Err(e) => {
-            log::error!("Failed to get orderbook for {}: {}", instrument_id, e);
+            log::error!("❌ [HTTP API] Failed to get orderbook for {}: {}", instrument_id, e);
             Ok(HttpResponse::InternalServerError().json(
                 ApiResponse::<()>::error(500, format!("Failed to get orderbook: {}", e))
             ))
@@ -62,10 +68,16 @@ pub async fn get_tick(
     instrument_id: web::Path<String>,
     market_service: web::Data<MarketDataService>,
 ) -> Result<HttpResponse> {
+    log::info!("🔍 [HTTP API] GET /api/market/tick/{}", instrument_id);
+
     match market_service.get_tick_data(&instrument_id) {
-        Ok(tick) => Ok(HttpResponse::Ok().json(ApiResponse::success(tick))),
+        Ok(tick) => {
+            log::info!("✅ [HTTP API] Tick data found for {}: price={}, ts={}",
+                instrument_id, tick.last_price, tick.timestamp);
+            Ok(HttpResponse::Ok().json(ApiResponse::success(tick)))
+        }
         Err(e) => {
-            log::error!("Failed to get tick for {}: {}", instrument_id, e);
+            log::error!("❌ [HTTP API] Failed to get tick for {}: {}", instrument_id, e);
             Ok(HttpResponse::InternalServerError().json(
                 ApiResponse::<()>::error(500, format!("Failed to get tick: {}", e))
             ))

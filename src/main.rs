@@ -453,10 +453,8 @@ impl ExchangeServer {
 
         // 创建市场数据服务（解耦：业务逻辑与网络层分离）
         // 传递 market_data_storage 以支持从 WAL 恢复历史行情
-        let market_service = Arc::new(
-            qaexchange::market::MarketDataService::new(self.matching_engine.clone())
-                .with_storage(self.market_data_storage.clone())
-        );
+        let market_service = qaexchange::market::MarketDataService::new(self.matching_engine.clone())
+            .with_storage(self.market_data_storage.clone());
 
         // 创建管理端状态（合约管理、结算管理）
         let admin_state = AdminAppState {
@@ -479,7 +477,7 @@ impl ExchangeServer {
         let server = ActixHttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(app_state.clone()))
-                .app_data(web::Data::new(market_service.clone()))
+                .app_data(web::Data::new(market_service.clone()))  // MarketDataService 实现了 Clone
                 .app_data(admin_data.clone())
                 .app_data(management_data.clone())
                 .wrap(middleware::Logger::default())
