@@ -1,0 +1,60 @@
+# QAExchange 性能优化配置
+#
+# 此配置文件包含所有性能相关的参数调优选项
+# 修改后需要重启服务生效
+
+[batch_write]
+# Tick批量写入配置
+tick_buffer_size = 1000           # Tick缓冲区容量（条）
+tick_flush_interval_ms = 10       # 刷新间隔（毫秒）
+max_batch_size = 1000             # 单次批量写入最大记录数
+
+# 订单簿快照配置
+snapshot_interval_ms = 1000       # 快照写入间隔（毫秒），防止高频IO
+snapshot_min_change_pct = 5.0     # 最小变化百分比（可选，暂未实现）
+
+[websocket]
+# WebSocket行情广播配置
+batch_size = 100                  # 批量发送大小（事件数）
+batch_timeout_ms = 10             # 批量超时（毫秒）
+queue_threshold = 500             # 背压触发阈值（队列长度）
+max_pending_events = 10000        # 最大挂起事件数
+
+[priority_queue]
+# 优先级订单队列配置
+enabled = true                    # 是否启用优先级队列
+low_queue_limit = 100             # 低优先级队列最大长度
+critical_amount_threshold = 1000000.0  # 大额订单阈值（金额）
+
+# VIP用户列表（账户ID）
+vip_users = [
+    # "ACC_vip_user_1",
+    # "ACC_vip_user_2",
+]
+
+# 批量处理配置
+dequeue_batch_size = 100          # 批量出队大小
+process_interval_ms = 1           # 处理间隔（毫秒）
+
+[memtable]
+# MemTable配置
+max_size_mb = 64                  # 最大内存大小（MB）
+estimated_entry_size = 256        # 预估每条记录大小（字节）
+flush_threshold_pct = 80          # 刷新阈值（百分比）
+
+[storage]
+# 存储引擎配置
+wal_sync_interval_ms = 100        # WAL同步间隔（毫秒）
+wal_batch_size = 1000             # WAL批量写入大小
+
+[monitoring]
+# 监控配置
+stats_interval_sec = 60           # 统计信息输出间隔（秒）
+enable_detailed_logging = false   # 是否启用详细日志（影响性能）
+log_slow_operations_ms = 100      # 慢操作日志阈值（毫秒）
+
+[advanced]
+# 高级配置（谨慎修改）
+worker_threads = 4                # 工作线程数（默认为CPU核心数）
+io_threads = 2                    # IO线程数
+enable_zero_copy = false          # 是否启用零拷贝（需要iceoryx2支持）

@@ -197,6 +197,10 @@ impl ExchangeServer {
         order_router.set_storage(market_data_storage.clone());
         log::info!("✅ OrderRouter market data storage initialized");
 
+        // 启动批量刷新线程（性能优化：tick数据批量写入）
+        order_router.start_batch_flush_worker();
+        log::info!("✅ Batch flush worker started (10ms interval, max 1000 records/batch)");
+
         let order_router = Arc::new(order_router);
 
         // 4. 创建结算引擎
