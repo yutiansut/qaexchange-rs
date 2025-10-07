@@ -164,8 +164,8 @@ impl RecoveryManager {
             }
 
             // 行情记录（恢复时跳过，行情数据无需恢复到内存）
-            WalRecord::TickData { .. } | WalRecord::OrderBookSnapshot { .. } | WalRecord::OrderBookDelta { .. } => {
-                // 行情数据不需要恢复到账户状态，仅存档用于历史查询
+            WalRecord::TickData { .. } | WalRecord::OrderBookSnapshot { .. } | WalRecord::OrderBookDelta { .. } | WalRecord::KLineFinished { .. } => {
+                // 行情数据和K线数据不需要恢复到账户状态，仅存档用于历史查询
             }
 
             // 用户记录（恢复时跳过，用户数据由 UserManager 独立恢复）

@@ -187,12 +187,23 @@ impl ExchangeServer {
 
         let market_broadcaster = Arc::new(MarketDataBroadcaster::new());
 
-        // 1.3.1 启动K线Actor（独立处理K线聚合，避免阻塞交易流程）
+        // 1.3.1 创建K线WAL管理器
+        let kline_wal_dir = "./data/wal/klines";
+        std::fs::create_dir_all(kline_wal_dir).unwrap_or_else(|e| {
+            log::warn!("Failed to create K-line WAL directory: {}", e);
+        });
+        let kline_wal_manager = Arc::new(qaexchange::storage::wal::WalManager::new(kline_wal_dir));
+        log::info!("✅ K-line WAL Manager initialized at {}", kline_wal_dir);
+
+        // 1.3.2 启动K线Actor（订阅tick事件，独立处理K线聚合）
         log::info!("Starting KLine Actor...");
-        let kline_actor = qaexchange::market::KLineActor::new()
-            .with_broadcaster(market_broadcaster.clone())
+        let kline_actor = qaexchange::market::KLineActor::new(
+            market_broadcaster.clone(),
+            kline_wal_manager.clone()
+        )
+            // .with_instruments(vec![])  // 空列表表示订阅所有合约
             .start();
-        log::info!("✅ KLine Actor started");
+        log::info!("✅ KLine Actor started (subscribed to tick events)");
 
         // 1.4 创建 iceoryx2 管理器（如果启用）
         let iceoryx_manager: Option<Arc<parking_lot::RwLock<qaexchange::ipc::IceoryxManager>>> = if perf_config.iceoryx.enabled {
@@ -317,15 +328,14 @@ impl ExchangeServer {
         };
         log::info!("✅ Market data service with snapshot generator initialized");
 
-        // 7.1 设置 market_data_service 和 kline_actor 到 trade_gateway
+        // 7.1 设置 market_data_service 到 trade_gateway（用于更新快照统计）
         // 由于 trade_gateway 已经是 Arc，需要使用 unsafe 获取可变引用
         // 安全性：此时 trade_gateway 只有一个引用（刚创建），可以安全修改
         unsafe {
             let trade_gateway_ptr = Arc::as_ptr(&trade_gateway) as *mut TradeGateway;
             (*trade_gateway_ptr).set_market_data_service(market_data_service.clone());
-            (*trade_gateway_ptr).set_kline_actor(kline_actor.clone());
         }
-        log::info!("✅ Market data service and K-line Actor connected to trade gateway");
+        log::info!("✅ Market data service connected to trade gateway");
 
         log::info!("✅ Core components initialized");
         log::info!("✅ Market data broadcaster initialized");

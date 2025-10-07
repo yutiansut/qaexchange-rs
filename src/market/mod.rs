@@ -643,4 +643,4 @@ pub use snapshot_broadcaster::SnapshotBroadcastService;
 pub use snapshot_generator::{MarketSnapshot, MarketSnapshotGenerator, SnapshotGeneratorConfig};
 pub use cache::{MarketDataCache, CacheStatsSnapshot};
 pub use recovery::{MarketDataRecovery, RecoveredMarketData, RecoveryStats};
-pub use kline_actor::{KLineActor, OnTrade, GetKLines, GetCurrentKLine};
+pub use kline_actor::{KLineActor, GetKLines, GetCurrentKLine};

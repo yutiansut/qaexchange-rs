@@ -8,6 +8,7 @@
 // - TickData: Tick 行情（新增）
 // - OrderBookSnapshot: 订单簿快照（新增）
 // - OrderBookDelta: 订单簿增量更新（新增）
+// - KLineFinished: K线数据（新增）
 //
 // 优化设计：
 // - OrderID 品种内唯一（u64），无需全局唯一 UUID
@@ -157,6 +158,23 @@ pub enum WalRecord {
         volume: f64,                 // Trade类型: 成交量
         price: f64,                  // Trade类型: 成交价格
         reason: [u8; 128],           // Rejected类型: 拒绝原因
+    },
+
+    /// K线数据（完成的K线）
+    /// 存储路径: {instrument_id}/klines/
+    /// 用于K线数据的持久化和恢复
+    /// @yutiansut @quantaxis
+    KLineFinished {
+        instrument_id: [u8; 16],     // 合约ID
+        period: i32,                 // 周期（HQChart格式: 0=Day, 3=3s, 4=1min, 5=5min, 6=15min, 7=30min, 8=60min）
+        kline_timestamp: i64,        // K线起始时间戳（毫秒）
+        open: f64,                   // 开盘价
+        high: f64,                   // 最高价
+        low: f64,                    // 最低价
+        close: f64,                  // 收盘价
+        volume: i64,                 // 成交量
+        amount: f64,                 // 成交额
+        timestamp: i64,              // 记录写入时间戳（纳秒）
     },
 }
 

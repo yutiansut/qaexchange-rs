@@ -75,6 +75,7 @@ impl MemTableValue {
             WalRecord::ExchangeOrderRecord { time, .. } => *time,
             WalRecord::ExchangeTradeRecord { time, .. } => *time,
             WalRecord::ExchangeResponseRecord { timestamp, .. } => *timestamp,
+            WalRecord::KLineFinished { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -105,6 +106,7 @@ impl MemTableEntry {
             WalRecord::ExchangeOrderRecord { time, .. } => *time,
             WalRecord::ExchangeTradeRecord { time, .. } => *time,
             WalRecord::ExchangeResponseRecord { timestamp, .. } => *timestamp,
+            WalRecord::KLineFinished { timestamp, .. } => *timestamp,
         };
 
         Self {
