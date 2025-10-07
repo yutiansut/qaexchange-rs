@@ -17,6 +17,7 @@
 - [架构设计](02_architecture/README.md)
   - [系统概览](02_architecture/system_overview.md)
   - [高性能架构](02_architecture/high_performance.md)
+  - [Actix Actor 架构](02_architecture/actor_architecture.md)
   - [交易机制](02_architecture/trading_mechanism.md)
   - [数据模型](02_architecture/data_models.md)
   - [存储解耦架构](02_architecture/decoupled_storage.md)
@@ -39,6 +40,7 @@
 
 - [市场数据模块](03_core_modules/market/README.md)
 - [快照生成器](03_core_modules/market/snapshot_generator.md)
+- [K线聚合系统](03_core_modules/market/kline.md)
 
 ## 通知系统
 
