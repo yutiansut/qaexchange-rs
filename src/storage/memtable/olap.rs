@@ -26,7 +26,7 @@ pub fn create_olap_schema() -> Schema {
         // 主键字段
         Field::new("timestamp", DataType::Int64, false),  // 纳秒时间戳
         Field::new("sequence", DataType::UInt64, false),  // WAL 序列号
-        Field::new("record_type", DataType::UInt8, false), // 0=OrderInsert, 1=TradeExecuted, 2=AccountUpdate, 3=Checkpoint
+        Field::new("record_type", DataType::UInt8, false), // 0=OrderInsert, 1=TradeExecuted, 2=AccountUpdate, 3=Checkpoint, 13=KLineFinished
 
         // Order 字段
         Field::new("order_id", DataType::UInt64, true),
@@ -46,6 +46,18 @@ pub fn create_olap_schema() -> Schema {
         Field::new("available", DataType::Float64, true),
         Field::new("frozen", DataType::Float64, true),
         Field::new("margin", DataType::Float64, true),
+
+        // K线字段
+        Field::new("kline_period", DataType::Int32, true),      // K线周期
+        Field::new("kline_timestamp", DataType::Int64, true),   // K线起始时间戳（毫秒）
+        Field::new("kline_open", DataType::Float64, true),      // 开盘价
+        Field::new("kline_high", DataType::Float64, true),      // 最高价
+        Field::new("kline_low", DataType::Float64, true),       // 最低价
+        Field::new("kline_close", DataType::Float64, true),     // 收盘价
+        Field::new("kline_volume", DataType::Int64, true),      // 成交量
+        Field::new("kline_amount", DataType::Float64, true),    // 成交额
+        Field::new("kline_open_oi", DataType::Int64, true),     // 起始持仓量
+        Field::new("kline_close_oi", DataType::Int64, true),    // 结束持仓量
     ])
 }
 
@@ -231,6 +243,34 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
     let mut frozen_builder = MutablePrimitiveArray::<f64>::with_capacity(len);
     let mut margin_builder = MutablePrimitiveArray::<f64>::with_capacity(len);
 
+    // K线字段
+    let mut kline_period_builder = MutablePrimitiveArray::<i32>::with_capacity(len);
+    let mut kline_timestamp_builder = MutablePrimitiveArray::<i64>::with_capacity(len);
+    let mut kline_open_builder = MutablePrimitiveArray::<f64>::with_capacity(len);
+    let mut kline_high_builder = MutablePrimitiveArray::<f64>::with_capacity(len);
+    let mut kline_low_builder = MutablePrimitiveArray::<f64>::with_capacity(len);
+    let mut kline_close_builder = MutablePrimitiveArray::<f64>::with_capacity(len);
+    let mut kline_volume_builder = MutablePrimitiveArray::<i64>::with_capacity(len);
+    let mut kline_amount_builder = MutablePrimitiveArray::<f64>::with_capacity(len);
+    let mut kline_open_oi_builder = MutablePrimitiveArray::<i64>::with_capacity(len);
+    let mut kline_close_oi_builder = MutablePrimitiveArray::<i64>::with_capacity(len);
+
+    // Helper macro to push null K-line fields
+    macro_rules! push_null_kline_fields {
+        () => {
+            kline_period_builder.push(None);
+            kline_timestamp_builder.push(None);
+            kline_open_builder.push(None);
+            kline_high_builder.push(None);
+            kline_low_builder.push(None);
+            kline_close_builder.push(None);
+            kline_volume_builder.push(None);
+            kline_amount_builder.push(None);
+            kline_open_oi_builder.push(None);
+            kline_close_oi_builder.push(None);
+        };
+    }
+
     // 填充数据
     for (key, record) in records {
         timestamp_builder.push(Some(key.timestamp));
@@ -265,6 +305,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             WalRecord::TradeExecuted {
@@ -295,6 +338,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             WalRecord::AccountUpdate {
@@ -367,6 +413,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             // 行情记录（OLAP 主要存储交易数据，行情数据暂不存储到 OLAP）
@@ -387,6 +436,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             WalRecord::OrderBookSnapshot { .. } => {
@@ -406,6 +458,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             WalRecord::OrderBookDelta { .. } => {
@@ -425,6 +480,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             // 用户记录（OLAP 主要存储交易数据，用户数据暂不存储到 OLAP）
@@ -445,6 +503,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             WalRecord::AccountBind { .. } => {
@@ -464,6 +525,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             // Phase 5: 交易所内部记录（暂不存储到 OLAP）
@@ -484,6 +548,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             WalRecord::ExchangeTradeRecord { .. } => {
@@ -503,6 +570,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             WalRecord::ExchangeResponseRecord { .. } => {
@@ -522,6 +592,53 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(None);
                 frozen_builder.push(None);
                 margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
+            }
+
+            WalRecord::KLineFinished {
+                instrument_id: kline_instrument_id,
+                period,
+                kline_timestamp,
+                open,
+                high,
+                low,
+                close,
+                volume: kline_volume,
+                amount,
+                open_oi,
+                close_oi,
+                ..
+            } => {
+                record_type_builder.push(Some(13)); // KLineFinished type ID
+
+                // Order/Trade/Account字段为 null（K线记录不使用这些字段）
+                order_id_builder.push(None);
+                user_id_builder.push(None::<&[u8]>);
+                instrument_id_builder.push(Some(kline_instrument_id.as_slice()));  // K线合约ID
+                direction_builder.push(None);
+                offset_builder.push(None);
+                price_builder.push(None);
+                volume_builder.push(None);
+                trade_id_builder.push(None);
+                exchange_order_id_builder.push(None);
+                balance_builder.push(None);
+                available_builder.push(None);
+                frozen_builder.push(None);
+                margin_builder.push(None);
+
+                // K线字段填充实际数据
+                kline_period_builder.push(Some(*period));
+                kline_timestamp_builder.push(Some(*kline_timestamp));
+                kline_open_builder.push(Some(*open));
+                kline_high_builder.push(Some(*high));
+                kline_low_builder.push(Some(*low));
+                kline_close_builder.push(Some(*close));
+                kline_volume_builder.push(Some(*kline_volume));
+                kline_amount_builder.push(Some(*amount));
+                kline_open_oi_builder.push(Some(*open_oi));
+                kline_close_oi_builder.push(Some(*close_oi));
             }
         }
     }
@@ -544,6 +661,18 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
     let frozen_array: PrimitiveArray<f64> = frozen_builder.into();
     let margin_array: PrimitiveArray<f64> = margin_builder.into();
 
+    // K线字段
+    let kline_period_array: PrimitiveArray<i32> = kline_period_builder.into();
+    let kline_timestamp_array: PrimitiveArray<i64> = kline_timestamp_builder.into();
+    let kline_open_array: PrimitiveArray<f64> = kline_open_builder.into();
+    let kline_high_array: PrimitiveArray<f64> = kline_high_builder.into();
+    let kline_low_array: PrimitiveArray<f64> = kline_low_builder.into();
+    let kline_close_array: PrimitiveArray<f64> = kline_close_builder.into();
+    let kline_volume_array: PrimitiveArray<i64> = kline_volume_builder.into();
+    let kline_amount_array: PrimitiveArray<f64> = kline_amount_builder.into();
+    let kline_open_oi_array: PrimitiveArray<i64> = kline_open_oi_builder.into();
+    let kline_close_oi_array: PrimitiveArray<i64> = kline_close_oi_builder.into();
+
     let arrays: Vec<Box<dyn Array>> = vec![
         Box::new(timestamp_array),
         Box::new(sequence_array),
@@ -561,6 +690,16 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
         Box::new(available_array),
         Box::new(frozen_array),
         Box::new(margin_array),
+        Box::new(kline_period_array),
+        Box::new(kline_timestamp_array),
+        Box::new(kline_open_array),
+        Box::new(kline_high_array),
+        Box::new(kline_low_array),
+        Box::new(kline_close_array),
+        Box::new(kline_volume_array),
+        Box::new(kline_amount_array),
+        Box::new(kline_open_oi_array),
+        Box::new(kline_close_oi_array),
     ];
 
     Chunk::new(arrays)

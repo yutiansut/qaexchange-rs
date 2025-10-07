@@ -855,23 +855,29 @@ impl DiffHandler {
                     Ok(klines) => {
                         // 转换为DIFF格式
                         let mut kline_data = serde_json::Map::new();
-                        let mut kline_id = 0i64;
+                        let mut last_kline_id = 0i64;
 
                         for kline in klines.iter() {
+                            // K线ID使用时间戳除以周期得到序列号
+                            let kline_id = (kline.timestamp * 1_000_000) / duration;  // 毫秒转纳秒后除以周期
+
+                            // DIFF协议要求datetime为UnixNano（纳秒）
+                            let datetime_ns = kline.timestamp * 1_000_000;  // 毫秒转纳秒
+
                             kline_data.insert(
                                 kline_id.to_string(),
                                 serde_json::json!({
-                                    "datetime": kline.timestamp,
+                                    "datetime": datetime_ns,
                                     "open": kline.open,
                                     "high": kline.high,
                                     "low": kline.low,
                                     "close": kline.close,
                                     "volume": kline.volume,
-                                    "open_oi": 0,  // TODO: 持仓量
-                                    "close_oi": 0,
+                                    "open_oi": kline.open_oi,
+                                    "close_oi": kline.close_oi,
                                 })
                             );
-                            kline_id += 1;
+                            last_kline_id = kline_id;
                         }
 
                         // 发送K线数据
@@ -887,7 +893,7 @@ impl DiffHandler {
                             "klines": {
                                 instrument_id: {
                                     duration.to_string(): {
-                                        "last_id": kline_id - 1,
+                                        "last_id": last_kline_id,
                                         "data": kline_data
                                     }
                                 }
@@ -1016,20 +1022,26 @@ impl DiffHandler {
                     .map(|p| p.to_duration_ns())
                     .unwrap_or(0);
 
+                // K线ID使用时间戳除以周期得到序列号
+                let kline_id = (kline.timestamp * 1_000_000) / duration_ns;  // 毫秒转纳秒后除以周期
+
+                // DIFF协议要求datetime为UnixNano（纳秒）
+                let datetime_ns = kline.timestamp * 1_000_000;  // 毫秒转纳秒
+
                 Some(serde_json::json!({
                     "klines": {
                         instrument_id: {
                             duration_ns.to_string(): {
                                 "data": {
-                                    timestamp.to_string(): {
-                                        "datetime": kline.timestamp,
+                                    kline_id.to_string(): {
+                                        "datetime": datetime_ns,
                                         "open": kline.open,
                                         "high": kline.high,
                                         "low": kline.low,
                                         "close": kline.close,
                                         "volume": kline.volume,
-                                        "open_oi": 0,  // TODO: 持仓量
-                                        "close_oi": 0,
+                                        "open_oi": kline.open_oi,
+                                        "close_oi": kline.close_oi,
                                     }
                                 }
                             }

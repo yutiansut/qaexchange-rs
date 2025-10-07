@@ -174,6 +174,8 @@ pub enum WalRecord {
         close: f64,                  // 收盘价
         volume: i64,                 // 成交量
         amount: f64,                 // 成交额
+        open_oi: i64,                // 起始持仓量
+        close_oi: i64,               // 结束持仓量
         timestamp: i64,              // 记录写入时间戳（纳秒）
     },
 }

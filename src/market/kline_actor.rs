@@ -84,77 +84,78 @@ impl Actor for KLineActor {
         let wal_manager = self.wal_manager.clone();
         let addr = ctx.address();
 
-        ctx.spawn(
-            async move {
-                log::info!("📊 [KLineActor] Subscribed to tick events (subscriber_id={})", subscriber_id);
+        let fut = async move {
+            log::info!("📊 [KLineActor] Subscribed to tick events (subscriber_id={})", subscriber_id);
 
-                loop {
-                    // 使用spawn_blocking避免阻塞Tokio执行器
-                    let receiver_clone = receiver.clone();
-                    match tokio::task::spawn_blocking(move || receiver_clone.recv()).await {
-                        Ok(Ok(event)) => {
-                            // 处理tick事件
-                            if let MarketDataEvent::Tick { instrument_id, price, volume, timestamp, .. } = event {
-                                let mut agg_map = aggregators.write();
-                                let aggregator = agg_map
-                                    .entry(instrument_id.clone())
-                                    .or_insert_with(|| KLineAggregator::new(instrument_id.clone()));
+            loop {
+                // 使用spawn_blocking避免阻塞Tokio执行器
+                let receiver_clone = receiver.clone();
+                match tokio::task::spawn_blocking(move || receiver_clone.recv()).await {
+                    Ok(Ok(event)) => {
+                        // 处理tick事件
+                        if let MarketDataEvent::Tick { instrument_id, price, volume, timestamp, .. } = event {
+                            let mut agg_map = aggregators.write();
+                            let aggregator = agg_map
+                                .entry(instrument_id.clone())
+                                .or_insert_with(|| KLineAggregator::new(instrument_id.clone()));
 
-                                // 聚合K线
-                                let finished_klines = aggregator.on_tick(price, volume as i64, timestamp);
+                            // 聚合K线
+                            let finished_klines = aggregator.on_tick(price, volume as i64, timestamp);
 
-                                // 广播完成的K线
-                                for (period, kline) in finished_klines {
-                                    log::debug!(
-                                        "📊 [KLineActor] Finished {} {:?} K-line: O={:.2} H={:.2} L={:.2} C={:.2} V={}",
-                                        instrument_id, period, kline.open, kline.high, kline.low, kline.close, kline.volume
-                                    );
+                            // 广播完成的K线
+                            for (period, kline) in finished_klines {
+                                log::debug!(
+                                    "📊 [KLineActor] Finished {} {:?} K-line: O={:.2} H={:.2} L={:.2} C={:.2} V={}",
+                                    instrument_id, period, kline.open, kline.high, kline.low, kline.close, kline.volume
+                                );
 
-                                    // 广播K线完成事件
-                                    broadcaster.broadcast(MarketDataEvent::KLineFinished {
-                                        instrument_id: instrument_id.clone(),
-                                        period: period.to_int(),
-                                        kline: kline.clone(),
-                                        timestamp,
-                                    });
+                                // 广播K线完成事件
+                                broadcaster.broadcast(MarketDataEvent::KLineFinished {
+                                    instrument_id: instrument_id.clone(),
+                                    period: period.to_int(),
+                                    kline: kline.clone(),
+                                    timestamp,
+                                });
 
-                                    // 持久化K线到WAL
-                                    let wal_record = WalRecord::KLineFinished {
-                                        instrument_id: WalRecord::to_fixed_array_16(&instrument_id),
-                                        period: period.to_int(),
-                                        kline_timestamp: kline.timestamp,
-                                        open: kline.open,
-                                        high: kline.high,
-                                        low: kline.low,
-                                        close: kline.close,
-                                        volume: kline.volume,
-                                        amount: kline.amount,
-                                        timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
-                                    };
+                                // 持久化K线到WAL
+                                let wal_record = WalRecord::KLineFinished {
+                                    instrument_id: WalRecord::to_fixed_array_16(&instrument_id),
+                                    period: period.to_int(),
+                                    kline_timestamp: kline.timestamp,
+                                    open: kline.open,
+                                    high: kline.high,
+                                    low: kline.low,
+                                    close: kline.close,
+                                    volume: kline.volume,
+                                    amount: kline.amount,
+                                    open_oi: kline.open_oi,
+                                    close_oi: kline.close_oi,
+                                    timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                                };
 
-                                    if let Err(e) = wal_manager.append(wal_record) {
-                                        log::error!("📊 [KLineActor] Failed to persist K-line to WAL: {}", e);
-                                    } else {
-                                        log::trace!("📊 [KLineActor] K-line persisted to WAL: {} {:?}", instrument_id, period);
-                                    }
+                                if let Err(e) = wal_manager.append(wal_record) {
+                                    log::error!("📊 [KLineActor] Failed to persist K-line to WAL: {}", e);
+                                } else {
+                                    log::trace!("📊 [KLineActor] K-line persisted to WAL: {} {:?}", instrument_id, period);
                                 }
                             }
                         }
-                        Ok(Err(_)) => {
-                            log::warn!("📊 [KLineActor] Market data channel disconnected");
-                            break;
-                        }
-                        Err(e) => {
-                            log::error!("📊 [KLineActor] spawn_blocking error: {}", e);
-                            break;
-                        }
+                    }
+                    Ok(Err(_)) => {
+                        log::warn!("📊 [KLineActor] Market data channel disconnected");
+                        break;
+                    }
+                    Err(e) => {
+                        log::error!("📊 [KLineActor] spawn_blocking error: {}", e);
+                        break;
                     }
                 }
-
-                log::info!("📊 [KLineActor] Tick processing task ended");
             }
-            .into_actor(self),
-        );
+
+            log::info!("📊 [KLineActor] Tick processing task ended");
+        };
+
+        ctx.spawn(actix::fut::wrap_future(fut));
 
         log::info!("📊 [KLineActor] Started successfully");
     }

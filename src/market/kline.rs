@@ -33,6 +33,12 @@ pub struct KLine {
     /// 成交额
     pub amount: f64,
 
+    /// 起始持仓量（DIFF协议要求）
+    pub open_oi: i64,
+
+    /// 结束持仓量（DIFF协议要求）
+    pub close_oi: i64,
+
     /// K线是否完成（false=当前K线仍在形成中）
     pub is_finished: bool,
 }
@@ -48,6 +54,8 @@ impl KLine {
             close: price,
             volume: 0,
             amount: 0.0,
+            open_oi: 0,    // 持仓量初始化为0（需要从行情数据获取）
+            close_oi: 0,
             is_finished: false,
         }
     }
@@ -59,6 +67,14 @@ impl KLine {
         self.low = self.low.min(price);
         self.volume += volume;
         self.amount += price * volume as f64;
+    }
+
+    /// 更新持仓量
+    pub fn update_open_interest(&mut self, open_interest: i64) {
+        if self.open_oi == 0 {
+            self.open_oi = open_interest;  // 第一次tick设置起始持仓
+        }
+        self.close_oi = open_interest;     // 每次更新结束持仓
     }
 
     /// 标记K线完成
