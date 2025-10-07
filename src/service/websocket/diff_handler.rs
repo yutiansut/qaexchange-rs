@@ -400,7 +400,12 @@ impl DiffHandler {
             let receiver = broadcaster.subscribe(
                 user_id.to_string(),
                 instruments.clone(),
-                vec!["orderbook".to_string(), "tick".to_string(), "last_price".to_string()],
+                vec![
+                    "orderbook".to_string(),
+                    "tick".to_string(),
+                    "last_price".to_string(),
+                    "kline".to_string(),  // ✨ 新增：订阅K线完成事件
+                ],
             );
 
             // 启动异步任务持续推送行情数据
@@ -906,7 +911,9 @@ impl DiffHandler {
                             user_id_str, chart_id_clone, instrument_id, period, klines.len()
                         );
 
-                        // TODO: 订阅实时K线更新（通过MarketDataBroadcaster的kline频道）
+                        // 订阅实时K线更新（通过MarketDataBroadcaster的kline频道）
+                        // 注意：已经在 handle_subscribe_quote 中订阅了 kline 频道，这里无需重复订阅
+                        // 如果需要独立的K线订阅，可以在下面实现
                     }
                     Err(e) => {
                         let error_patch = serde_json::json!({

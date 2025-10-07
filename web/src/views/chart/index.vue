@@ -1,75 +1,264 @@
 <template>
-  <div class="chart-container">
-    <div class="chart-header">
-      <h2>K线图表</h2>
-      <div class="chart-controls">
-        <el-select v-model="selectedSymbol" placeholder="选择交易对" style="width: 200px;">
-          <el-option label="BTC/USDT" value="BTCUSDT"></el-option>
-          <el-option label="ETH/USDT" value="ETHUSDT"></el-option>
-        </el-select>
-        <el-select v-model="selectedInterval" placeholder="时间周期" style="width: 120px;">
-          <el-option label="1分钟" value="1m"></el-option>
-          <el-option label="5分钟" value="5m"></el-option>
-          <el-option label="15分钟" value="15m"></el-option>
-          <el-option label="1小时" value="1h"></el-option>
-          <el-option label="4小时" value="4h"></el-option>
-          <el-option label="1天" value="1d"></el-option>
-        </el-select>
+  <div class="chart-page">
+    <el-card class="header-card">
+      <el-row :gutter="20" align="middle">
+        <el-col :span="8">
+          <h2>K线图表</h2>
+        </el-col>
+        <el-col :span="16">
+          <div class="controls">
+            <el-select
+              v-model="selectedInstrument"
+              placeholder="选择合约"
+              style="width: 200px"
+              @change="onInstrumentChange"
+            >
+              <el-option
+                v-for="inst in availableInstruments"
+                :key="inst"
+                :label="inst"
+                :value="inst"
+              />
+            </el-select>
+
+            <el-select
+              v-model="klinePeriod"
+              placeholder="时间周期"
+              style="width: 120px; margin-left: 10px"
+            >
+              <el-option label="1分钟" :value="4" />
+              <el-option label="5分钟" :value="5" />
+              <el-option label="15分钟" :value="6" />
+              <el-option label="30分钟" :value="7" />
+              <el-option label="60分钟" :value="8" />
+              <el-option label="日线" :value="0" />
+            </el-select>
+
+            <el-tag
+              :type="isConnected ? 'success' : 'danger'"
+              style="margin-left: 10px"
+            >
+              {{ isConnected ? 'WebSocket 已连接' : 'WebSocket 未连接' }}
+            </el-tag>
+
+            <el-button
+              v-if="!isConnected"
+              type="primary"
+              size="small"
+              icon="el-icon-connection"
+              style="margin-left: 10px"
+              @click="connect"
+            >
+              连接
+            </el-button>
+
+            <span class="info-text" style="margin-left: 15px">
+              K线数量: {{ klineDataList.length }} 条
+            </span>
+          </div>
+        </el-col>
+      </el-row>
+    </el-card>
+
+    <el-card class="chart-card">
+      <div class="chart-container">
+        <KLineChart
+          ref="klineChart"
+          :symbol="selectedInstrument"
+          :period="klinePeriod"
+          :kline-data="klineDataList"
+        />
       </div>
-    </div>
-    <div class="chart-content">
-      <div id="kline-chart" style="height: 600px;"></div>
-    </div>
+    </el-card>
   </div>
 </template>
 
 <script>
+import { mapGetters, mapActions } from 'vuex'
+import KLineChart from '@/components/KLineChart.vue'
+
 export default {
-  name: 'Chart',
+  name: 'ChartPage',
+
+  components: {
+    KLineChart
+  },
+
   data() {
     return {
-      selectedSymbol: 'BTCUSDT',
-      selectedInterval: '1h'
+      selectedInstrument: 'SHFE.cu2501',
+      klinePeriod: 5,  // 默认5分钟
+      klineDataList: [],
+
+      // 可用合约列表
+      availableInstruments: [
+        'SHFE.cu2501',
+        'SHFE.ag2506',
+        'CFFEX.IF2501',
+        'CFFEX.IH2501'
+      ]
     }
   },
-  mounted() {
-    this.initChart()
+
+  computed: {
+    ...mapGetters('websocket', [
+      'isConnected',
+      'snapshot'
+    ])
   },
+
+  watch: {
+    // 当选中合约变化时，订阅K线数据
+    selectedInstrument(newVal) {
+      if (newVal && this.isConnected) {
+        this.subscribeKLine()
+      }
+    },
+
+    // 监听K线数据更新（WebSocket实时推送）
+    'snapshot.klines': {
+      handler(newKlines) {
+        if (!newKlines || !this.selectedInstrument) return
+
+        const instrumentKlines = newKlines[this.selectedInstrument]
+        if (!instrumentKlines) return
+
+        const durationNs = this.periodToNs(this.klinePeriod).toString()
+        const periodKlines = instrumentKlines[durationNs]
+        if (!periodKlines || !periodKlines.data) return
+
+        // 转换为数组格式
+        const klineArray = Object.values(periodKlines.data).map(k => ({
+          datetime: k.datetime / 1_000_000,  // 纳秒转毫秒
+          open: k.open,
+          high: k.high,
+          low: k.low,
+          close: k.close,
+          volume: k.volume,
+          amount: k.amount || (k.volume * k.close)
+        }))
+
+        // 按时间排序
+        klineArray.sort((a, b) => a.datetime - b.datetime)
+
+        this.klineDataList = klineArray
+        console.log('[ChartPage] K-line data updated:', klineArray.length, 'bars')
+      },
+      deep: true
+    },
+
+    // 当K线周期变化时，重新订阅
+    klinePeriod() {
+      if (this.selectedInstrument && this.isConnected) {
+        this.subscribeKLine()
+      }
+    }
+  },
+
+  mounted() {
+    // 自动连接 WebSocket（如果未连接）
+    if (!this.isConnected) {
+      this.connect()
+    } else {
+      // 已连接，直接订阅
+      this.subscribeKLine()
+    }
+  },
+
   methods: {
-    initChart() {
-      // TODO: 初始化K线图表
-      console.log('初始化K线图表')
+    ...mapActions('websocket', [
+      'connectWebSocket',
+      'subscribeQuote',
+      'setChart'
+    ]),
+
+    async connect() {
+      try {
+        await this.connectWebSocket()
+        this.$message.success('WebSocket 连接成功')
+
+        // 连接成功后订阅行情和K线
+        this.subscribeQuote(this.availableInstruments)
+        this.subscribeKLine()
+      } catch (error) {
+        this.$message.error('WebSocket 连接失败: ' + error.message)
+      }
+    },
+
+    // 订阅K线数据
+    subscribeKLine() {
+      if (!this.selectedInstrument || !this.isConnected) {
+        console.warn('[ChartPage] Cannot subscribe K-line: not connected or no instrument selected')
+        return
+      }
+
+      console.log('[ChartPage] Subscribing K-line:', this.selectedInstrument, 'period:', this.klinePeriod)
+
+      this.setChart({
+        chart_id: 'chart_page',
+        instrument_id: this.selectedInstrument,
+        period: this.klinePeriod,
+        count: 500
+      })
+    },
+
+    // 转换周期为纳秒
+    periodToNs(period) {
+      switch (period) {
+        case 0: return 86400_000_000_000
+        case 3: return 3_000_000_000
+        case 4: return 60_000_000_000
+        case 5: return 300_000_000_000
+        case 6: return 900_000_000_000
+        case 7: return 1_800_000_000_000
+        case 8: return 3_600_000_000_000
+        default: return 300_000_000_000
+      }
+    },
+
+    onInstrumentChange(value) {
+      console.log('[ChartPage] Instrument changed to:', value)
     }
   }
 }
 </script>
 
-<style scoped>
-.chart-container {
+<style scoped lang="scss">
+.chart-page {
   padding: 20px;
-}
-
-.chart-header {
+  height: calc(100vh - 100px);
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
+  flex-direction: column;
 
-.chart-header h2 {
-  margin: 0;
-  color: #303133;
-}
+  .header-card {
+    margin-bottom: 20px;
 
-.chart-controls {
-  display: flex;
-  gap: 10px;
-}
+    h2 {
+      margin: 0;
+      color: #303133;
+    }
 
-.chart-content {
-  background: #fff;
-  border-radius: 4px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  padding: 20px;
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+
+      .info-text {
+        font-size: 14px;
+        color: #606266;
+      }
+    }
+  }
+
+  .chart-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+
+    .chart-container {
+      flex: 1;
+      min-height: 500px;
+    }
+  }
 }
 </style>

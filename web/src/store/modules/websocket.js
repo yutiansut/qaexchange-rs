@@ -282,6 +282,46 @@ const actions = {
   },
 
   /**
+   * 订阅K线图表数据
+   *
+   * @param {Object} chart - 图表配置
+   * @param {string} chart.chart_id - 图表ID
+   * @param {string} chart.instrument_id - 合约代码
+   * @param {number} chart.period - K线周期 (0=日线, 4=1分钟, 5=5分钟等)
+   * @param {number} [chart.count=500] - 数据条数
+   */
+  setChart({ state }, chart) {
+    if (!state.ws || state.connectionState !== 'CONNECTED') {
+      console.warn('[WebSocket] Not connected, cannot set chart')
+      return
+    }
+
+    // 转换周期为纳秒（DIFF协议要求）
+    const periodToNs = (period) => {
+      switch (period) {
+        case 0: return 86400_000_000_000  // 日线
+        case 3: return 3_000_000_000      // 3秒
+        case 4: return 60_000_000_000     // 1分钟
+        case 5: return 300_000_000_000    // 5分钟
+        case 6: return 900_000_000_000    // 15分钟
+        case 7: return 1_800_000_000_000  // 30分钟
+        case 8: return 3_600_000_000_000  // 60分钟
+        default: return 300_000_000_000   // 默认5分钟
+      }
+    }
+
+    const chartConfig = {
+      chart_id: chart.chart_id || `chart_${Date.now()}`,
+      ins_list: chart.instrument_id || chart.ins_list,
+      duration: periodToNs(chart.period || 5),
+      view_width: chart.count || 500
+    }
+
+    console.log('[WebSocket] Setting chart:', chartConfig)
+    state.ws.setChart(chartConfig)
+  },
+
+  /**
    * WebSocket 连接成功处理
    */
   onWebSocketOpen({ commit, state }) {

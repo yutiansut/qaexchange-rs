@@ -608,10 +608,52 @@ export default {
       immediate: true
     },
 
-    // 当选中合约变化时，重新获取K线数据
+    // 当选中合约变化时，订阅K线数据（通过 WebSocket）
     selectedInstrument(newVal) {
-      if (newVal) {
-        this.fetchKLineData()
+      if (newVal && this.isConnected) {
+        this.subscribeKLine()
+      }
+    },
+
+    // 监听K线数据更新（WebSocket实时推送）
+    'snapshot.klines': {
+      handler(newKlines) {
+        if (!newKlines || !this.selectedInstrument) return
+
+        // 从 snapshot.klines 中提取当前合约的K线数据
+        const instrumentKlines = newKlines[this.selectedInstrument]
+        if (!instrumentKlines) return
+
+        // 转换周期为纳秒字符串
+        const durationNs = this.periodToNs(this.klinePeriod).toString()
+        const periodKlines = instrumentKlines[durationNs]
+        if (!periodKlines || !periodKlines.data) return
+
+        // 将 K线数据转换为数组格式（HQChart 需要）
+        const klineArray = Object.values(periodKlines.data).map(k => ({
+          datetime: k.datetime / 1_000_000,  // 纳秒转毫秒
+          open: k.open,
+          high: k.high,
+          low: k.low,
+          close: k.close,
+          volume: k.volume,
+          amount: k.amount || (k.volume * k.close)
+        }))
+
+        // 按时间排序
+        klineArray.sort((a, b) => a.datetime - b.datetime)
+
+        // 更新 K线数据列表
+        this.klineDataList = klineArray
+        console.log('[WebSocketTest] K-line data updated from WebSocket:', klineArray.length, 'bars')
+      },
+      deep: true
+    },
+
+    // 当K线周期变化时，重新订阅
+    klinePeriod(newPeriod) {
+      if (this.selectedInstrument && this.isConnected) {
+        this.subscribeKLine()
       }
     }
   },
@@ -622,7 +664,8 @@ export default {
       'disconnectWebSocket',
       'subscribeQuote',
       'insertOrder',
-      'cancelOrder'
+      'cancelOrder',
+      'setChart'  // ✨ 新增：K线订阅
     ]),
 
     async connect() {
@@ -839,10 +882,40 @@ export default {
       return percentage.toFixed(1) + '%'
     },
 
+    // 订阅K线数据（WebSocket DIFF协议）
+    subscribeKLine() {
+      if (!this.selectedInstrument || !this.isConnected) {
+        console.warn('[WebSocketTest] Cannot subscribe K-line: not connected or no instrument selected')
+        return
+      }
+
+      console.log('[WebSocketTest] Subscribing K-line:', this.selectedInstrument, 'period:', this.klinePeriod)
+
+      this.setChart({
+        chart_id: 'main_chart',
+        instrument_id: this.selectedInstrument,
+        period: this.klinePeriod,
+        count: 500
+      })
+    },
+
+    // 转换周期为纳秒（DIFF协议要求）
+    periodToNs(period) {
+      switch (period) {
+        case 0: return 86400_000_000_000  // 日线
+        case 3: return 3_000_000_000      // 3秒
+        case 4: return 60_000_000_000     // 1分钟
+        case 5: return 300_000_000_000    // 5分钟
+        case 6: return 900_000_000_000    // 15分钟
+        case 7: return 1_800_000_000_000  // 30分钟
+        case 8: return 3_600_000_000_000  // 60分钟
+        default: return 300_000_000_000   // 默认5分钟
+      }
+    },
+
     handlePeriodChange(period) {
       console.log('[WebSocketTest] K-line period changed to:', period)
-      // 周期变化时，可以重新请求K线数据
-      this.fetchKLineData()
+      // 周期变化时，通过 WebSocket 重新订阅（watch 会自动触发）
     },
 
     async fetchKLineData() {

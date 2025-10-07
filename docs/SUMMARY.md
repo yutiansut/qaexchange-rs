@@ -87,6 +87,7 @@
 - [开发指南](06_development/README.md)
   - [WebSocket 集成指南](06_development/websocket_integration.md)
   - [测试指南](06_development/testing.md)
+  - [K线系统测试指南](../KLINE_TESTING_GUIDE.md) - ✨ **K线端到端测试**
   - [部署指南](06_development/deployment.md)
 
 ---
@@ -111,6 +112,7 @@
 - [市场数据增强](08_advanced/implementation_summaries/market_data.md)
 - [管理功能](08_advanced/implementation_summaries/management_features.md)
 - [K线聚合系统](08_advanced/implementation_summaries/kline_system.md)
+- [K线实时推送系统](../KLINE_IMPLEMENTATION_SUMMARY.md) - ✨ **最新实现**
 
 ## 技术深度解析
 
