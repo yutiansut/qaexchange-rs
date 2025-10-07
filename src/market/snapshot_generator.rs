@@ -256,25 +256,59 @@ impl MarketSnapshotGenerator {
         // 获取买卖五档（qars 的 get_depth 不带参数，需要手动提取前5档）
         ob.get_depth();  // 更新内部深度
 
-        // 从 qars orderbook 手动提取买卖5档
+        // 从 qars orderbook 手动提取买卖5档（聚合相同价格的订单数量）
         let bids = if let Some(bid_orders) = ob.bid_queue.get_sorted_orders() {
-            bid_orders.iter().take(5).map(|order| {
-                super::PriceLevel {
-                    price: order.price,
-                    volume: order.volume as i64,
-                }
-            }).collect::<Vec<_>>()
+            use std::collections::HashMap;
+            let mut price_map: HashMap<String, f64> = HashMap::new();
+
+            // 聚合相同价格的订单数量
+            for order in bid_orders.iter().take(50) {  // 取足够多的订单以便聚合
+                *price_map.entry(order.price.to_string()).or_insert(0.0) += order.volume;
+            }
+
+            // 转换为 PriceLevel 并排序
+            let mut levels: Vec<super::PriceLevel> = price_map.into_iter()
+                .filter_map(|(price_str, volume)| {
+                    price_str.parse::<f64>().ok().map(|price| super::PriceLevel {
+                        price,
+                        volume: volume as i64,
+                    })
+                })
+                .collect();
+
+            // 买盘按价格降序排列（价格从高到低）
+            levels.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
+
+            // 取前5档
+            levels.into_iter().take(5).collect()
         } else {
             Vec::new()
         };
 
         let asks = if let Some(ask_orders) = ob.ask_queue.get_sorted_orders() {
-            ask_orders.iter().take(5).map(|order| {
-                super::PriceLevel {
-                    price: order.price,
-                    volume: order.volume as i64,
-                }
-            }).collect::<Vec<_>>()
+            use std::collections::HashMap;
+            let mut price_map: HashMap<String, f64> = HashMap::new();
+
+            // 聚合相同价格的订单数量
+            for order in ask_orders.iter().take(50) {  // 取足够多的订单以便聚合
+                *price_map.entry(order.price.to_string()).or_insert(0.0) += order.volume;
+            }
+
+            // 转换为 PriceLevel 并排序
+            let mut levels: Vec<super::PriceLevel> = price_map.into_iter()
+                .filter_map(|(price_str, volume)| {
+                    price_str.parse::<f64>().ok().map(|price| super::PriceLevel {
+                        price,
+                        volume: volume as i64,
+                    })
+                })
+                .collect();
+
+            // 卖盘按价格升序排列（价格从低到高）
+            levels.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
+
+            // 取前5档
+            levels.into_iter().take(5).collect()
         } else {
             Vec::new()
         };

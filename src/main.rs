@@ -147,7 +147,7 @@ impl ExchangeServer {
                 "users",
                 qaexchange::storage::hybrid::oltp::OltpHybridConfig {
                     base_path: config.storage_path.clone(),
-                    memtable_size_bytes: 16 * 1024 * 1024,  // 16MB（用户数据量小）
+                    memtable_size_bytes: 1 * 1024 * 1024,  // 1MB（降低阈值以便测试）
                     estimated_entry_size: 512,
                 },
             ).expect("Failed to create user storage")
@@ -240,7 +240,7 @@ impl ExchangeServer {
                 "market_data",
                 qaexchange::storage::hybrid::oltp::OltpHybridConfig {
                     base_path: config.storage_path.clone(),
-                    memtable_size_bytes: 64 * 1024 * 1024,  // 64MB（市场数据量大）
+                    memtable_size_bytes: 2 * 1024 * 1024,  // 2MB（降低阈值以便测试，生产环境建议 64MB）
                     estimated_entry_size: 256,  // TickData + OrderBookSnapshot 平均大小
                 },
             ).expect("Failed to create market data storage")
@@ -482,7 +482,7 @@ impl ExchangeServer {
         let storage_config = StorageSubscriberConfig {
             storage_config: OltpHybridConfig {
                 base_path: self.config.storage_path.clone(),
-                memtable_size_bytes: 256 * 1024 * 1024, // 256 MB
+                memtable_size_bytes: 2 * 1024 * 1024, // 2 MB（降低阈值以便测试）
                 estimated_entry_size: 256,
             },
             batch_size: 100,

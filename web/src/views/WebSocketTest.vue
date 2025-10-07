@@ -150,25 +150,53 @@
                 </div>
               </div>
 
-              <el-row :gutter="20" class="price-grid">
-                <el-col :span="12">
-                  <div class="quote-item">
-                    <div class="label">买一</div>
-                    <div class="value bid">
-                      {{ formatNumber(currentQuote.bid_price1) }}
-                      <span class="volume">{{ currentQuote.bid_volume1 }}</span>
+              <!-- 买卖五档 -->
+              <div class="depth-panel">
+                <el-row class="depth-header">
+                  <el-col :span="8"><div class="header-label">卖盘</div></el-col>
+                  <el-col :span="8"><div class="header-label">价格</div></el-col>
+                  <el-col :span="8"><div class="header-label">买盘</div></el-col>
+                </el-row>
+
+                <!-- 卖五到卖一（倒序显示） -->
+                <el-row v-for="i in 5" :key="'ask' + i" class="depth-row">
+                  <el-col :span="8">
+                    <div class="depth-volume ask-side">
+                      {{ formatVolume(currentQuote['ask_volume' + (6 - i)]) }}
                     </div>
-                  </div>
-                </el-col>
-                <el-col :span="12">
-                  <div class="quote-item">
-                    <div class="label">卖一</div>
-                    <div class="value ask">
-                      {{ formatNumber(currentQuote.ask_price1) }}
-                      <span class="volume">{{ currentQuote.ask_volume1 }}</span>
+                  </el-col>
+                  <el-col :span="8">
+                    <div class="depth-price ask">
+                      {{ formatNumber(currentQuote['ask_price' + (6 - i)]) }}
                     </div>
-                  </div>
-                </el-col>
+                  </el-col>
+                  <el-col :span="8">
+                    <div class="depth-volume bid-side">-</div>
+                  </el-col>
+                </el-row>
+
+                <!-- 分隔线 -->
+                <el-divider style="margin: 5px 0" />
+
+                <!-- 买一到买五 -->
+                <el-row v-for="i in 5" :key="'bid' + i" class="depth-row">
+                  <el-col :span="8">
+                    <div class="depth-volume ask-side">-</div>
+                  </el-col>
+                  <el-col :span="8">
+                    <div class="depth-price bid">
+                      {{ formatNumber(currentQuote['bid_price' + i]) }}
+                    </div>
+                  </el-col>
+                  <el-col :span="8">
+                    <div class="depth-volume bid-side">
+                      {{ formatVolume(currentQuote['bid_volume' + i]) }}
+                    </div>
+                  </el-col>
+                </el-row>
+              </div>
+
+              <el-row :gutter="20" class="price-grid" style="margin-top: 15px">
                 <el-col :span="12">
                   <div class="quote-item">
                     <div class="label">涨停价</div>
@@ -721,6 +749,11 @@ export default {
       })
     },
 
+    formatVolume(value) {
+      if (value === undefined || value === null || value === 0) return '-'
+      return Number(value).toLocaleString('zh-CN')
+    },
+
     formatProfit(value) {
       if (value === undefined || value === null) return '-'
       const formatted = this.formatNumber(Math.abs(value))
@@ -890,6 +923,59 @@ export default {
 
     .price-grid {
       margin-top: 20px;
+    }
+  }
+
+  .depth-panel {
+    margin: 20px 0;
+    background-color: #fafafa;
+    border-radius: 4px;
+    padding: 10px;
+
+    .depth-header {
+      margin-bottom: 8px;
+      font-weight: bold;
+      font-size: 12px;
+      color: #606266;
+      border-bottom: 1px solid #dcdfe6;
+      padding-bottom: 5px;
+
+      .header-label {
+        text-align: center;
+      }
+    }
+
+    .depth-row {
+      margin: 3px 0;
+      font-size: 13px;
+      line-height: 24px;
+
+      .depth-price {
+        text-align: center;
+        font-weight: 500;
+
+        &.bid {
+          color: #F56C6C;
+        }
+
+        &.ask {
+          color: #67C23A;
+        }
+      }
+
+      .depth-volume {
+        text-align: center;
+        font-size: 12px;
+        color: #909399;
+
+        &.bid-side {
+          color: #F56C6C;
+        }
+
+        &.ask-side {
+          color: #67C23A;
+        }
+      }
     }
   }
 
