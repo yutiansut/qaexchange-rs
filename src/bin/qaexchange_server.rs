@@ -109,34 +109,47 @@ impl ExchangeServer {
         log::info!("Initializing instruments...");
 
         // 注册合约：沪深300股指期货
+        use qaexchange::exchange::instrument_registry::{InstrumentType, InstrumentStatus};
         let instruments = vec![
-            InstrumentInfo {
-                instrument_id: "IF2501".to_string(),
-                name: "沪深300股指期货2501".to_string(),
-                exchange_id: "CFFEX".to_string(),
-                product_type: "futures".to_string(),
-                is_trading: true,
+            {
+                let mut info = InstrumentInfo::new(
+                    "IF2501".to_string(),
+                    "沪深300股指期货2501".to_string(),
+                    InstrumentType::IndexFuture,
+                    "CFFEX".to_string(),
+                );
+                info.status = InstrumentStatus::Active;
+                info
             },
-            InstrumentInfo {
-                instrument_id: "IF2502".to_string(),
-                name: "沪深300股指期货2502".to_string(),
-                exchange_id: "CFFEX".to_string(),
-                product_type: "futures".to_string(),
-                is_trading: true,
+            {
+                let mut info = InstrumentInfo::new(
+                    "IF2502".to_string(),
+                    "沪深300股指期货2502".to_string(),
+                    InstrumentType::IndexFuture,
+                    "CFFEX".to_string(),
+                );
+                info.status = InstrumentStatus::Active;
+                info
             },
-            InstrumentInfo {
-                instrument_id: "IC2501".to_string(),
-                name: "中证500股指期货2501".to_string(),
-                exchange_id: "CFFEX".to_string(),
-                product_type: "futures".to_string(),
-                is_trading: true,
+            {
+                let mut info = InstrumentInfo::new(
+                    "IC2501".to_string(),
+                    "中证500股指期货2501".to_string(),
+                    InstrumentType::IndexFuture,
+                    "CFFEX".to_string(),
+                );
+                info.status = InstrumentStatus::Active;
+                info
             },
-            InstrumentInfo {
-                instrument_id: "IH2501".to_string(),
-                name: "上证50股指期货2501".to_string(),
-                exchange_id: "CFFEX".to_string(),
-                product_type: "futures".to_string(),
-                is_trading: true,
+            {
+                let mut info = InstrumentInfo::new(
+                    "IH2501".to_string(),
+                    "上证50股指期货2501".to_string(),
+                    InstrumentType::IndexFuture,
+                    "CFFEX".to_string(),
+                );
+                info.status = InstrumentStatus::Active;
+                info
             },
         ];
 
@@ -182,10 +195,10 @@ impl ExchangeServer {
             buffer_size: 10000,
         };
 
-        let (subscriber, storage_sender) = StorageSubscriber::new(storage_config);
+        let (subscriber, _storage_sender, _stats) = StorageSubscriber::new(storage_config);
 
-        // 连接到全局通知
-        self.trade_gateway.subscribe_global_tokio(storage_sender);
+        // TODO: 连接到通知系统（需要 NotificationBroker 集成）
+        log::warn!("Storage subscriber created but not connected to notification system. NotificationBroker integration needed.");
 
         // 启动订阅器
         let handle = tokio::spawn(async move {
@@ -203,9 +216,17 @@ impl ExchangeServer {
     async fn start_http_server(self: Arc<Self>) -> io::Result<actix_web::dev::Server> {
         log::info!("Starting HTTP server at {}...", self.config.http_address);
 
-        let app_state = Arc::new(qaexchange::service::http::handlers::AppState {
+        use qaexchange::service::http::handlers::AppState;
+        use qaexchange::matching::trade_recorder::TradeRecorder;
+        use qaexchange::user::UserManager;
+
+        let app_state = Arc::new(AppState {
             order_router: self.order_router.clone(),
             account_mgr: self.account_mgr.clone(),
+            trade_recorder: Arc::new(TradeRecorder::new()),
+            user_mgr: Arc::new(UserManager::new()),
+            storage_stats: None,
+            conversion_mgr: None,
         });
 
         let bind_address = self.config.http_address.clone();
@@ -231,11 +252,23 @@ impl ExchangeServer {
     async fn start_websocket_server(self: Arc<Self>) -> io::Result<actix_web::dev::Server> {
         log::info!("Starting WebSocket server at {}...", self.config.ws_address);
 
+        use qaexchange::user::UserManager;
+        use qaexchange::market::KLineActor;
+        use qaexchange::storage::wal::manager::WalManager;
+        use actix::Actor;
+
+        // 创建 KLineActor
+        let wal_path = format!("{}/kline_wal", self.config.storage_path);
+        let wal_manager = Arc::new(WalManager::new(&wal_path));
+        let kline_actor = KLineActor::new(self.market_broadcaster.clone(), wal_manager).start();
+
         let ws_server = Arc::new(WebSocketServer::new(
             self.order_router.clone(),
             self.account_mgr.clone(),
+            Arc::new(UserManager::new()),
             self.trade_gateway.clone(),
             self.market_broadcaster.clone(),
+            kline_actor,
         ));
 
         let bind_address = self.config.ws_address.clone();

@@ -50,13 +50,16 @@ fn main() {
 
     for (code, name, price) in &instruments {
         // 注册到合约注册表
-        instrument_registry.register(InstrumentInfo {
-            instrument_id: code.to_string(),
-            name: name.to_string(),
-            exchange_id: "CFFEX".to_string(),
-            product_type: "futures".to_string(),
-            is_trading: true,
-        });
+        use qaexchange::exchange::instrument_registry::{InstrumentType, InstrumentStatus};
+        let mut info = InstrumentInfo::new(
+            code.to_string(),
+            name.to_string(),
+            InstrumentType::IndexFuture,
+            "CFFEX".to_string(),
+        );
+        info.status = InstrumentStatus::Active;
+
+        instrument_registry.register(info).expect(&format!("Failed to register {}", code));
 
         // 创建订单簿
         matching_engine.register_instrument(code.to_string(), *price)
@@ -71,21 +74,21 @@ fn main() {
     let mut accounts = Vec::new();
     for i in 0..10 {
         let user_id = format!("user_{:02}", i + 1);
-        let user_name = format!("测试用户{:02}", i + 1);
+        let account_name = format!("测试账户{:02}", i + 1);
 
         let req = OpenAccountRequest {
             user_id: user_id.clone(),
-            user_name: user_name.clone(),
+            account_id: None, // 自动生成
+            account_name: account_name.clone(),
             init_cash: 1_000_000.0, // 每个账户 100 万初始资金
             account_type: AccountType::Individual,
-            password: format!("pass{:02}", i + 1),
         };
 
-        account_mgr.open_account(req)
+        let account_id = account_mgr.open_account(req)
             .expect(&format!("Failed to open account for {}", user_id));
 
-        accounts.push(user_id.clone());
-        println!("  ✓ {} - {} (初始资金: 1,000,000)", user_id, user_name);
+        accounts.push(account_id.clone());
+        println!("  ✓ {} - {} (初始资金: 1,000,000)", account_id, account_name);
     }
     println!("✓ 10 个账户创建完成\n");
 
@@ -103,7 +106,7 @@ fn main() {
 
     for round in 0..100 {
         // 随机选择账户
-        let user_id = &accounts[rng.gen_range(0..accounts.len())];
+        let account_id = &accounts[rng.gen_range(0..accounts.len())];
 
         // 随机选择品种
         let (instrument_id, _, base_price) = &instruments[rng.gen_range(0..instruments.len())];
@@ -123,7 +126,7 @@ fn main() {
 
         // 提交订单
         let req = SubmitOrderRequest {
-            user_id: user_id.clone(),
+            account_id: account_id.clone(),
             instrument_id: instrument_id.to_string(),
             direction: direction.to_string(),
             offset: offset.to_string(),
@@ -138,7 +141,7 @@ fn main() {
             success_count += 1;
             println!("  [{}] ✓ {} {} {} {} @ {} x {} | 订单: {}",
                 round + 1,
-                user_id,
+                account_id,
                 direction,
                 offset,
                 instrument_id,
@@ -150,7 +153,7 @@ fn main() {
             failed_count += 1;
             println!("  [{}] ✗ {} {} {} {} @ {} x {} | 失败: {}",
                 round + 1,
-                user_id,
+                account_id,
                 direction,
                 offset,
                 instrument_id,

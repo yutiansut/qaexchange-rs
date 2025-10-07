@@ -59,9 +59,9 @@ impl StorageIntegratedRouter {
         let order_id = self.generate_order_id();
         let storage = self.get_or_create_storage(&req.instrument_id);
 
-        // 将 user_id 转换为 [u8; 32]
+        // 将 account_id 转换为 [u8; 32]
         let mut user_id_bytes = [0u8; 32];
-        let user_bytes = req.user_id.as_bytes();
+        let user_bytes = req.account_id.as_bytes();
         let copy_len = user_bytes.len().min(32);
         user_id_bytes[..copy_len].copy_from_slice(&user_bytes[..copy_len]);
 
@@ -176,13 +176,15 @@ fn main() {
 
     // 1.3 创建合约注册表
     let instrument_registry = Arc::new(InstrumentRegistry::new());
-    instrument_registry.register(InstrumentInfo {
-        instrument_id: "IF2501".to_string(),
-        name: "沪深300股指期货2501".to_string(),
-        exchange_id: "CFFEX".to_string(),
-        product_type: "futures".to_string(),
-        is_trading: true,
-    });
+    use qaexchange::exchange::instrument_registry::{InstrumentType, InstrumentStatus};
+    let mut info = InstrumentInfo::new(
+        "IF2501".to_string(),
+        "沪深300股指期货2501".to_string(),
+        InstrumentType::IndexFuture,
+        "CFFEX".to_string(),
+    );
+    info.status = InstrumentStatus::Active;
+    instrument_registry.register(info).expect("Failed to register instrument");
 
     // 1.4 创建成交网关
     let trade_gateway = Arc::new(TradeGateway::new(account_mgr.clone()));
@@ -226,25 +228,26 @@ fn main() {
 
     // 开户
     let open_req = OpenAccountRequest {
-        user_id: "trader_001".to_string(),
-        user_name: "张三".to_string(),
+        user_id: "user_001".to_string(),
+        account_id: Some("trader_001".to_string()),
+        account_name: "张三的账户".to_string(),
         init_cash: 1_000_000.0,
         account_type: AccountType::Individual,
-        password: "secure_password".to_string(),
     };
 
-    match account_mgr.open_account(open_req) {
-        Ok(user_id) => {
+    let account_id = match account_mgr.open_account(open_req) {
+        Ok(account_id) => {
             println!("✅ 账户开设成功:");
-            println!("   • 用户ID: {}", user_id);
+            println!("   • 账户ID: {}", account_id);
             println!("   • 初始资金: ¥1000000.00");
             println!("   • 可用资金: ¥1000000.00");
+            account_id
         }
         Err(e) => {
             println!("❌ 开户失败: {}", e);
             return;
         }
-    }
+    };
 
     // 注册合约到撮合引擎
     matching_engine.register_instrument("IF2501".to_string(), 3800.0)
@@ -262,7 +265,7 @@ fn main() {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     let order_req = SubmitOrderRequest {
-        user_id: "trader_001".to_string(),
+        account_id: account_id.clone(),
         instrument_id: "IF2501".to_string(),
         direction: "BUY".to_string(),
         offset: "OPEN".to_string(),

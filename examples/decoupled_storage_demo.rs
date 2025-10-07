@@ -15,6 +15,7 @@ use qaexchange::exchange::order_router::{OrderRouter, SubmitOrderRequest};
 use qaexchange::exchange::instrument_registry::InstrumentInfo;
 use qaexchange::core::account_ext::{OpenAccountRequest, AccountType};
 use qaexchange::matching::engine::ExchangeMatchingEngine;
+use qaexchange::notification::broker::NotificationBroker;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
@@ -46,7 +47,13 @@ async fn main() {
         buffer_size: 10000,        // 缓冲 10K 条
     };
 
-    let (subscriber, storage_sender) = StorageSubscriber::new(storage_config);
+    let (subscriber, storage_sender, _stats) = StorageSubscriber::new(storage_config);
+
+    // 创建 NotificationBroker
+    let notification_broker = Arc::new(NotificationBroker::new());
+
+    // 订阅通知到存储订阅器
+    notification_broker.subscribe_global("storage_subscriber", storage_sender);
 
     // 启动订阅器（独立任务）
     tokio::spawn(async move {
@@ -69,10 +76,11 @@ async fn main() {
     let account_mgr = Arc::new(AccountManager::new());
     let matching_engine = Arc::new(ExchangeMatchingEngine::new());
     let instrument_registry = Arc::new(InstrumentRegistry::new());
-    let trade_gateway = Arc::new(TradeGateway::new(account_mgr.clone()));
 
-    // 将存储订阅器连接到 TradeGateway 的全局订阅
-    trade_gateway.subscribe_global_tokio(storage_sender);
+    // 创建 TradeGateway 并设置 NotificationBroker
+    let mut trade_gateway = TradeGateway::new(account_mgr.clone());
+    trade_gateway.set_notification_broker(notification_broker.clone());
+    let trade_gateway = Arc::new(trade_gateway);
 
     let router = Arc::new(OrderRouter::new(
         account_mgr.clone(),
@@ -91,26 +99,28 @@ async fn main() {
     println!("👤 Step 3: 开户并注册合约");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    instrument_registry.register(InstrumentInfo {
-        instrument_id: "IF2501".to_string(),
-        name: "沪深300股指期货2501".to_string(),
-        exchange_id: "CFFEX".to_string(),
-        product_type: "futures".to_string(),
-        is_trading: true,
-    });
+    use qaexchange::exchange::instrument_registry::{InstrumentType, InstrumentStatus};
+    let mut info = InstrumentInfo::new(
+        "IF2501".to_string(),
+        "沪深300股指期货2501".to_string(),
+        InstrumentType::IndexFuture,
+        "CFFEX".to_string(),
+    );
+    info.status = InstrumentStatus::Active;
+    instrument_registry.register(info).expect("Failed to register instrument");
 
     matching_engine.register_instrument("IF2501".to_string(), 3800.0)
         .expect("Register instrument failed");
 
     let open_req = OpenAccountRequest {
-        user_id: "trader_001".to_string(),
-        user_name: "张三".to_string(),
+        user_id: "user_001".to_string(),
+        account_id: Some("trader_001".to_string()),
+        account_name: "张三的账户".to_string(),
         init_cash: 1_000_000.0,
         account_type: AccountType::Individual,
-        password: "secure_password".to_string(),
     };
 
-    account_mgr.open_account(open_req).expect("Open account failed");
+    let account_id = account_mgr.open_account(open_req).expect("Open account failed");
 
     println!("✅ 账户和合约注册完成\n");
 
@@ -125,7 +135,7 @@ async fn main() {
 
     for i in 0..10 {
         let req = SubmitOrderRequest {
-            user_id: "trader_001".to_string(),
+            account_id: account_id.clone(),
             instrument_id: "IF2501".to_string(),
             direction: if i % 2 == 0 { "BUY" } else { "SELL" }.to_string(),
             offset: if i % 2 == 0 { "OPEN" } else { "CLOSE" }.to_string(),
