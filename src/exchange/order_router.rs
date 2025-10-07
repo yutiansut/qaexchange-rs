@@ -1438,7 +1438,7 @@ mod tests {
         let router = create_test_router();
 
         let req = SubmitOrderRequest {
-            user_id: "test_user".to_string(),
+            account_id: "test_user".to_string(),
             instrument_id: "IX2301".to_string(),
             direction: "BUY".to_string(),
             offset: "OPEN".to_string(),
@@ -1458,7 +1458,7 @@ mod tests {
         let router = create_test_router();
 
         let req = SubmitOrderRequest {
-            user_id: "test_user".to_string(),
+            account_id: "test_user".to_string(),
             instrument_id: "IX2301".to_string(),
             direction: "BUY".to_string(),
             offset: "OPEN".to_string(),
@@ -1477,7 +1477,7 @@ mod tests {
         let router = create_test_router();
 
         let req = SubmitOrderRequest {
-            user_id: "test_user".to_string(),
+            account_id: "test_user".to_string(),
             instrument_id: "IX2301".to_string(),
             direction: "BUY".to_string(),
             offset: "OPEN".to_string(),
@@ -1505,7 +1505,7 @@ mod tests {
         // 提交多个订单
         for i in 0..3 {
             let req = SubmitOrderRequest {
-                user_id: "test_user".to_string(),
+                account_id: "test_user".to_string(),
                 instrument_id: "IX2301".to_string(),
                 direction: "BUY".to_string(),
                 offset: "OPEN".to_string(),
@@ -1547,7 +1547,7 @@ mod tests {
 
         // 3. 提交买单
         let buy_req = SubmitOrderRequest {
-            user_id: "test_user".to_string(),
+            account_id: "test_user".to_string(),
             instrument_id: "IX2301".to_string(),
             direction: "BUY".to_string(),
             offset: "OPEN".to_string(),
@@ -1563,7 +1563,7 @@ mod tests {
 
         // 4. 提交卖单（应该与买单撮合）
         let sell_req = SubmitOrderRequest {
-            user_id: "test_user".to_string(),
+            account_id: "test_user".to_string(),
             instrument_id: "IX2301".to_string(),
             direction: "SELL".to_string(),
             offset: "CLOSE".to_string(), // 平仓之前的买单

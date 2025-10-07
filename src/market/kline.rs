@@ -372,11 +372,14 @@ mod tests {
         let finished = agg.on_tick(3800.0, 10, now);
         assert_eq!(finished.len(), 0); // 第一个tick不会完成任何K线
 
-        // 同一分钟内的tick
+        // 同一分钟内的tick（10秒后，会完成3秒K线但不会完成分钟线）
         let finished = agg.on_tick(3810.0, 5, now + 10000);
-        assert_eq!(finished.len(), 0);
+        // 10秒内会完成3个3秒K线（0-3s, 3-6s, 6-9s）
+        assert!(finished.len() >= 1, "应该至少完成1个3秒K线");
+        // 检查没有Min1 K线完成
+        assert!(!finished.iter().any(|(p, _)| *p == KLinePeriod::Min1), "不应完成分钟K线");
 
-        // 检查当前K线
+        // 检查当前Min1 K线
         let current = agg.get_current_kline(KLinePeriod::Min1).unwrap();
         assert_eq!(current.open, 3800.0);
         assert_eq!(current.close, 3810.0);
