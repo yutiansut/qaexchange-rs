@@ -135,6 +135,9 @@ pub struct TradeGateway {
 
     /// 市场数据服务（用于更新快照统计）
     market_data_service: Option<Arc<crate::market::MarketDataService>>,
+
+    /// K线Actor（用于实时K线聚合）
+    kline_actor: Option<actix::Addr<crate::market::KLineActor>>,
 }
 
 impl TradeGateway {
@@ -157,6 +160,7 @@ impl TradeGateway {
             wal_root: "./data/wal".to_string(), // 默认 WAL 根目录
             trade_recorder: None,
             market_data_service: None,
+            kline_actor: None,
         }
     }
 
@@ -169,6 +173,11 @@ impl TradeGateway {
     /// 设置市场数据服务（用于更新快照统计）
     pub fn set_market_data_service(&mut self, market_data_service: Arc<crate::market::MarketDataService>) {
         self.market_data_service = Some(market_data_service);
+    }
+
+    /// 设置K线Actor（用于实时K线聚合）
+    pub fn set_kline_actor(&mut self, kline_actor: actix::Addr<crate::market::KLineActor>) {
+        self.kline_actor = Some(kline_actor);
     }
 
     /// 设置 WAL 根目录 (Phase 5)

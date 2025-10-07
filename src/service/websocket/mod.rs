@@ -58,6 +58,7 @@ impl WebSocketServer {
         user_manager: Arc<UserManager>,
         trade_gateway: Arc<TradeGateway>,
         market_broadcaster: Arc<MarketDataBroadcaster>,
+        kline_actor: actix::Addr<crate::market::KLineActor>,
     ) -> Self {
         let (handler, sender, sessions) = create_handler(order_router.clone(), account_mgr.clone());
 
@@ -71,6 +72,7 @@ impl WebSocketServer {
                 .with_user_manager(user_manager.clone())
                 .with_order_router(order_router)
                 .with_market_broadcaster(market_broadcaster.clone())
+                .with_kline_actor(kline_actor)  // ✨ 传递 K线Actor
         );
 
         Self {

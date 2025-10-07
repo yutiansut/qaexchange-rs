@@ -187,6 +187,13 @@ impl ExchangeServer {
 
         let market_broadcaster = Arc::new(MarketDataBroadcaster::new());
 
+        // 1.3.1 启动K线Actor（独立处理K线聚合，避免阻塞交易流程）
+        log::info!("Starting KLine Actor...");
+        let kline_actor = qaexchange::market::KLineActor::new()
+            .with_broadcaster(market_broadcaster.clone())
+            .start();
+        log::info!("✅ KLine Actor started");
+
         // 1.4 创建 iceoryx2 管理器（如果启用）
         let iceoryx_manager: Option<Arc<parking_lot::RwLock<qaexchange::ipc::IceoryxManager>>> = if perf_config.iceoryx.enabled {
             log::info!("Initializing iceoryx2 manager...");
@@ -310,14 +317,15 @@ impl ExchangeServer {
         };
         log::info!("✅ Market data service with snapshot generator initialized");
 
-        // 7.1 设置 market_data_service 到 trade_gateway（用于更新快照统计）
+        // 7.1 设置 market_data_service 和 kline_actor 到 trade_gateway
         // 由于 trade_gateway 已经是 Arc，需要使用 unsafe 获取可变引用
         // 安全性：此时 trade_gateway 只有一个引用（刚创建），可以安全修改
         unsafe {
             let trade_gateway_ptr = Arc::as_ptr(&trade_gateway) as *mut TradeGateway;
             (*trade_gateway_ptr).set_market_data_service(market_data_service.clone());
+            (*trade_gateway_ptr).set_kline_actor(kline_actor.clone());
         }
-        log::info!("✅ Market data service connected to trade gateway");
+        log::info!("✅ Market data service and K-line Actor connected to trade gateway");
 
         log::info!("✅ Core components initialized");
         log::info!("✅ Market data broadcaster initialized");
@@ -344,6 +352,7 @@ impl ExchangeServer {
             storage_stats: None,
             conversion_mgr: None,
             iceoryx_manager,
+            kline_actor,
             snapshot_generator_handle: None,
         }
     }
@@ -608,11 +617,13 @@ impl ExchangeServer {
         let management_data = web::Data::new(management_state);
 
         let bind_address = self.config.http_address.clone();
+        let kline_actor_addr = self.kline_actor.clone();
 
         let server = ActixHttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(app_state.clone()))
                 .app_data(web::Data::new(market_service.clone()))  // MarketDataService 实现了 Clone
+                .app_data(web::Data::new(kline_actor_addr.clone()))  // KLineActor 地址
                 .app_data(admin_data.clone())
                 .app_data(management_data.clone())
                 .wrap(middleware::Logger::default())
@@ -661,6 +672,7 @@ impl ExchangeServer {
             self.user_mgr.clone(),
             self.trade_gateway.clone(),
             self.market_broadcaster.clone(),
+            self.kline_actor.clone(),
         ));
 
         let bind_address = self.config.ws_address.clone();

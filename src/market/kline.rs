@@ -70,6 +70,9 @@ impl KLine {
 /// K线周期
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KLinePeriod {
+    /// 3秒
+    Sec3 = 3,
+
     /// 1分钟
     Min1 = 60,
 
@@ -94,6 +97,7 @@ impl KLinePeriod {
     pub fn from_int(value: i32) -> Option<Self> {
         match value {
             0 => Some(KLinePeriod::Day),
+            3 => Some(KLinePeriod::Sec3),
             4 => Some(KLinePeriod::Min1),
             5 => Some(KLinePeriod::Min5),
             6 => Some(KLinePeriod::Min15),
@@ -107,6 +111,7 @@ impl KLinePeriod {
     pub fn to_int(&self) -> i32 {
         match self {
             KLinePeriod::Day => 0,
+            KLinePeriod::Sec3 => 3,
             KLinePeriod::Min1 => 4,
             KLinePeriod::Min5 => 5,
             KLinePeriod::Min15 => 6,
@@ -118,6 +123,7 @@ impl KLinePeriod {
     /// 从DIFF协议的duration(纳秒)转换
     pub fn from_duration_ns(duration_ns: i64) -> Option<Self> {
         match duration_ns {
+            3_000_000_000 => Some(KLinePeriod::Sec3),     // 3秒
             60_000_000_000 => Some(KLinePeriod::Min1),    // 1分钟
             300_000_000_000 => Some(KLinePeriod::Min5),   // 5分钟
             900_000_000_000 => Some(KLinePeriod::Min15),  // 15分钟
@@ -131,6 +137,7 @@ impl KLinePeriod {
     /// 转换为DIFF协议的duration(纳秒)
     pub fn to_duration_ns(&self) -> i64 {
         match self {
+            KLinePeriod::Sec3 => 3_000_000_000,
             KLinePeriod::Min1 => 60_000_000_000,
             KLinePeriod::Min5 => 300_000_000_000,
             KLinePeriod::Min15 => 900_000_000_000,
@@ -193,8 +200,9 @@ impl KLineAggregator {
     pub fn on_tick(&mut self, price: f64, volume: i64, timestamp_ms: i64) -> Vec<(KLinePeriod, KLine)> {
         let mut finished_klines = Vec::new();
 
-        // 所有周期
+        // 所有周期（分级采样：3s → 1min → 5min → 15min → 30min → 60min → Day）
         let periods = vec![
+            KLinePeriod::Sec3,
             KLinePeriod::Min1,
             KLinePeriod::Min5,
             KLinePeriod::Min15,
