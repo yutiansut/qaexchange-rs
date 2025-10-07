@@ -89,9 +89,11 @@ pub struct OrderCheckRequest {
     pub account_id: String,     // 交易系统只关心账户ID
     pub instrument_id: String,
     pub direction: String,      // BUY/SELL
-    pub offset: String,          // OPEN/CLOSE
+    pub offset: String,         // OPEN/CLOSE
     pub volume: f64,
-    pub price: f64,
+    pub price: f64,             // 向后兼容
+    pub limit_price: f64,       // 订单价格（用于自成交检查）
+    pub price_type: String,     // LIMIT/MARKET/ANY（用于自成交检查）
 }
 
 /// 活动订单信息（用于自成交防范）
@@ -456,12 +458,14 @@ mod tests {
 
         // 正常订单
         let req = OrderCheckRequest {
-            user_id: "test_user".to_string(),
+            account_id: "test_account".to_string(),
             instrument_id: "IX2301".to_string(),
             direction: "BUY".to_string(),
             offset: "OPEN".to_string(),
             volume: 10.0,
             price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
         };
 
         assert!(checker.check_order_params(&req).is_ok());
@@ -490,12 +494,14 @@ mod tests {
 
         // 资金充足
         let req = OrderCheckRequest {
-            user_id: "test_user".to_string(),
+            account_id: "test_user".to_string(),
             instrument_id: "IX2301".to_string(),
             direction: "BUY".to_string(),
             offset: "OPEN".to_string(),
             volume: 10.0,
             price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
         };
 
         let result = checker.check_funds(&account, &req).unwrap();
@@ -521,12 +527,14 @@ mod tests {
         let checker = PreTradeCheck::new(account_mgr);
 
         let req = OrderCheckRequest {
-            user_id: "test_user".to_string(),
+            account_id: "test_user".to_string(),
             instrument_id: "IX2301".to_string(),
             direction: "BUY".to_string(),
             offset: "OPEN".to_string(),
             volume: 10.0,
             price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
         };
 
         let result = checker.check(&req).unwrap();
@@ -556,14 +564,16 @@ mod tests {
         // 注册一个 BUY 订单
         checker.register_active_order("test_user", "order1".to_string(), "IX2301".to_string(), "BUY".to_string(), 100.0, "LIMIT".to_string());
 
-        // 尝试提交同合约的 SELL 订单（应被拒绝）
+        // 尝试提交同合约的 SELL 订单（价格会导致成交，应被拒绝）
         let req = OrderCheckRequest {
-            user_id: "test_user".to_string(),
+            account_id: "test_user".to_string(),
             instrument_id: "IX2301".to_string(),
             direction: "SELL".to_string(),
             offset: "OPEN".to_string(),
             volume: 10.0,
             price: 100.0,
+            limit_price: 100.0,  // ✅ 卖价 100 <= 买价 100，会成交
+            price_type: "LIMIT".to_string(),
         };
 
         let result = checker.check(&req).unwrap();

@@ -282,6 +282,8 @@ impl OrderRouter {
             offset: req.offset.clone(),
             volume: req.volume,
             price: req.price,
+            limit_price: req.price,           // ✅ price 作为 limit_price
+            price_type: req.order_type.clone(), // ✅ order_type 作为 price_type
         };
 
         match self.risk_checker.check(&risk_check_req) {
@@ -429,8 +431,8 @@ impl OrderRouter {
             order_id.clone(),
             req.instrument_id.clone(),
             req.direction.clone(),
-            req.limit_price,
-            req.price_type.clone(),
+            req.price,                // ✅ price 作为 limit_price
+            req.order_type.clone(),   // ✅ order_type 作为 price_type
         );
 
         // 7. 路由到撮合引擎
