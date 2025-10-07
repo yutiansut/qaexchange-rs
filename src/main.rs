@@ -121,6 +121,9 @@ struct ExchangeServer {
     /// iceoryx2 管理器（零拷贝 IPC）
     iceoryx_manager: Option<Arc<parking_lot::RwLock<qaexchange::ipc::IceoryxManager>>>,
 
+    /// K线Actor地址（独立Actor处理K线聚合）
+    kline_actor: actix::Addr<qaexchange::market::KLineActor>,
+
     /// 快照生成器线程句柄
     snapshot_generator_handle: Option<std::thread::JoinHandle<()>>,
 }
