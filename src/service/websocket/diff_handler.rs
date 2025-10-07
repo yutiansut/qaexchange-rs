@@ -126,7 +126,7 @@ impl DiffHandler {
                 volume_condition,
                 time_condition,
             } => {
-                log::info!("DIFF insert order: user_id={}, account_id={:?}, order_id={}", order_user_id, account_id, order_id);
+                log::info!("DIFF insert order: user_id={}, account_id={:?}, order_id={:?}", order_user_id, account_id, order_id);
                 self.handle_insert_order(
                     user_id,
                     order_user_id,
@@ -435,7 +435,7 @@ impl DiffHandler {
         session_user_id: &str,
         order_user_id: String,
         client_account_id: Option<String>,  // ✨ 新增参数
-        order_id: String,
+        order_id: Option<String>,            // ✅ 修改为 Option<String>
         exchange_id: String,
         instrument_id: String,
         direction: String,
@@ -445,6 +445,13 @@ impl DiffHandler {
         limit_price: Option<f64>,
         ctx_addr: Addr<DiffWebsocketSession>,
     ) {
+        // ✅ 自动生成 order_id（如果客户端未提供）
+        let order_id = order_id.unwrap_or_else(|| {
+            let id = uuid::Uuid::new_v4().to_string();
+            log::debug!("Auto-generated order_id: {}", id);
+            id
+        });
+
         // 验证用户权限（session用户必须与订单用户匹配）
         if session_user_id != order_user_id {
             let notify_patch = serde_json::json!({

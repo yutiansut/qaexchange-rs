@@ -99,7 +99,9 @@ pub struct OrderCheckRequest {
 struct ActiveOrderInfo {
     order_id: String,
     instrument_id: String,
-    direction: String,  // BUY/SELL
+    direction: String,    // BUY/SELL
+    limit_price: f64,     // 订单价格
+    price_type: String,   // LIMIT/MARKET/ANY
 }
 
 /// 盘前风控检查器
@@ -314,28 +316,60 @@ impl PreTradeCheck {
             // 确定对手方向
             let opposite_direction = if req.direction == "BUY" { "SELL" } else { "BUY" };
 
-            // 检查是否存在同合约的对手方向订单
+            // 检查是否存在同合约的对手方向订单，且价格会导致自成交
             for active_order in orders.iter() {
                 if active_order.instrument_id == req.instrument_id
                     && active_order.direction == opposite_direction {
-                    log::warn!(
-                        "Self-trading prevented: account={}, instrument={}, new_order={}, existing_order={} ({})",
-                        req.account_id,
-                        req.instrument_id,
-                        req.direction,
-                        active_order.order_id,
-                        active_order.direction
-                    );
 
-                    return Ok(Some(RiskCheckResult::Reject {
-                        reason: format!(
-                            "Self-trading prevented: existing {} order {} on {}",
-                            active_order.direction,
+                    // ✅ 价格检查：只有当价格会导致成交时才拒绝
+                    let would_match = match (req.direction.as_str(), req.price_type.as_str()) {
+                        // 新订单是 BUY
+                        ("BUY", "MARKET") => true,  // 市价单总是可能成交
+                        ("BUY", _) => {
+                            // 限价买单：只有当买价 >= 已有卖单价格时才会成交
+                            req.limit_price >= active_order.limit_price
+                        }
+                        // 新订单是 SELL
+                        ("SELL", "MARKET") => true,  // 市价单总是可能成交
+                        ("SELL", _) => {
+                            // 限价卖单：只有当卖价 <= 已有买单价格时才会成交
+                            req.limit_price <= active_order.limit_price
+                        }
+                        _ => false,
+                    };
+
+                    if would_match {
+                        log::warn!(
+                            "Self-trading prevented: account={}, instrument={}, new_order={} @ {}, existing_order={} ({}) @ {}",
+                            req.account_id,
+                            req.instrument_id,
+                            req.direction,
+                            req.limit_price,
                             active_order.order_id,
-                            req.instrument_id
-                        ),
-                        code: RiskCheckCode::SelfTradingRisk,
-                    }));
+                            active_order.direction,
+                            active_order.limit_price
+                        );
+
+                        return Ok(Some(RiskCheckResult::Reject {
+                            reason: format!(
+                                "Self-trading prevented: existing {} order {} @ {} would match new {} @ {}",
+                                active_order.direction,
+                                active_order.order_id,
+                                active_order.limit_price,
+                                req.direction,
+                                req.limit_price
+                            ),
+                            code: RiskCheckCode::SelfTradingRisk,
+                        }));
+                    } else {
+                        log::debug!(
+                            "Same account opposite orders allowed: {} @ {} vs existing {} @ {} (no match)",
+                            req.direction,
+                            req.limit_price,
+                            active_order.direction,
+                            active_order.limit_price
+                        );
+                    }
                 }
             }
         }
@@ -344,11 +378,21 @@ impl PreTradeCheck {
     }
 
     /// 记录活动订单
-    pub fn register_active_order(&self, account_id: &str, order_id: String, instrument_id: String, direction: String) {
+    pub fn register_active_order(
+        &self,
+        account_id: &str,
+        order_id: String,
+        instrument_id: String,
+        direction: String,
+        limit_price: f64,
+        price_type: String,
+    ) {
         let order_info = ActiveOrderInfo {
             order_id,
             instrument_id,
             direction,
+            limit_price,
+            price_type,
         };
 
         self.active_orders
@@ -496,8 +540,8 @@ mod tests {
 
         assert_eq!(checker.get_active_order_count("test_user"), 0);
 
-        checker.register_active_order("test_user", "order1".to_string(), "IX2301".to_string(), "BUY".to_string());
-        checker.register_active_order("test_user", "order2".to_string(), "IX2302".to_string(), "SELL".to_string());
+        checker.register_active_order("test_user", "order1".to_string(), "IX2301".to_string(), "BUY".to_string(), 100.0, "LIMIT".to_string());
+        checker.register_active_order("test_user", "order2".to_string(), "IX2302".to_string(), "SELL".to_string(), 200.0, "LIMIT".to_string());
         assert_eq!(checker.get_active_order_count("test_user"), 2);
 
         checker.remove_active_order("test_user", "order1");
@@ -510,7 +554,7 @@ mod tests {
         let checker = PreTradeCheck::new(account_mgr);
 
         // 注册一个 BUY 订单
-        checker.register_active_order("test_user", "order1".to_string(), "IX2301".to_string(), "BUY".to_string());
+        checker.register_active_order("test_user", "order1".to_string(), "IX2301".to_string(), "BUY".to_string(), 100.0, "LIMIT".to_string());
 
         // 尝试提交同合约的 SELL 订单（应被拒绝）
         let req = OrderCheckRequest {

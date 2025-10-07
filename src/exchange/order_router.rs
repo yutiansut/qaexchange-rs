@@ -428,7 +428,9 @@ impl OrderRouter {
             &req.account_id,
             order_id.clone(),
             req.instrument_id.clone(),
-            req.direction.clone()
+            req.direction.clone(),
+            req.limit_price,
+            req.price_type.clone(),
         );
 
         // 7. 路由到撮合引擎

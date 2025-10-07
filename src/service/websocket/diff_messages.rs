@@ -41,7 +41,9 @@ pub enum DiffClientMessage {
         #[serde(default)]
         #[serde(skip_serializing_if = "Option::is_none")]
         account_id: Option<String>,        // 交易账户（推荐明确传递）✨
-        order_id: String,
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        order_id: Option<String>,          // 订单ID（可选，未提供时服务端自动生成）
         exchange_id: String,
         instrument_id: String,
         direction: String,                 // BUY/SELL
@@ -110,7 +112,7 @@ mod tests {
         let msg = DiffClientMessage::InsertOrder {
             account_id: Some("account123".to_string()),
             user_id: "user123".to_string(),
-            order_id: "order1".to_string(),
+            order_id: Some("order1".to_string()),
             exchange_id: "SHFE".to_string(),
             instrument_id: "cu2512".to_string(),
             direction: "BUY".to_string(),
