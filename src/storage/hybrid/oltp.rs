@@ -567,8 +567,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_write_and_read() {
+    #[tokio::test]
+    async fn test_write_and_read() {
+
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = OltpHybridConfig {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),
@@ -594,8 +595,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_flush() {
+    #[tokio::test]
+    async fn test_flush() {
+
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = OltpHybridConfig {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),
@@ -617,8 +619,9 @@ mod tests {
         println!("Stats: {:?}", stats);
     }
 
-    #[test]
-    fn test_batch_write() {
+    #[tokio::test]
+    async fn test_batch_write() {
+
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = OltpHybridConfig {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),
@@ -641,8 +644,9 @@ mod tests {
         assert_eq!(results.len(), 1000);
     }
 
-    #[test]
-    fn test_recovery() {
+    #[tokio::test]
+    async fn test_recovery() {
+
         let tmp_dir = tempfile::tempdir().unwrap();
         let base_path = tmp_dir.path().to_str().unwrap().to_string();
 
@@ -677,8 +681,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_performance_write() {
+    #[tokio::test]
+    async fn test_performance_write() {
+
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = OltpHybridConfig {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),

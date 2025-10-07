@@ -438,16 +438,17 @@ mod tests {
     fn create_test_account_manager() -> Arc<AccountManager> {
         let mgr = Arc::new(AccountManager::new());
 
-        // 创建测试账户
+        // 创建测试账户（使用固定ID）
         let req = OpenAccountRequest {
             user_id: "test_user".to_string(),
-            account_id: None,
+            account_id: Some("test_user".to_string()), // 使用固定ID
             account_name: "Test User".to_string(),
             init_cash: 100000.0,
             account_type: AccountType::Individual,
         };
 
-        mgr.open_account(req).unwrap();
+        let account_id = mgr.open_account(req).unwrap();
+        assert_eq!(account_id, "test_user"); // 验证账户ID
         mgr
     }
 
