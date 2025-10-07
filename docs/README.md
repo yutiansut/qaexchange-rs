@@ -1,7 +1,7 @@
 # QAExchange-RS 文档中心
 
 **版本**: v1.0.0
-**最后更新**: 2025-10-06
+**最后更新**: 2025-10-07
 
 欢迎使用 QAExchange-RS 文档！本文档中心提供完整的系统架构、API 参考、集成指南和开发文档。
 
@@ -81,8 +81,9 @@
 ### 🛠️ [06. 开发指南](./06_development/)
 开发、测试、部署文档。
 
-- [WebSocket 集成指南](./06_development/websocket_integration.md) - DIFF 协议接入详解 ✨ **新增**
+- [WebSocket 集成指南](./06_development/websocket_integration.md) - DIFF 协议接入详解
 - [测试指南](./06_development/testing.md) - 单元测试与集成测试
+- [K线系统测试指南](../KLINE_TESTING_GUIDE.md) - K线端到端测试流程 ✨ **最新**
 - [部署指南](./06_development/deployment.md) - 生产环境部署
 
 ---
@@ -105,6 +106,7 @@
 #### 实现总结
 - [市场数据实现](./08_advanced/implementation_summaries/market_data.md) - Phase 9 市场数据增强
 - [管理功能实现](./08_advanced/implementation_summaries/management_features.md) - Phase 10 用户管理
+- [K线实时推送系统](../KLINE_IMPLEMENTATION_SUMMARY.md) - K线聚合与WebSocket推送完整实现 ✨ **最新**
 
 #### 技术深度
 - [市场数据增强](./08_advanced/technical_deep_dive/market_data_enhancement.md) - L1 缓存与 WAL 恢复
@@ -135,10 +137,10 @@
 ### 按主题查找
 - **性能优化**: [高性能架构](./02_architecture/high_performance.md), [解耦存储](./02_architecture/decoupled_storage.md)
 - **数据持久化**: [WAL](./03_core_modules/storage/wal.md), [SSTable](./03_core_modules/storage/sstable.md)
-- **市场数据**: [快照生成器](./03_core_modules/market/snapshot_generator.md), [市场数据模块](./03_core_modules/market/README.md) ✨ **新增**
+- **市场数据**: [快照生成器](./03_core_modules/market/snapshot_generator.md), [K线聚合系统](./03_core_modules/market/kline.md), [K线实时推送](../KLINE_IMPLEMENTATION_SUMMARY.md) ✨ **最新**
 - **协议集成**: [DIFF 协议](./04_api/websocket/diff_protocol.md), [数据模型](./02_architecture/data_models.md)
-- **WebSocket**: [协议规范](./04_api/websocket/protocol.md), [前端集成](./05_integration/frontend/integration_guide.md)
-- **测试部署**: [测试指南](./06_development/testing.md), [部署指南](./06_development/deployment.md)
+- **WebSocket**: [协议规范](./04_api/websocket/protocol.md), [前端集成](./05_integration/frontend/integration_guide.md), [K线推送](../KLINE_IMPLEMENTATION_SUMMARY.md)
+- **测试部署**: [测试指南](./06_development/testing.md), [K线测试](../KLINE_TESTING_GUIDE.md), [部署指南](./06_development/deployment.md)
 
 ---
 
@@ -151,9 +153,9 @@
 | 核心模块 | v0.9.0 | 2025-10-06 | 🚧 部分完成 |
 | API 参考 | v1.0.0 | 2025-10-06 | ✅ 完整 |
 | 集成指南 | v1.0.0 | 2025-10-06 | ✅ 完整 |
-| 开发指南 | v0.8.0 | 2025-10-06 | 🚧 部分完成 |
+| 开发指南 | v1.0.0 | 2025-10-07 | ✅ 完整（新增K线测试） |
 | 参考资料 | v0.5.0 | 2025-10-06 | 🚧 计划中 |
-| 高级主题 | v1.0.0 | 2025-10-06 | ✅ 完整 |
+| 高级主题 | v1.1.0 | 2025-10-07 | ✅ 完整（新增K线实现总结） |
 | 归档 | - | 2025-10-06 | ✅ 已归档 |
 
 ---
