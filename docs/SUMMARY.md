@@ -110,6 +110,7 @@
 
 - [市场数据增强](08_advanced/implementation_summaries/market_data.md)
 - [管理功能](08_advanced/implementation_summaries/management_features.md)
+- [K线聚合系统](08_advanced/implementation_summaries/kline_system.md)
 
 ## 技术深度解析
 

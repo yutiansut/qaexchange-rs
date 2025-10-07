@@ -19,6 +19,7 @@ use qaexchange::notification::broker::NotificationBroker;
 use qaexchange::market::{MarketDataBroadcaster, SnapshotBroadcastService};
 // use qaexchange::service::http::HttpServer;  // 未使用
 use qaexchange::service::http::admin::AdminAppState;
+use actix::Actor;
 use qaexchange::service::http::management::ManagementAppState;
 use qaexchange::service::websocket::WebSocketServer;
 use qaexchange::risk::RiskMonitor;
