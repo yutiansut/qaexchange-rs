@@ -100,7 +100,7 @@ impl CapitalManager {
     /// 入金 (新接口,带流水记录)
     pub fn deposit_with_record(
         &self,
-        user_id: String,
+        account_id: String,  // Phase 10: 改为account_id
         amount: f64,
         method: Option<String>,
         remark: Option<String>,
@@ -111,13 +111,14 @@ impl CapitalManager {
 
         // 获取账户当前余额
         let balance_before = {
-            let account = self.account_mgr.get_default_account(&user_id)?;
+            let account = self.account_mgr.get_account(&account_id)?;  // 改为get_account
             let acc = account.read();
             acc.accounts.balance
         };
 
-        // 执行入金
-        self.deposit(&user_id, amount)?;
+        // 执行入金 (deposit内部也需要修改,但这里先保持调用)
+        let account = self.account_mgr.get_account(&account_id)?;
+        account.write().deposit(amount);
 
         // 获取交易后余额
         let balance_after = balance_before + amount;
@@ -126,7 +127,7 @@ impl CapitalManager {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let transaction = FundTransaction {
             transaction_id: self.generate_transaction_id(),
-            user_id: user_id.clone(),
+            user_id: account_id.clone(),  // Phase 10: 这里存储account_id
             transaction_type: TransactionType::Deposit,
             amount,
             balance_before,
@@ -140,12 +141,12 @@ impl CapitalManager {
 
         // 保存交易记录
         self.transactions
-            .entry(user_id.clone())
+            .entry(account_id.clone())
             .or_insert_with(Vec::new)
             .push(transaction.clone());
 
-        log::info!("Deposit completed: user={}, amount={}, transaction_id={}",
-            user_id, amount, transaction.transaction_id);
+        log::info!("Deposit completed: account_id={}, amount={}, transaction_id={}",
+            account_id, amount, transaction.transaction_id);
 
         Ok(transaction)
     }
@@ -167,7 +168,7 @@ impl CapitalManager {
     /// 出金 (新接口,带流水记录)
     pub fn withdraw_with_record(
         &self,
-        user_id: String,
+        account_id: String,  // Phase 10: 改为account_id
         amount: f64,
         method: Option<String>,
         remark: Option<String>,
@@ -178,7 +179,7 @@ impl CapitalManager {
 
         // 获取账户信息
         let (balance_before, available) = {
-            let account = self.account_mgr.get_default_account(&user_id)?;
+            let account = self.account_mgr.get_account(&account_id)?;  // 改为get_account
             let acc = account.read();
             (acc.accounts.balance, acc.money)
         };
@@ -191,7 +192,8 @@ impl CapitalManager {
         }
 
         // 执行出金
-        self.withdraw(&user_id, amount)?;
+        let account = self.account_mgr.get_account(&account_id)?;
+        account.write().withdraw(amount);
 
         // 获取交易后余额
         let balance_after = balance_before - amount;
@@ -200,7 +202,7 @@ impl CapitalManager {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let transaction = FundTransaction {
             transaction_id: self.generate_transaction_id(),
-            user_id: user_id.clone(),
+            user_id: account_id.clone(),  // Phase 10: 这里存储account_id
             transaction_type: TransactionType::Withdrawal,
             amount,
             balance_before,
@@ -214,12 +216,12 @@ impl CapitalManager {
 
         // 保存交易记录
         self.transactions
-            .entry(user_id.clone())
+            .entry(account_id.clone())
             .or_insert_with(Vec::new)
             .push(transaction.clone());
 
-        log::info!("Withdrawal completed: user={}, amount={}, transaction_id={}",
-            user_id, amount, transaction.transaction_id);
+        log::info!("Withdrawal completed: account_id={}, amount={}, transaction_id={}",
+            account_id, amount, transaction.transaction_id);
 
         Ok(transaction)
     }
@@ -277,16 +279,17 @@ mod tests {
         // 开户
         let req = OpenAccountRequest {
             user_id: "test_user".to_string(),
-            account_id: None,
+            account_id: Some("test_user".to_string()), // 使用固定account_id
             account_name: "Test User".to_string(),
             init_cash: 10000.0,
             account_type: AccountType::Individual,
         };
-        account_mgr.open_account(req).unwrap();
+        let account_id = account_mgr.open_account(req).unwrap();
+        assert_eq!(account_id, "test_user");
 
         // 测试入金
         let deposit = capital_mgr.deposit_with_record(
-            "test_user".to_string(),
+            account_id.clone(),
             5000.0,
             Some("bank_transfer".to_string()),
             Some("初始入金".to_string()),
@@ -299,7 +302,7 @@ mod tests {
 
         // 测试出金
         let withdrawal = capital_mgr.withdraw_with_record(
-            "test_user".to_string(),
+            account_id.clone(),
             3000.0,
             Some("bank_transfer".to_string()),
             None,
@@ -310,7 +313,7 @@ mod tests {
         assert_eq!(withdrawal.balance_after, 12000.0);
 
         // 查询流水
-        let txns = capital_mgr.get_transactions("test_user");
+        let txns = capital_mgr.get_transactions(&account_id);
         assert_eq!(txns.len(), 2);
     }
 }

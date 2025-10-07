@@ -326,6 +326,12 @@ fn filter_chunk_by_timestamp(
                     .map(|&idx| prim_i64.get(idx))
                     .collect();
                 Box::new(filtered) as Box<dyn Array>
+            } else if let Some(prim_i32) = array.as_any().downcast_ref::<PrimitiveArray<i32>>() {
+                let filtered: PrimitiveArray<i32> = true_indices
+                    .iter()
+                    .map(|&idx| prim_i32.get(idx))
+                    .collect();
+                Box::new(filtered) as Box<dyn Array>
             } else if let Some(prim_u64) = array.as_any().downcast_ref::<PrimitiveArray<u64>>() {
                 let filtered: PrimitiveArray<u64> = true_indices
                     .iter()
@@ -353,8 +359,8 @@ fn filter_chunk_by_timestamp(
                 let filtered: FixedSizeBinaryArray = builder.into();
                 Box::new(filtered) as Box<dyn Array>
             } else {
-                // 未知类型，返回原数组（不应该发生）
-                array.clone()
+                // 未知类型，panic以便调试
+                panic!("Unsupported array type in filter_chunk_by_timestamp: {:?}", array.data_type())
             }
         })
         .collect();

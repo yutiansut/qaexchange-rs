@@ -371,6 +371,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(Some(*available));
                 frozen_builder.push(Some(*frozen));
                 margin_builder.push(Some(*margin));
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             WalRecord::AccountOpen { user_id, init_cash, .. } => {
@@ -394,6 +397,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 available_builder.push(Some(*init_cash));
                 frozen_builder.push(Some(0.0));
                 margin_builder.push(Some(0.0));
+
+                // K线字段为 null
+                push_null_kline_fields!();
             }
 
             WalRecord::Checkpoint { .. } => {

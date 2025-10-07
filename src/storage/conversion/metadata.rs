@@ -118,6 +118,7 @@ impl ConversionRecord {
 
     /// 是否可以重试
     pub fn can_retry(&self, max_retries: u32) -> bool {
+        // Only Failed records can be retried
         self.status == ConversionStatus::Failed && self.retry_count < max_retries
     }
 
@@ -374,7 +375,8 @@ mod tests {
             PathBuf::from("/home/quantaxis/qaexchange-rs/output//olap_1.parquet"),
         );
 
-        assert!(record.can_retry(5));
+        // Pending records are not "retryable" - they haven't been tried yet
+        assert!(!record.can_retry(5));
 
         record.mark_failed("Test error".to_string());
         assert_eq!(record.status, ConversionStatus::Failed);

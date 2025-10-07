@@ -378,7 +378,7 @@ mod tests {
     use crate::storage::wal::record::WalRecord;
     use tempfile::tempdir;
 
-    fn create_test_sstable(path: &std::path::Path, count: usize) -> Result<(), String> {
+    fn create_test_sstable(path: &std::path::Path, count: usize, timestamp_offset: i64) -> Result<(), String> {
         use crate::storage::sstable::oltp_rkyv::RkyvSSTableWriter;
 
         // 创建 SSTable Writer
@@ -386,7 +386,7 @@ mod tests {
 
         for i in 0..count {
             let key = MemTableKey {
-                timestamp: 1000 + i as i64,
+                timestamp: 1000 + timestamp_offset + i as i64,
                 sequence: i as u64,
             };
 
@@ -422,8 +422,8 @@ mod tests {
         let sstable1_path = tmp_dir.path().join("sstable_1.rkyv");
         let sstable2_path = tmp_dir.path().join("sstable_2.rkyv");
 
-        create_test_sstable(&sstable1_path, 50).unwrap();
-        create_test_sstable(&sstable2_path, 50).unwrap();
+        create_test_sstable(&sstable1_path, 50, 0).unwrap();   // timestamps 1000-1049
+        create_test_sstable(&sstable2_path, 50, 50).unwrap();  // timestamps 1050-1099
 
         // 创建转换记录
         let metadata_path = tmp_dir.path().join("metadata.json");

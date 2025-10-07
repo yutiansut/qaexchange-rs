@@ -271,13 +271,16 @@ impl RkyvSSTable {
         file.seek(SeekFrom::Start(header.metadata_offset))
             .map_err(|e| format!("Seek to metadata failed: {}", e))?;
 
-        // 假设 metadata 不超过 4KB
-        let mut metadata_buf = vec![0u8; 4096];
-        let n = file.read(&mut metadata_buf)
+        // 读取从 metadata_offset 到文件末尾的所有数据
+        let mut metadata_buf = Vec::new();
+        file.read_to_end(&mut metadata_buf)
             .map_err(|e| format!("Read metadata failed: {}", e))?;
-        metadata_buf.truncate(n);
 
-        let archived_metadata = rkyv::check_archived_root::<SSTableMetadata>(&metadata_buf)
+        // rkyv 需要对齐的缓冲区，将数据复制到 AlignedVec
+        let mut aligned_buf = rkyv::AlignedVec::with_capacity(metadata_buf.len());
+        aligned_buf.extend_from_slice(&metadata_buf);
+
+        let archived_metadata = rkyv::check_archived_root::<SSTableMetadata>(&aligned_buf)
             .map_err(|e| format!("Deserialize metadata failed: {}", e))?;
         let metadata: SSTableMetadata = archived_metadata
             .deserialize(&mut rkyv::Infallible)
