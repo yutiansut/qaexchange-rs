@@ -7,6 +7,7 @@ use super::market;
 use super::admin;
 use super::management;
 use super::auth;
+use super::kline;
 
 /// 配置所有路由
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -69,6 +70,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route("/orderbook/{instrument_id}", web::get().to(market::get_orderbook))
                 .route("/tick/{instrument_id}", web::get().to(market::get_tick))
                 .route("/trades/{instrument_id}", web::get().to(market::get_recent_trades))
+                .route("/kline/{instrument_id}", web::get().to(kline::get_kline_data))  // K线数据
         )
 
         // 监控和统计

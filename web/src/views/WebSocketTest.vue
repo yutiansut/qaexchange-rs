@@ -226,6 +226,39 @@
             <el-empty v-else description="请订阅行情" />
           </el-card>
 
+          <!-- K线图面板 -->
+          <el-card class="panel kline-panel">
+            <template #header>
+              <div class="panel-header">
+                <span>K线图</span>
+                <el-space>
+                  <el-select
+                    v-model="klinePeriod"
+                    size="small"
+                    style="width: 100px"
+                    @change="handlePeriodChange"
+                  >
+                    <el-option label="1分钟" :value="4" />
+                    <el-option label="5分钟" :value="5" />
+                    <el-option label="15分钟" :value="6" />
+                    <el-option label="30分钟" :value="7" />
+                    <el-option label="60分钟" :value="8" />
+                    <el-option label="日线" :value="0" />
+                  </el-select>
+                </el-space>
+              </div>
+            </template>
+
+            <div class="kline-container">
+              <KLineChart
+                ref="klineChart"
+                :symbol="selectedInstrument"
+                :period="klinePeriod"
+                :kline-data="klineDataList"
+              />
+            </div>
+          </el-card>
+
           <!-- 下单面板 -->
           <el-card class="panel order-form-panel">
             <template #header>
@@ -448,14 +481,25 @@
 
 <script>
 import { mapGetters, mapActions } from 'vuex'
+import KLineChart from '@/components/KLineChart.vue'
 
 export default {
   name: 'WebSocketTest',
+
+  components: {
+    KLineChart
+  },
 
   data() {
     return {
       // 选中的合约
       selectedInstrument: '',
+
+      // K线周期
+      klinePeriod: 5,  // 默认5分钟
+
+      // K线数据列表
+      klineDataList: [],
 
       // 下单表单
       orderForm: {
@@ -562,6 +606,13 @@ export default {
         }
       },
       immediate: true
+    },
+
+    // 当选中合约变化时，重新获取K线数据
+    selectedInstrument(newVal) {
+      if (newVal) {
+        this.fetchKLineData()
+      }
     }
   },
 
@@ -786,6 +837,80 @@ export default {
 
     formatRisk(percentage) {
       return percentage.toFixed(1) + '%'
+    },
+
+    handlePeriodChange(period) {
+      console.log('[WebSocketTest] K-line period changed to:', period)
+      // 周期变化时，可以重新请求K线数据
+      this.fetchKLineData()
+    },
+
+    async fetchKLineData() {
+      console.log('[WebSocketTest] Fetching K-line data for:', this.selectedInstrument, 'Period:', this.klinePeriod)
+
+      try {
+        // 调用后端 K线 API
+        const response = await this.$axios.get(
+          `http://localhost:8094/api/market/kline/${this.selectedInstrument}`,
+          {
+            params: {
+              period: this.klinePeriod,
+              count: 500
+            }
+          }
+        )
+
+        if (response.data.code === 0 && response.data.data) {
+          this.klineDataList = response.data.data.klines
+          console.log('[WebSocketTest] Loaded', this.klineDataList.length, 'K-line bars')
+        } else {
+          console.warn('[WebSocketTest] Empty K-line data, using mock data')
+          this.klineDataList = this.generateMockKLineData()
+        }
+      } catch (error) {
+        console.error('[WebSocketTest] Failed to fetch K-line data:', error)
+        // 失败时使用模拟数据
+        this.klineDataList = this.generateMockKLineData()
+        this.$message.warning('暂无K线数据，使用模拟数据')
+      }
+    },
+
+    generateMockKLineData() {
+      // 生成模拟K线数据用于测试
+      const data = []
+      const now = Date.now()
+      const interval = this.klinePeriod === 0 ? 86400000 : 60000 * (this.klinePeriod === 4 ? 1 : this.klinePeriod === 5 ? 5 : 15)
+
+      let basePrice = 3800
+      for (let i = 100; i >= 0; i--) {
+        const timestamp = now - i * interval
+        const open = basePrice + (Math.random() - 0.5) * 20
+        const close = basePrice + (Math.random() - 0.5) * 20
+        const high = Math.max(open, close) + Math.random() * 10
+        const low = Math.min(open, close) - Math.random() * 10
+        const volume = Math.floor(Math.random() * 1000) + 100
+
+        data.push({
+          datetime: timestamp,
+          open: parseFloat(open.toFixed(2)),
+          high: parseFloat(high.toFixed(2)),
+          low: parseFloat(low.toFixed(2)),
+          close: parseFloat(close.toFixed(2)),
+          volume: volume,
+          amount: volume * ((open + close) / 2)
+        })
+
+        basePrice = close
+      }
+
+      return data
+    }
+  },
+
+  mounted() {
+    // 初始化时获取K线数据
+    if (this.selectedInstrument) {
+      this.fetchKLineData()
     }
   }
 }
@@ -849,6 +974,13 @@ export default {
 
     &:last-child {
       margin-bottom: 0;
+    }
+  }
+
+  .kline-panel {
+    .kline-container {
+      height: 500px;
+      background-color: #1a1a1a;
     }
   }
 

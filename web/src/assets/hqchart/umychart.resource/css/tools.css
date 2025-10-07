@@ -1,0 +1,2357 @@
+html,body{
+    height:100%;
+}
+body {
+    margin:0px;
+    font-size:13px;
+}
+ul li,ol li{
+    list-style:none;
+}
+* {
+	padding: 0;
+	margin: 0;
+}
+a{
+	transition-duration:0.4s, 0.5s;
+	transition-property:background-color, color;
+	transition-timing-function:ease, ease;
+}
+i{
+    font-style: normal;
+}
+
+input,canvas{outline:0px;}
+
+.redColor{
+    color:#ee1515;
+}
+.greenColor{
+    color:#199e00;
+}
+
+
+::-webkit-scrollbar {
+    width:8px;
+    height: 8px;
+}
+::-webkit-scrollbar-button    {
+    display:none;
+}
+::-webkit-scrollbar-track     {
+    background:#F1F1F1;
+    border-radius:4px;
+}
+
+::-webkit-scrollbar-thumb{
+    background:#C1C1C1;
+    border-radius:4px;
+}
+
+
+/*工具条*/
+.tools {
+    margin-bottom: 8px;
+    height: 38px;
+    color:#4c525e;
+    float:left;
+}
+
+.tools .txt {
+    height: 28px;
+    width: 80px;
+    border: none;
+    margin-top: 3px;
+    padding-left:5px;
+}
+
+.tools .item {
+    float: left;
+    margin-right: 1px;
+    padding: 0 5px;
+    cursor: pointer;
+    border: 1px solid #ECEFF2;
+    height: 36px;
+    line-height: 36px;
+}
+
+.button {
+	-moz-box-shadow:inset 0px 0px 0px 0px #edf0f2;
+	-webkit-box-shadow:inset 0px 0px 0px 0px #edf0f2;
+	box-shadow:inset 0px 0px 0px 0px #edf0f2;
+	background:-webkit-gradient(linear, left top, left bottom, color-stop(0.05, #fcfffa), color-stop(1, #ffffff));
+	background:-moz-linear-gradient(top, #fcfffa 5%, #ffffff 100%);
+	background:-webkit-linear-gradient(top, #fcfffa 5%, #ffffff 100%);
+	background:-o-linear-gradient(top, #fcfffa 5%, #ffffff 100%);
+	background:-ms-linear-gradient(top, #fcfffa 5%, #ffffff 100%);
+	background:linear-gradient(to bottom, #fcfffa 5%, #ffffff 100%);
+	filter:progid:DXImageTransform.Microsoft.gradient(startColorstr='#fcfffa', endColorstr='#ffffff',GradientType=0);
+	background-color:#fcfffa;
+	border:1px solid #eceff2;
+	display:inline-block;
+	cursor:pointer;
+	font-family:Arial;
+	font-size:13px;
+	text-decoration:none;
+}
+.button:hover {
+	background:-webkit-gradient(linear, left top, left bottom, color-stop(0.05, #f2f3f5), color-stop(1, #f2f3f5));
+	background:-moz-linear-gradient(top, #f2f3f5 5%,#f2f3f5 100%);
+	background:-webkit-linear-gradient(top, #f2f3f5 5%, #f2f3f5 100%);
+	background:-o-linear-gradient(top, #f2f3f5 5%, #f2f3f5 100%);
+	background:-ms-linear-gradient(top, #f2f3f5 5%, #f2f3f5 100%);
+	background:linear-gradient(to bottom, #f2f3f5 5%, #f2f3f5 100%);
+	filter:progid:DXImageTransform.Microsoft.gradient(startColorstr='#f2f3f5', endColorstr='#f2f3f5',GradientType=0);
+	background-color:#f2f3f5;
+}
+.button:active {
+	position:relative;
+	top:1px;
+}
+/*工具条结束*/
+
+/*工具条下拉菜单*/
+.dropdownList{
+    width:200px;
+    border:1px solid #ECEFF2;
+    position: absolute;
+    z-index: 500;
+    overflow: auto;
+    padding:5px 0;
+    background-color: rgba(255, 255, 255, 1);
+    box-shadow: 0px 1px 3px 0px rgba(0, 0, 0, 0.07);
+    border-radius:3px;
+    display:none;
+    color:#4c525e;
+}
+
+.dropdownList .item{
+    padding:2px 8px;
+    height:28px;
+    line-height:28px;
+}
+
+.dropdownList .item:hover {
+    background-color:#EBF7FC;
+    cursor:pointer;
+}
+/*工具条下拉菜单结束*/
+
+/*拖拽切换*/
+.selected {
+	height: 38px;
+    overflow: hidden;
+    text-align: center;
+    float:left;
+}
+
+.selected ul li {
+	float: left;
+	margin: 0 5px;
+	list-style-type: none;
+}
+
+.selected ul a {
+	display: block;
+	background: #EBF7FC; 
+	height: 38px;
+	text-decoration: none;
+	color:#4c525e;
+	-webkit-transition: margin .4s ease-in-out;
+	-moz-transition: margin .4s ease-in-out;
+	-o-transition: margin .4s ease-in-out;
+	-ms-transition: margin .4s ease-in-out;
+	transition: margin .4s ease-in-out;
+    padding:0px 8px;
+    line-height:38px;
+}
+
+.selected ul a:nth-of-type(even) {
+	background: #fff2f4;
+	color: #4c525e;
+}
+/*拖拽切换结束*/
+
+
+/*形态匹配*/
+.kLineMatch {
+    position: absolute;
+    z-index: 520;
+    width:300px;
+    height:600px;
+    border: 1px solid #ECEFF2;
+    background:#fff;
+    display:none;
+}
+.kLineMatch .top {
+    height:30px;
+    line-height:30px;
+    background:#ccc;
+    text-align:center;
+}
+.kLineMatch .top .closeBtn {
+    float:right;
+    margin-right:20px;
+    cursor:pointer;
+}
+.kLineMatch .title{
+   padding:5px;
+}
+.kLineMatch .title .name {
+    float:left;
+    width:70px;
+    border-right:1px solid #ccc;
+}
+.kLineMatch .title .time {
+    float:left;
+    width:140px;
+    padding-left:5px;
+    border-right:1px solid #ccc;
+}
+.kLineMatch .title .similar{
+    float:left;
+    padding-left:5px;
+}
+.kLineMatch .list{
+    overflow-y:auto;
+    height:544px;
+    width:290px;
+    padding:5px 5px 0px 5px;
+}
+
+.kLineMatch .list .item .name {
+    width:70px;
+    float:left;
+    padding-bottom:5px;
+}
+.kLineMatch .list .item .time{
+    padding:0px 0px 5px 5px;
+    float:left;
+    width:140px;
+}
+.kLineMatch .list .item .similar{
+    float:left;
+    padding-left:7px;
+    padding-bottom:5px;
+}
+/*形态匹配结束*/
+
+/*形态匹配结果列表 start*/
+.jchart-kline-match-box {
+    font: 13px 'Microsoft Yahei';
+}
+.jchart-kline-match-box .matchTable {
+    border-collapse: collapse;
+    width: 100%;
+}
+.jchart-kline-match-box .matchTable td,.jchart-kline-match-box .matchTable th {
+    line-height: 20px;
+    border: 1px solid #ccc;
+    padding: 0 10px;
+}
+.jchart-kline-match-box .matchTable td.red {
+    color: red;
+}
+/*分页*/
+.pagination {height: 22px; text-align: center; margin-top: 10px;}
+.pagination span {display: inline-block; line-height: 20px; padding: 0 6px; border: 1px solid #ccc; margin-right: 6px; cursor: pointer;}
+.pagination span:hover,.pagination span.active {color: #ffb400;}
+/*形态匹配结果列表 end*/
+
+/*加载层*/
+.spinnerBg{
+    background:#ccc;
+    width:100%;
+    height:100%;
+    position:absolute;
+    opacity:0.5;
+    display:none;
+}
+.spinner {
+  width: 50px;
+  height: 60px;
+  font-size: 10px;
+  position:absolute;
+  top:50%;
+  left:50%;
+  display:none;
+}
+ 
+.spinner > div {
+  background-color: #39adce;
+  height: 100%;
+  width: 6px;
+  display: inline-block;
+   
+  -webkit-animation: stretchdelay 1.2s infinite ease-in-out;
+  animation: stretchdelay 1.2s infinite ease-in-out;
+}
+ 
+.spinner .rect2 {
+  -webkit-animation-delay: -1.1s;
+  animation-delay: -1.1s;
+}
+ 
+.spinner .rect3 {
+  -webkit-animation-delay: -1.0s;
+  animation-delay: -1.0s;
+}
+ 
+.spinner .rect4 {
+  -webkit-animation-delay: -0.9s;
+  animation-delay: -0.9s;
+}
+ 
+.spinner .rect5 {
+  -webkit-animation-delay: -0.8s;
+  animation-delay: -0.8s;
+}
+ 
+@-webkit-keyframes stretchdelay {
+  0%, 40%, 100% { -webkit-transform: scaleY(0.4) } 
+  20% { -webkit-transform: scaleY(1.0) }
+}
+ 
+@keyframes stretchdelay {
+  0%, 40%, 100% {
+    transform: scaleY(0.4);
+    -webkit-transform: scaleY(0.4);
+  }  20% {
+    transform: scaleY(1.0);
+    -webkit-transform: scaleY(1.0);
+  }
+}
+/*加载层结束*/
+
+.kline-info{
+    position: absolute; 
+    /*opacity: 0.8;*/
+    width: 16px;
+    height: 16px;
+    background-color: #fff;
+    /*border: 2px solid #ff3232;*/
+    color: #ff3232;
+    text-align: center;
+    cursor: pointer;
+    font: bold 12px/1.4 arial;
+}
+
+.klineframe-toolbar {
+    position: absolute; 
+    text-align:right;
+    line-height: 24px;
+    padding-right: 5px;
+    box-sizing: border-box;
+}
+.klineframe-toolbar span:hover{
+    color: #0182d4;
+}
+
+.klineframe-button{
+    position: absolute;
+    text-align:right;
+    border:1px solid #cccccc;
+    padding: 2px;
+}
+/*.klineframe-button span:hover{*/
+    /*color: #0182d4;*/
+/*}*/
+/*.klineframe-button span:active{*/
+    /*color: #0182d4;*/
+/*}*/
+
+.icon-active{
+    color: #0182d4;
+}
+
+.increase{
+    margin-left: 3px;
+    margin-right: 10px;
+}
+.rate-discount{
+    font-weight: normal;
+    margin-left: 90px;
+}
+.tipBoxTitle{
+    display: inline-block;
+    width: 130px;
+}
+.date-tipbox{
+    margin-right: 10px;
+}
+
+
+
+/*指数设置面板*/
+.target-box{
+    position: absolute;
+    display: none;
+    width:100%;
+    height:100%;
+    background-color: rgba(0,0,0,0.01);
+    z-index: 999;
+}
+.target-panel{
+    position: absolute;
+    top:50%;
+    left: 50%;
+    transform: translateX(-50%) translateY(-50%);
+    width: 800px;
+    height: 500px;
+    background-color: rgba(255, 255, 255, 0.96);
+    box-shadow: 0px 4px 17px 0px rgba(0, 0, 0, 0.55);
+    border-radius: 3px;
+}
+.target-header{
+    position: relative;
+    width:100%;
+    height: 42px;
+    line-height: 42px;
+    border-bottom: 1px solid #c8d2db;
+}
+.target-header span{
+    font-family: 微软雅黑;
+    font-size: 14px;
+    margin-left: 10px;
+}
+.target-header strong{
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    font-size: 14px;
+    font-weight: 300;
+}
+#close-tar{
+    cursor:pointer;
+}
+.target-content{
+    height:100%;
+}
+.target-left{
+    float: left;
+    width:200px;
+    height:calc(100% - 43px);
+    border-right: 1px solid #c8d2db;
+}
+
+.target-left input{
+    margin-left: 10px;
+    height: 40px;
+    line-height: 40px;
+    border: none;
+    font-size: 14px;
+}
+.target-left ul{
+    border-top:1px solid #c8d2db;
+    list-style: none;
+    padding:10px;
+    box-sizing: border-box;
+}
+.target-left ul li{
+    font-size: 13px;
+    line-height: 30px;
+    color: #757d81;
+    cursor: pointer;
+}
+.active-list{
+    color: #1295d9!important;
+}
+
+.target-right{
+    float: left;
+    width: 595px;
+}
+.target-right ul{
+    width: 590px;
+    max-height: 450px;
+    overflow: auto;
+    padding-top: 10px;
+    padding-left: 20px;
+    box-sizing: border-box;
+}
+.target-right ul li{
+    display: inline-block;
+    margin-top: 5px;
+    margin-left: 10px;
+    list-style: none;
+    width: 175px;
+    line-height: 30px;
+    text-align: left;
+    float: left;
+    cursor: pointer;
+}
+
+/*分钟走势图*/
+.minute-dialog-title{
+    position: relative;
+    margin-bottom: 10px;
+    height: 36px;
+    line-height: 36px;
+    width: 100%;
+    border-bottom: 1px solid #ccc;
+}
+.minute-dialog-title span{
+    margin-left: 5px;
+}
+.minute-dialog-title strong{
+    position: absolute;
+    right: 5px;
+    top: 0;
+    font-weight: 300;
+    font-size: 12px;
+}
+.minute-dialog-title strong:hover,.parameter-header strong:hover{
+    color: #0182d4;
+}
+
+/*tooltip的外层样式*/
+.jschart-tooltip{
+    box-shadow: 0px 1px 4px 0px rgba(0, 0, 0, 0.23);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    padding:7px 20px 15px 13px;
+    box-sizing: border-box;
+    position:relative;
+    display: none;
+    z-index: 9;
+    user-select:none;
+}
+
+/*tooltip的内层样式*/
+.tooltip-title{
+    color:#2b3645;
+    font-family: 微软雅黑;
+    font-size:12px;
+    text-align:center;
+    display: block;
+    line-height: 24px;
+}
+.tooltip-con{
+    color:#2b3645;
+    font-family: 微软雅黑;
+    font-size:12px;
+    line-height: 24px;
+}
+.tooltip-num{
+    font-family: 微软雅黑;
+    font-size:12px;
+    line-height: 24px;
+    text-align: right;
+    display:inline-block;
+    width:90px;
+}
+
+
+/*区间选择*/
+.jschart-selectrect{
+    border: dashed 1px #0f248de0;
+    display: none;
+}
+
+/*提示详情*/
+.jchart-klineinfo-tooltip{
+    position: absolute;
+    z-index: 10;
+    max-height: 270px;
+    line-height: 28px;
+    box-shadow: 0px 1px 4px 0px rgba(0, 0, 0, 0.23);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    padding: 15px;
+    background: rgba(255,255,255,0.92);
+    box-sizing: border-box;
+    display: none;
+    user-select:none;
+}
+.total-list{
+    color: #f39800;
+}
+.jchart-klineinfo-tooltip span{
+    display: block;
+    /* width:100%; */
+    /* overflow: hidden; */
+    /* white-space: nowrap; */
+    /* text-overflow: ellipsis; */
+    vertical-align: bottom;
+}
+
+.title-length{
+    max-height: 220px;
+    overflow: hidden;
+}
+.close-munite{
+    cursor: pointer;
+}
+
+/*交易指标提示信息*/
+.jchart-klinetrade-tooltip{
+    position: absolute;
+    z-index: 10;
+    max-height: 270px;
+    line-height: 28px;
+    box-shadow: 0px 1px 4px 0px rgba(0, 0, 0, 0.23);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    padding: 7px;
+    background: rgba(255,255,255,0.92);
+    box-sizing: border-box;
+    display: none;
+}
+
+/*分时图异动信息*/
+.jchart-minuteinfo-tooltip{
+    position: absolute;
+    z-index: 10;
+    max-height: 270px;
+    line-height: 28px;
+    box-shadow: 0px 1px 4px 0px rgba(0, 0, 0, 0.23);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    padding: 7px;
+    background: rgba(255,255,255,0.92);
+    box-sizing: border-box;
+    display: none;
+}
+
+/*图标提示信息*/
+.jchart-iconinfo-tooltip{
+    position: absolute;
+    z-index: 10;
+    max-height: 270px;
+    line-height: 28px;
+    box-shadow: 0px 1px 4px 0px rgba(0, 0, 0, 0.23);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    padding: 7px;
+    background: rgba(255,255,255,0.92);
+    box-sizing: border-box;
+    display: none;
+}
+
+/*ox图提示信息*/
+.jchart-chartox-tooltip{
+    position: absolute;
+    z-index: 10;
+    max-height: 270px;
+    line-height: 28px;
+    box-shadow: 0px 1px 4px 0px rgba(0, 0, 0, 0.23);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    padding: 7px;
+    background: rgba(255,255,255,0.92);
+    box-sizing: border-box;
+    display: none;
+}
+
+/*散点图提示信息*/
+.jchart-charscatterplot-tooltip{
+    position: absolute;
+    z-index: 10;
+    max-height: 270px;
+    line-height: 28px;
+    box-shadow: 0px 1px 4px 0px rgba(0, 0, 0, 0.23);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    padding: 7px;
+    background: rgba(255,255,255,0.92);
+    box-sizing: border-box;
+    display: none;
+}
+
+/*ChartDrawSVG提示信息*/
+.jchart-chartdrawsvg-tooltip{
+    position: absolute;
+    z-index: 10;
+    /*max-height: 270px;*/
+    line-height: 28px;
+    box-shadow: 0px 1px 4px 0px rgba(0, 0, 0, 0.23);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    padding: 7px;
+    background: rgba(255,255,255,0.92);
+    box-sizing: border-box;
+    display: none;
+
+    /*禁止文字选中*/
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+
+/*龙虎榜*/
+.trade-detall{
+    margin-left: 80px;
+}
+.reason-list{
+    display: inline-block;
+    width: 200px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+    vertical-align: bottom;
+}
+
+.trade-time{
+    vertical-align: top;
+}
+
+/*业绩预告*/
+.prorecast-week{
+    margin-left: 70px;
+}
+
+/*=======区间选择弹出框=========*/
+.jchart-select-section{
+    height:340px;
+}
+.jchart-select-table-right .jchart-select-date{
+    width:100%;
+    margin-bottom: 5px;
+}
+.jchart-select-date span{
+    display: inline-block;
+    width:32%;
+    padding-left: 10px;
+    box-sizing: border-box;
+    font-size: 13px;
+}
+.jchart-select-date span i{
+    display: inline-block;
+    width:12px;
+    height:24px;
+    line-height: 24px;
+    text-align: center;
+    border:1px solid #dddddd;
+    background-color: #f5f5f5;
+    cursor: pointer;
+}
+.start-date-left,.end-date-left{
+    margin: 0 2px 0 5px;
+}
+.jchart-select-table-right>table
+{
+    width:100%;
+    border-collapse:collapse;
+}
+.jchart-select-table-right>table,.jchart-select-table-right>table tr, .jchart-select-table-right>table td
+{
+    border: 1px solid #dddddd;
+}
+.jchart-select-table-right td
+{
+    padding-left:10px;
+    box-sizing: border-box;
+    width:32%;
+    height:40px;
+    vertical-align:center;
+}
+.jchart-select-table-right>table td span{
+    margin-left:20px;
+}
+.jchart-select-table-right>table td strong{
+    display: inline-block;
+    width:50px;
+    font-weight: normal;
+}
+
+/*设置涨跌颜色*/
+.PriceUp{
+    color:#ee1515!important;
+}
+
+.PriceDown{
+    color:#199e00!important;
+}
+
+.PriceNull{
+    color:black;
+}
+
+/*按钮背景色*/
+.BtnBackground{
+    background-color: #ffffff!important;
+    color: #eeeeee;
+}
+
+/*K线右上角图标*/
+.icon-image{
+    cursor: pointer;
+}
+.icon-image img{
+    /*margin-top: 12px;*/
+    padding: 10px 8px;
+    display: block;
+    width: 22px;
+    height: 22px;
+    border-left:1px solid #cccccc;
+    border-right:1px solid #cccccc;
+}
+.icon-image:first-child img{
+    border-top:1px solid #cccccc;
+}
+.icon-image:last-child img{
+    border-bottom:1px solid #cccccc;
+}
+
+/*K线子图标*/
+.subTolls{
+    padding:8px 5px 0px 8px;
+    border:1px solid #aaaaaa;
+    background-color: #fff;
+    height: 26px;
+}
+.subTolls::after {
+    content: "";
+    display: block;
+    width: 0;
+    height: 0;
+    clear: both;
+}
+.subTolls>*{
+    margin: 0 3px;
+    cursor: pointer;
+    display: block;
+    width: 20px;
+    height: 20px;
+    float: left;
+}
+.subTolls>.subtool-set {vertical-align: top;}
+.change-color{
+    width: 24px;
+    height: 3px;
+    outline: none;
+    border: 0;
+    position: relative;
+}
+.changes-color {position: relative;}
+.change-image{
+    margin-left: 3px;
+    margin-bottom: 2px;
+    display: inline-block;
+    width: 16px;
+    height: 13px;
+}
+.changes-color input {position: absolute; left: 0; bottom: 0;}
+input[type="color"] {
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+}
+::-webkit-color-swatch-wrapper {
+    background-color: #ffffff;
+}
+::-webkit-color-swatch { height:4px; width: 25px;position:relative; left: 0; top:-5px; border: 0;}
+.subtool-del{
+    position: relative;
+}
+
+
+
+
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   右键菜单
+*/
+.UMyChart_PopMenu {
+    position: absolute;
+    z-index: 500;
+    border: 1px solid;
+    border-color:rgb(116, 112, 112);
+    background-color: #fff;
+    visibility:hidden;
+    font-size: 12px;
+    font-family: "微软雅黑";
+    cursor: default;
+    padding: 2px;
+    z-index: 99;
+    
+}
+
+.UMyChart_PopMenu_Table
+{
+    border-collapse: collapse;
+    border-spacing: 2px;
+}
+
+.UMyChart_PopMenu_Tbody 
+{
+    
+}
+
+.UMyChart_MenuItem_Tr
+{
+    display: table-row;
+    height:20px;
+}
+
+.UMyChart_DrawTool_Disable_Tr
+{
+    pointer-events: none;
+    color:rgb(169,169,169)
+}
+
+.UMyChart_MenuItem_Tr_Separator
+{
+    height:5px;   
+}
+
+.UMyChart_MenuItem_Td_Separator
+{
+    border-top:1px solid;
+    border-color:rgb(116, 112, 112);
+}
+
+.UMyChart_MenuItem_Td_Status_Separator 
+{
+    height:5px;
+    background: rgb(204,204,204);
+}
+
+.UMyChart_MenuItem_Tr_Selected
+{
+    background: rgb(172,172,221);
+    border:0px solid;
+}
+
+.UMyChart_MenuItem_Td_Status 
+{
+    width: 23px;
+    background: rgb(204,204,204);
+}
+
+.UMyChart_MenuItem_Td_Shortcut {
+    width: 60px;
+    text-align:right;
+}
+
+.UMyChart_MenuItem_Td_Content
+{
+    padding-left: 5px;
+    text-align:left;
+}
+
+.UMyChart_MenuItem_Td_Arrow
+{
+    width: 25px;
+    text-align:right;
+    margin-right: 10px;
+}
+
+.UMyChart_MenuItem_Td_None
+{
+    display:none;
+}
+
+
+.UMyChart_MenuItem_Tr:hover
+{
+    background: rgb(172,172,221);
+}
+
+.UMyChart_PopSubMenu{
+    position: absolute;
+    left: 99px;
+    top: 0;
+    border: 1px solid;
+    border-color:rgb(116, 112, 112);
+    background-color: #fff;
+    visibility:hidden;
+    z-index: 501;
+    font-size: 12px;
+    font-family: "微软雅黑";
+    cursor: default;
+    padding: 2px;
+}
+
+.UMyChart_MenuItem_Span_Checked
+{
+    color:rgb(0,0,0);
+    font-size: 10px;
+    margin-left: 5px;
+    text-align:left;
+}
+
+.UMyChart_MenuItem_Span_Arrow
+{
+    color:rgb(0,0,0);
+    font-size: 10px;
+    text-align:right;
+}
+
+
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置画图工具对话框
+*/
+
+.UMyChart_DrawTool_Dialog_Div
+{
+    font-family: "微软雅黑";
+    /*display: flex;*/
+    border: 1px solid; 
+    width:fit-content;
+    border-color: var(--HQChart-DialogDrawTool-BorderColor);
+    visibility:hidden;
+    position: absolute;
+    background-color: var(--HQChart-DialogDrawTool-BGColor);
+    left:1px;
+    top:1px;
+    z-index: 99;
+    color:var(--HQChart-DialogDrawTool-Color);
+}
+
+.UMyChart_DrawTool_Title_Div
+{
+    padding-left: 2px;
+    height:20px;
+    border-bottom: 1px solid;
+    border-color: var(--HQChart-DialogDrawTool-BorderColor);
+    display: flex;
+    cursor: default;
+    user-select: none;
+    color:var(--HQChart-DialogDrawTool-TitleColor);
+    background-color:var(--HQChart-DialogDrawTool-TitleBGColor);
+}
+
+.UMyChart_DrawTool_Close_Div
+{
+    margin-left: auto;
+    padding-right: 4px;
+    cursor:pointer;
+    color:var(--HQChart-DialogDrawTool-CloseColor);
+}
+
+.UMyChart_DrawTool_Table
+{
+    border-collapse: collapse;
+    border-spacing: 2px;
+}
+
+.UMyChart_DrawTool_Tbody
+{
+    
+}
+
+.UMyChart_DrawTool_Tr
+{
+    display: table-row;
+    height:20px;
+}
+
+.UMyChart_DrawTool_Span_Selected
+{
+    font-size:22px;
+    border: 1px solid;
+    border-color: var(--HQChart-DialogDrawTool-Selected_ButtonBorderColor);
+    background: var(--HQChart-DialogDrawTool-Selected_ButtonBGColor);
+    color: var(--HQChart-DialogDrawTool-Selected_ButtonColor);
+}
+
+.UMyChart_DrawTool_Td
+{
+    padding: 2px;
+}
+
+.UMyChart_DrawTool_Span
+{
+    font-size:22px;
+    border: 1px solid;
+    border-color: var(--HQChart-DialogDrawTool-ButtonBorderColor);
+    color: var(--HQChart-DialogDrawTool-ButtonColor);
+}
+
+.UMyChart_DrawTool_Group_Tr
+{
+    font-size: 12px;
+    cursor: default;
+    user-select: none;
+}
+
+.UMyChart_DrawTool_Group_Td
+{
+   text-align:center;
+}
+
+.UMyChart_DrawTool_Group_End_Tr
+{
+    height:5px;
+    border-bottom: 1px solid;
+    border-color:var(--HQChart-DialogDrawTool-DividingLineColor); 
+}
+
+.UMyChart_DrawTool_Input_Color
+{
+    visibility:hidden;
+    width:22px;
+    height:22px;
+    position:absolute;
+}
+
+
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置画图属性修改对话框
+*/
+
+.UMyChart_Draw_Modify_Dialog_Div
+{
+    font-family: "微软雅黑";
+    /*display: flex;*/
+    border-top: 1px solid; 
+    border-bottom: 1px solid;
+    border-left: 1px solid;
+    width:fit-content;
+    border-color: var(--HQChart-DialogModifyDraw-BorderColor);
+    visibility:hidden;
+    position: absolute;
+    background-color: var(--HQChart-DialogModifyDraw-BGColor);
+    left:1px;
+    top:1px;
+    display: flex;
+    z-index: 99;
+}
+
+.UMyChart_Draw_Modify_Dialog_Drag_Div
+{
+    width:22px;
+    user-select: none;
+    border: 1px solid; 
+    padding: 1px;
+    background-color:var(--HQChart-DialogModifyDraw-DragBGColor);
+    border-color: var(--HQChart-DialogModifyDraw-DragBGColor);
+}
+
+.UMyChart_Draw_Modify_Dialog_Drag_Span
+{
+    font-size:22px;
+    color:var(--HQChart-DialogModifyDraw-DragColor);
+}
+
+.UMyChart_Draw_Modify_Dialog_Button_Div
+{
+    border-right: 1px solid; 
+    border-color:var(--HQChart-DialogModifyDraw-ButtonBorderColor);
+    padding: 2px;
+}
+
+
+.UMyChart_Draw_Modify_Dialog_Button_Span
+{
+    font-size:22px;
+    color:var(--HQChart-DialogModifyDraw-ButtonColor);
+}
+
+.UMyChart_Draw_Modify_Dialog_Button_ColorBar_Div
+{
+    margin-top: 2px;
+    height: 3px;
+    width: 22px;
+}
+
+.UMyChart_Draw_Modify_Dialog_Button_Color_Span
+{
+    font-size:17px;
+    margin-left: 2px;
+    color:var(--HQChart-DialogModifyDraw-ButtonColor);
+}
+
+
+.UMyChart_Draw_Modify_Dialog_Unlock_Button_Span
+{
+    font-size:22px;
+    color:var(--HQChart-DialogModifyDraw-UnlockButtonColor);
+}
+
+
+.UMyChart_Draw_Modify_Tooltip
+{
+    position: absolute;
+    display: none;
+    top: 30px;
+    z-index: 2;
+    width: 80px;
+    color: var(--HQChart-DialogModifyDraw-Tooltip-Color);
+    font-size: 12px;
+    text-align: center;
+    background-color:var(--HQChart-DialogModifyDraw-Tooltip-BGColor);
+    border-radius: 2px;
+    padding: 5px 5px 5px 5px;
+    pointer-events: none;
+    border-color: var(--HQChart-DialogModifyDraw-Tooltip-BorderColor);
+    border-style:solid;
+    border-width:1px;
+    user-select: none;
+}
+
+.UMyChart_Draw_Modify_Input_Color
+{
+    visibility:hidden;
+    width:22px;
+    height:4px;
+    position:absolute;
+}
+
+
+/*
+    弹出分时图对话框
+*/
+.jchart_pop_minute_dailog
+{
+    position: absolute;
+    left: 1px;
+    top: 1px;
+    height: 500px;
+    width: 600px;
+    visibility:hidden;
+    background-color: rgba(255,255,255,0.95);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    z-index: 99;
+}
+
+.jschart_pop_minute_chart
+{
+    height:480px;
+    position: relative;
+}
+
+.jschart_pop_minute_chart_Title_Div
+{
+    padding-left: 2px;
+    height:20px;
+    border-bottom: 1px solid;
+    border-color: rgb(204,204,204);
+    display: flex;
+    cursor: default;
+    user-select: none;
+    background-color:rgb(222,222,222)
+}
+
+.jschart_pop_minute_chart_Close_Div
+{
+    margin-left: auto;
+    padding-right: 4px;
+    cursor:pointer;
+    color:rgb(180,180,180)
+}
+
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置分时图浮动框
+*/
+
+.UMyChart_Tooltip_Minute_Div
+{
+    position: absolute;
+    height: 300px;
+    width: 400px;
+    visibility:hidden;
+    background-color: rgba(255,255,255,0.95);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    z-index: 99;
+    pointer-events:none;
+    left: 0px;
+    top: 0px;
+}
+
+.UMyChart_Tooltip_Minute_Chart_Div
+{
+    height: 100%;
+    width: 100%;
+}
+
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置K线图图浮动框
+*/
+
+.UMyChart_Tooltip_KLine_Div
+{
+    position: absolute;
+    height: 300px;
+    width: 400px;
+    visibility:hidden;
+    background-color: rgba(255,255,255,0.95);
+    border: solid 1px rgba(200, 210, 219, 0.92);
+    z-index: 99;
+    pointer-events:none;
+    left: 0px;
+    top: 0px;
+}
+
+.UMyChart_Tooltip_KLine_Chart_Div
+{
+    height: 100%;
+    width: 100%;
+}
+
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置键盘精灵对话框
+*/
+
+.jchart_pop_keyboard_dailog
+{
+    position: absolute;
+    width: 300px; 
+    height:440px;
+    left: 1px;
+    top: 1px;
+    z-index: 999;
+    visibility:hidden;
+    background-color: rgba(255,255,255,0.95);
+    border: solid 1px rgb(0, 0, 0);
+    display: flex;
+    flex-flow: column;  
+    z-index: 99;
+}
+
+.jschart_keyboard_Title_Div
+{
+    padding-left: 2px;
+    height:20px;
+    border-bottom: 1px solid;
+    border-color: rgb(204,204,204);
+    display: flex;
+    cursor: default;
+    user-select: none;
+    background-color:rgb(222,222,222);
+    
+}
+.jschart_keyboard_Close_Div
+{
+    margin-left: auto;
+    padding-right: 4px;
+    cursor:pointer;
+}
+
+.jschart_keyboard_Title
+{
+    margin-left:2px;
+}
+
+.jschart_keyboard_Input_Div
+{
+    display: flex;
+    height:25px;
+}
+
+.jschart_keyboard_input
+{
+    width:100%;
+    margin:2px;
+    border: 1px solid rgb(192,192,192);
+}
+
+.jschart_keyboard_Chart_Div
+{
+    flex: 1;
+    margin:2px;
+}
+
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置tooltip对话框
+*/
+
+
+.UMyChart_Tooltip_Dialog_Div
+{
+    font-family: "微软雅黑";
+    /*display: flex;*/
+    border: 1px solid; 
+    width:fit-content;
+    border-color: rgb(204,204,204);
+    visibility:hidden;
+    position: absolute;
+    background-color: rgba(20,20,20,1);
+    left:1px;
+    top:1px;
+    z-index: 99;
+    
+}
+
+.UMyChart_Tooltip_Title_Div
+{
+    padding-left: 2px;
+    height:20px;
+    border-bottom: 1px solid;
+    
+    display: flex;
+    cursor: default;
+    user-select: none;
+    background-color:rgb(200, 66, 69)
+}
+
+.UMyChart_Tooltip_Name_Div
+{
+    margin-left: 5px;
+    color:rgb(250,250,250)
+}
+
+.UMyChart_Tooltip_Close_Div
+{
+    margin-left: auto;
+    padding-right: 4px;
+    cursor:pointer;
+    color:rgb(180,180,180)
+}
+
+.UMyChart_Tooltip_Table
+{
+    border-spacing: 2px;
+    user-select: none;
+    font-size:12px;
+}
+
+.UMyChart_Tooltip_Title_Td
+{
+    min-width: 40px;
+}
+
+.UMyChart_Tooltip_Text_Td
+{
+    min-width:100px;
+}
+
+.UMyChart_Tooltip_Title_Span
+{
+    float: right;
+}
+
+.UMyChart_Tooltip_Title_Center_Span
+{
+    text-align: center;
+    display: block;
+}
+
+.UMyChart_Tooltip_Text_Sinlge_Td
+{
+    min-width:80px;
+}
+
+.UMyChart_Tooltip_Title_Left_Span
+{
+
+}
+
+.UMyChart_Tooltip_Text_Span
+{
+    float: right;
+    margin-right: 1px;
+}
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置区间统计对话框
+*/
+
+
+.UMyChart_SelectRect_Dialog_Div
+{
+    font-family: "微软雅黑";
+    /*display: flex;*/
+    border: 1px solid; 
+    width:fit-content;
+    border-color: rgb(204,204,204);
+    visibility:hidden;
+    position: absolute;
+    background-color: rgba(230,230,230,1);
+    left:1px;
+    top:1px; 
+    z-index: 99;
+}
+
+.UMyChart_SelectRect_Title_Div
+{
+    padding-left: 2px;
+    height:20px;
+    border-bottom: 1px solid;
+    
+    display: flex;
+    cursor: default;
+    user-select: none;
+    background-color:rgb(200, 66, 69)
+}
+
+.UMyChart_SelectRect_Name_Div
+{
+    margin-left: 5px;
+    color:rgb(250,250,250)
+}
+
+
+.UMyChart_SelectRect_Close_Div
+{
+    margin-left: auto;
+    padding-right: 4px;
+    cursor:pointer;
+    color:rgb(180,180,180)
+}
+
+.UMyChart_SelectRect_DateTime_Div
+{
+    padding-top: 4px;
+    padding-left: 10px;
+    padding-right: 10px;
+    display: flex;
+}
+
+.UMyChart_SelectRect_ArrowButton_Span
+{
+    width: 18px;
+    cursor: pointer;
+    display: inline-block;
+    text-align: center;
+    background: rgb(225, 225, 225);
+    border: 1px solid rgb(173, 173, 173);
+    margin-left: 5px;
+
+    -moz-user-select:none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+    -khtml-user-selece:none;
+
+    user-select: none;
+}
+
+.UMyChart_SelectRect_DateTitle_Span
+{
+    padding-right: 4px;
+    padding-left: 4px;
+
+    -moz-user-select:none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+    -khtml-user-selece:none;
+    
+    user-select: none;
+}
+
+.UMyChart_SelectRect_DateValue_Span
+{
+    padding-right: 4px;
+    padding-left: 4px;
+
+    -moz-user-select:none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+    -khtml-user-selece:none;
+    
+    user-select: none;
+}
+
+.UMyChart_SelectRect_Table
+{
+    border-collapse: collapse;
+    margin-top: 5px;
+    user-select: none;
+    font-size:12px;
+    width: 100%;
+    border: 1px solid rgb(173, 173, 173);
+}
+
+.UMyChart_SelectRect_Td
+{
+    min-width: 120px;
+    border: 1px solid rgb(173, 173, 173);
+    padding-bottom: 5px;
+    padding-top: 5px;
+}
+
+.UMyChart_SelectRect_Item_Left_Span
+{
+    padding-right: 4px;
+    padding-left: 4px;
+}
+
+.UMyChart_SelectRect_Item_Right_Span
+{
+    padding-right: 4px;
+    padding-left: 4px;
+}
+
+
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置浮动tooltip
+*/
+
+
+
+.UMyChart_Tooltip_Float_Div
+{
+    font-family: "微软雅黑";
+    /*display: flex;*/
+    border: 1px solid; 
+    width:fit-content;
+    border-color: rgb(204,204,204);
+    visibility:hidden;
+    position: absolute;
+    background-color: rgba(20,20,20,1);
+    left:1px;
+    top:1px;
+    pointer-events:none;
+    z-index: 98;
+}
+
+
+.UMyChart_Tooltip_Float_Table
+{
+    border-spacing: 3px;
+    user-select: none;
+    font-size:12px;
+}
+
+.UMyChart_Tooltip_Float_Group_Tr
+{
+    
+}
+
+.UMyChart_Tooltip_Float_Title_Td
+{
+    min-width: 40px;
+}
+
+.UMyChart_Tooltip_Float_Text_Td
+{
+    min-width:80px;
+    max-width: 500px;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.UMyChart_Tooltip_Float_Title_Span
+{
+    color: rgb(230,230,230);
+}
+
+.UMyChart_Tooltip_Float_Text_Span
+{
+    float: right;
+    margin-right: 1px;
+    color: rgb(230,230,230);
+}
+
+.UMyChart_Tooltip_Float_Text2_Span
+{
+    margin-left: 1px;
+}
+
+.UMyChart_Tooltip_Float_Text3_Span
+{
+    margin-left: 5px;
+    
+}
+
+
+/*
+    十字光标小浮窗
+*/
+.UMyChart_Small_Tooltip_Div
+{
+    font-family: "微软雅黑";
+    /*display: flex;*/
+    border: 1px solid; 
+    width:fit-content;
+    border-color: rgb(204,204,204);
+    visibility:hidden;
+    position: absolute;
+    background-color: rgba(20,20,20,1);
+    left:1px;
+    top:1px;
+    pointer-events:none;
+    z-index: 99;
+}
+
+.UMyChart_Small_Tooltip_Content_Div
+{
+    color: rgb(230,230,230);
+    margin: 5px 5px 5px 5px;
+}
+
+/*
+    十字光标小浮窗V2
+*/
+.UMyChart_Small_Tooltip_V2_Div
+{
+    font-family: "微软雅黑";
+    /*display: flex;*/
+    border: 1px solid; 
+    width:fit-content;
+    border-color: rgb(204,204,204);
+    visibility:hidden;
+    position: absolute;
+    background-color: rgba(20,20,20,1);
+    left:1px;
+    top:1px;
+    pointer-events:none;
+    z-index: 98;
+}
+
+
+.UMyChart_Small_Tooltip_V2_Table
+{
+    border-spacing: 3px;
+    user-select: none;
+    font-size:12px;
+}
+
+.UMyChart_Small_Tooltip_V2_Group_Tr
+{
+    
+}
+
+.UMyChart_Small_Tooltip_V2_Title_Td
+{
+    min-width: 40px;
+}
+
+.UMyChart_Small_Tooltip_V2_Text_Td
+{
+    min-width:80px;
+    max-width: 500px;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.UMyChart_Tooltip_Float_Title_Span
+{
+    color: rgb(230,230,230);
+}
+
+.UMyChart_Small_Tooltip_V2_Text_Span
+{
+    float: right;
+    margin-right: 1px;
+    color: rgb(230,230,230);
+}
+
+.UMyChart_Tooltip_Float_Text2_Span
+{
+    margin-left: 1px;
+}
+
+.UMyChart_Tooltip_Float_Text3_Span
+{
+    margin-left: 5px;
+    
+}
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置搜索指标对话框
+*/
+
+
+.UMyChart_SearchIndex_Dialog_Div
+{
+    font-family: "微软雅黑";
+    /*display: flex;*/
+    border: 1px solid; 
+    width:fit-content;
+    border-color: var(--HQChart-DialogSearchIndex-BorderColor);
+    visibility:hidden;
+    position: absolute;
+    background-color: var(--HQChart-DialogSearchIndex-BGColor);
+    color:var(--HQChart-DialogSearchIndex-Color);
+    left:1px;
+    top:1px;
+    z-index: 99;
+}
+
+.UMyChart_SearchIndex_Title_Div
+{
+    padding-left: 2px;
+    height:20px;
+    border-bottom: 1px solid;
+    
+    display: flex;
+    cursor: default;
+    user-select: none;
+    background-color:var(--HQChart-DialogSearchIndex-TitleBGColor);
+}
+
+.UMyChart_SearchIndex_Name_Div
+{
+    margin-left: 5px;
+    color:var(--HQChart-DialogSearchIndex-TitleColor);
+}
+
+.UMyChart_SearchIndex_Close_Div
+{
+    margin-left: auto;
+    padding-right: 4px;
+    cursor:pointer;
+    color:var(--HQChart-DialogSearchIndex-CloseColor);
+}
+
+.UMyChart_SearchIndex_Table_Div
+{
+    height:300px;
+    width:500px;
+    overflow-y:scroll;
+}
+
+.UMyChart_SearchIndex_Table
+{
+    border-spacing: 4px;
+    user-select: none;
+    font-size:13px;
+    max-height: 300px;
+}
+
+.UMyChart_SearchIndex_Group_Tr
+{
+    height: 25px;
+}
+
+.UMyChart_SearchIndex_Text_Td
+{
+    width: 200px;
+}
+
+
+.UMyChart_SearchIndex_Text_Span
+{
+    margin-left: 2px;
+    margin-right: 10px;
+    cursor: pointer;
+}
+
+.UMyChart_SearchIndex_Input
+{
+    border: none;
+    line-height: 28px;
+    background-color: transparent;
+    width: 99%;
+    margin-left: 10px;
+    color:var(--HQChart-DialogSearchIndex-InputColor);
+}
+
+.UMyChart_SearchIndex_Container_Div
+{
+    display: flex;
+    border-top: 1px solid #ccc;
+}
+
+.UMyChart_SearchIndex_GroupList_Div
+{
+    height: 300px;
+    width: 120px;
+    border-right: 1px solid #ccc;
+    font-size: 14px;
+}
+
+.UMyChart_SearchIndex_Group_Div
+{
+    margin: 5px;
+}
+
+.UMyChart_SearchIndex_Group_Span
+{
+   
+    margin-left: 5px;
+    cursor: pointer;
+}
+
+
+/*
+    Copyright (c) 2018 jones
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
+
+   开源项目 https://github.com/jones2000/HQChart
+ 
+   jones_2000@163.com
+
+   内置修改指标参数对话框
+*/
+
+
+.UMyChart_ModifyIndexParam_Dialog_Div
+{
+    font-family: "微软雅黑";
+    /*display: flex;*/
+    border: 1px solid; 
+    width:fit-content;
+    border-color: var(--HQChart-DialogModifyIndexParam-BorderColor);
+    visibility:hidden;
+    position: absolute;
+    background-color:var(--HQChart-DialogModifyIndexParam-BGColor);
+    left:1px;
+    top:1px;
+    z-index: 99;
+}
+
+.UMyChart_ModifyIndexParam_Title_Div
+{
+    padding-left: 2px;
+    height:20px;
+    border-bottom: 1px solid;
+    
+    display: flex;
+    cursor: default;
+    user-select: none;
+    background-color:var(--HQChart-DialogModifyIndexParam-TitleBGColor);
+}
+
+.UMyChart_ModifyIndexParam_Name_Div
+{
+    margin-left: 5px;
+    color:var(--HQChart-DialogModifyIndexParam-TitleColor);
+}
+
+.UMyChart_ModifyIndexParam_Close_Div
+{
+    margin-left: auto;
+    padding-right: 4px;
+    cursor:pointer;
+    color:var(--HQChart-DialogModifyIndexParam-CloseColor);
+}
+
+.UMyChart_ModifyIndexParam_Table_Div
+{
+    min-height:100px;
+    max-height: 500px;
+    width: 270px;
+    overflow-y:auto;  /*纵向滚动条始终显示 */
+}
+
+.UMyChart_ModifyIndexParam_Table
+{
+    border-spacing: 4px;
+    user-select: none;
+    font-size:13px;
+    width: 100%;
+}
+
+.UMyChart_ModifyIndexParam_Tbody
+{
+    
+}
+
+.UMyChart_ModifyIndexParam_Tr
+{
+    height: 25px;
+}
+
+.UMyChart_ModifyIndexParam_Name_Td
+{
+    width: 50px;
+}
+
+
+.UMyChart_ModifyIndexParam_Name_Span
+{
+    margin-left: 10px;
+    color:var(--HQChart-DialogModifyIndexParam-ParamNameColor);
+}
+
+.UMyChart_ModifyIndexParam_Value_Td
+{
+    
+}
+
+.UMyChart_ModifyIndexParam_Input
+{
+    margin-left: 10px;
+    margin-right: 10px;
+    border:0.5px solid;
+    line-height: 16px;
+    background-color: transparent;
+    width: 60px;
+    color:var(--HQChart-DialogModifyIndexParam-InputTextColor);
+}
+
+.UMyChart_ModifyIndexParam_Input::-webkit-outer-spin-button,
+.UMyChart_ModifyIndexParam_Input::-webkit-inner-spin-button
+{
+    -webkit-appearance: none;
+}
+
+.UMyChart_ModifyIndexParam_Button_Div
+{
+    border-top: 1px solid #ccc;
+    padding: 4px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.UMyChart_ModifyIndexParam_Button_Div button
+{
+    font-size: 12px;
+    padding: 2px 10px 3px;
+    border-radius: 10px;
+    border: 1px solid #ccc;
+    cursor: pointer;
+}
+
+
+/*
+
+*/
+.UMyChart_FrameToolbar_Div
+{
+    visibility:hidden;
+    position: absolute;
+    background-color: var(--HQChart-DivFrameToolbar-BGColor);
+    z-index: 10;
+    line-height: 24px;
+    left:1px;
+    top:1px;
+    display: flex;
+}
+
+.UMyChart_FrameToolbar_Div_Button
+{
+    padding-left: 2px;
+}
+
+.UMyChart_FrameToolbar_Span_Button
+{
+    font-size: 14px;
+    color: var(--HQChart-DivFrameToolbar-TextColor);
+}
+
+.UMyChart_FrameToolbar_Span_Button:hover
+{
+    font-size: 14px;
+    color: var(--HQChart-DivFrameToolbar-HoverTextColor);
+}
+
+
+.UMyChart_Toolbar_Tooltip_Div
+{
+    visibility:hidden;
+    background-color: var(--HQChart-ToolbarTooltip-BGColor);
+    color: var(--HQChart-ToolbarTooltip-TextColor);
+    border: 1px solid var(--HQChart-ToolbarTooltip-BorderColor);
+    text-align: center;
+    border-radius: 2px;
+    padding: 2px;
+    position: absolute;
+    z-index: 50;
+    font-size: 14px;
+    white-space: nowrap;
+    left:1px;
+    top:1px;
+}
+
+
+
+:root 
+{
+    /*
+        JSDialogDrawTool 配色 画图工具
+    */
+
+    --HQChart-DialogDrawTool-BGColor: rgb(250,250,250);
+    --HQChart-DialogDrawTool-BorderColor: rgb(20,20,20);
+    --HQChart-DialogDrawTool-Color: rgb(20,20,20);
+    --HQChart-DialogDrawTool-TitleColor: rgb(250,250,250);
+    --HQChart-DialogDrawTool-TitleBGColor: rgb(200, 66, 69);
+    --HQChart-DialogDrawTool-CloseColor:rgb(180,180,180);
+    --HQChart-DialogDrawTool-ButtonColor:rgb(77,77,77);
+    --HQChart-DialogDrawTool-ButtonBorderColor:rgb(128,128,128);
+    --HQChart-DialogDrawTool-Selected_ButtonColor:rgb(255,255,255);
+    --HQChart-DialogDrawTool-Selected_ButtonBGColor:rgb(234,85,4);
+    --HQChart-DialogDrawTool-Selected_ButtonBorderColor:rgb(128,128,128);
+    --HQChart-DialogDrawTool-DividingLineColor:rgb(204,204,204);
+
+    /*
+        JSDialogModifyDraw
+    */
+
+    --HQChart-DialogModifyDraw-BGColor: rgb(250,250,250);
+    --HQChart-DialogModifyDraw-BorderColor: rgb(20,20,20);
+    --HQChart-DialogModifyDraw-DragColor: rgb(250,250,250);
+    --HQChart-DialogModifyDraw-DragBGColor: rgb(200, 66, 69);
+    --HQChart-DialogModifyDraw-ButtonColor:rgb(77,77,77);
+    --HQChart-DialogModifyDraw-ButtonBorderColor:rgb(20,20,20);
+    --HQChart-DialogModifyDraw-UnlockButtonColor:rgb(220,220,220);
+
+    --HQChart-DialogModifyDraw-Tooltip-BGColor: rgb(250,250,250);
+    --HQChart-DialogModifyDraw-Tooltip-BorderColor: rgb(20,20,20);
+    --HQChart-DialogModifyDraw-Tooltip-Color: rgb(20,20,20);
+
+    /*
+        JSDialogSearchIndex
+    */
+
+    --HQChart-DialogSearchIndex-BGColor: rgb(250,250,250);
+    --HQChart-DialogSearchIndex-BorderColor: rgb(20,20,20);
+    --HQChart-DialogSearchIndex-Color: rgb(20,20,20);
+    --HQChart-DialogSearchIndex-TitleColor: rgb(250,250,250);
+    --HQChart-DialogSearchIndex-TitleBGColor: rgb(200, 66, 69);
+    --HQChart-DialogSearchIndex-CloseColor:rgb(180,180,180);
+    --HQChart-DialogSearchIndex-InputColor:rgb(20,20,20);
+
+
+    /*
+        JSDialogModifyIndexParam
+    */
+    --HQChart-DialogModifyIndexParam-BGColor: rgb(250,250,250);
+    --HQChart-DialogModifyIndexParam-BorderColor: rgb(20,20,20);
+    --HQChart-DialogModifyIndexParam-Color: rgb(20,20,20);
+    --HQChart-DialogModifyIndexParam-TitleColor: rgb(250,250,250);
+    --HQChart-DialogModifyIndexParam-TitleBGColor: rgb(200, 66, 69);
+    --HQChart-DialogModifyIndexParam-CloseColor:rgb(180,180,180);
+    --HQChart-DialogModifyIndexParam-ParamNameColor:rgb(20,20,20);
+    --HQChart-DialogModifyIndexParam-InputTextColor:rgb(20,20,20);
+
+    /*
+        JSDivFrameToolbar
+    */
+    --HQChart-DivFrameToolbar-BGColor:transparent;
+    --HQChart-DivFrameToolbar-TextColor:rgb(0,0,0);
+    --HQChart-DivFrameToolbar-HoverTextColor:rgb(30,144,255);
+
+    /*
+        JSToolbarTooltip
+    */
+    --HQChart-ToolbarTooltip-BGColor:rgb(255,255,255);
+    --HQChart-ToolbarTooltip-TextColor:rgb(71,71,71);
+    --HQChart-ToolbarTooltip-BorderColor:rgb(0,0,0);
+}
+
+/*
+    白色风格
+*/
+:root[hqchart_style='0'],
+:root[hqchart_style='defined']
+{
+    /*
+        JSDialogDrawTool 配色 画图工具
+    */
+
+    --HQChart-DialogDrawTool-BGColor: rgb(250,250,250);
+    --HQChart-DialogDrawTool-BorderColor: rgb(20,20,20);
+    --HQChart-DialogDrawTool-Color: rgb(20,20,20);
+    --HQChart-DialogDrawTool-TitleColor: rgb(250,250,250);
+    --HQChart-DialogDrawTool-TitleBGColor: rgb(200, 66, 69);
+    --HQChart-DialogDrawTool-ButtonColor:rgb(77,77,77);
+    --HQChart-DialogDrawTool-ButtonBorderColor:rgb(128,128,128);
+    --HQChart-DialogDrawTool-Selected_ButtonColor:rgb(255,255,255);
+    --HQChart-DialogDrawTool-Selected_ButtonBGColor:rgb(234,85,4);
+    --HQChart-DialogDrawTool-Selected_ButtonBorderColor:rgb(128,128,128);
+    --HQChart-DialogDrawTool-DividingLineColor:rgb(204,204,204);
+
+
+    
+    /*
+        JSDialogModifyDraw
+    */
+
+    --HQChart-DialogModifyDraw-BGColor: rgb(250,250,250);
+    --HQChart-DialogModifyDraw-BorderColor: rgb(20,20,20);
+    --HQChart-DialogModifyDraw-DragColor: rgb(250,250,250);
+    --HQChart-DialogModifyDraw-DragBGColor: rgb(200, 66, 69);
+    --HQChart-DialogModifyDraw-ButtonColor:rgb(77,77,77);
+    --HQChart-DialogModifyDraw-ButtonBorderColor:rgb(20,20,20);
+    --HQChart-DialogModifyDraw-UnlockButtonColor:rgb(220,220,220);
+
+    --HQChart-DialogModifyDraw-Tooltip-BGColor: rgb(250,250,250);
+    --HQChart-DialogModifyDraw-Tooltip-BorderColor: rgb(20,20,20);
+    --HQChart-DialogModifyDraw-Tooltip-Color: rgb(20,20,20);
+
+    /*
+        JSDialogSearchIndex
+    */
+
+    --HQChart-DialogSearchIndex-BGColor: rgb(250,250,250);
+    --HQChart-DialogSearchIndex-BorderColor: rgb(20,20,20);
+    --HQChart-DialogSearchIndex-Color: rgb(20,20,20);
+    --HQChart-DialogSearchIndex-TitleColor: rgb(250,250,250);
+    --HQChart-DialogSearchIndex-TitleBGColor: rgb(200, 66, 69);
+    --HQChart-DialogSearchIndex-CloseColor:rgb(180,180,180);
+    --HQChart-DialogSearchIndex-InputColor:rgb(20,20,20);
+
+
+    /*
+        JSDialogModifyIndexParam
+    */
+    --HQChart-DialogModifyIndexParam-BGColor: rgb(250,250,250);
+    --HQChart-DialogModifyIndexParam-BorderColor: rgb(20,20,20);
+    --HQChart-DialogModifyIndexParam-Color: rgb(20,20,20);
+    --HQChart-DialogModifyIndexParam-TitleColor: rgb(250,250,250);
+    --HQChart-DialogModifyIndexParam-TitleBGColor: rgb(200, 66, 69);
+    --HQChart-DialogModifyIndexParam-CloseColor:rgb(180,180,180);
+    --HQChart-DialogModifyIndexParam-ParamNameColor:rgb(20,20,20);
+    --HQChart-DialogModifyIndexParam-InputTextColor:rgb(20,20,20);
+
+
+    /*
+        JSDivFrameToolbar
+    */
+    --HQChart-DivFrameToolbar-BGColor:transparent;
+    --HQChart-DivFrameToolbar-TextColor:rgb(0,0,0);
+    --HQChart-DivFrameToolbar-HoverTextColor:rgb(30,144,255);
+    /*
+        JSToolbarTooltip
+    */
+    --HQChart-ToolbarTooltip-BGColor:rgb(255,255,255);
+    --HQChart-ToolbarTooltip-TextColor:rgb(71,71,71);
+    --HQChart-ToolbarTooltip-BorderColor:rgb(0,0,0);
+}
+
+/*
+    黑色风格
+*/
+:root[hqchart_style='1']
+{
+    /*
+        JSDialogDrawTool 配色 画图工具
+    */
+
+    --HQChart-DialogDrawTool-BGColor: rgb(38,38,38);
+    --HQChart-DialogDrawTool-BorderColor: rgb(170,170,170);
+    --HQChart-DialogDrawTool-Color: rgb(210,210,210);
+    --HQChart-DialogDrawTool-TitleColor: rgb(250,250,250);
+    --HQChart-DialogDrawTool-TitleBGColor: rgb(200, 66, 69);
+    --HQChart-DialogDrawTool-ButtonColor:rgb(110,110,110);
+    --HQChart-DialogDrawTool-ButtonBorderColor:rgb(99,99,99);
+    --HQChart-DialogDrawTool-Selected_ButtonColor:rgb(255,255,255);
+    --HQChart-DialogDrawTool-Selected_ButtonBGColor:rgb(234,85,4);
+    --HQChart-DialogDrawTool-Selected_ButtonBorderColor:rgb(128,128,128);
+    --HQChart-DialogDrawTool-DividingLineColor:rgb(150,150,150);
+
+    /*
+        JSDialogModifyDraw
+    */
+
+    --HQChart-DialogModifyDraw-BGColor:rgb(38,38,38);
+    --HQChart-DialogModifyDraw-BorderColor: rgb(170,170,170);
+    --HQChart-DialogModifyDraw-ButtonColor:rgb(110,110,110);
+    --HQChart-DialogModifyDraw-ButtonBorderColor:rgb(170,170,170);
+    --HQChart-DialogModifyDraw-UnlockButtonColor:rgb(60,60,60);
+
+    --HQChart-DialogModifyDraw-Tooltip-BGColor: rgb(38,38,38);
+    --HQChart-DialogModifyDraw-Tooltip-BorderColor: rgb(170,170,170);
+    --HQChart-DialogModifyDraw-Tooltip-Color: rgb(210,210,210);
+
+     /*
+        JSDialogSearchIndex
+    */
+
+    --HQChart-DialogSearchIndex-BGColor: rgb(38,38,38);
+    --HQChart-DialogSearchIndex-BorderColor: rgb(170,170,170);
+    --HQChart-DialogSearchIndex-Color: rgb(210,210,210);
+    --HQChart-DialogSearchIndex-TitleColor: rgb(250,250,250);
+    --HQChart-DialogSearchIndex-TitleBGColor: rgb(200, 66, 69);
+    --HQChart-DialogSearchIndex-InputColor:rgb(210,210,210);
+
+    /*
+        JSDialogModifyIndexParam
+    */
+
+    --HQChart-DialogModifyIndexParam-BGColor: rgb(38,38,38);
+    --HQChart-DialogModifyIndexParam-BorderColor: rgb(170,170,170);
+    --HQChart-DialogModifyIndexParam-Color: rgb(210,210,210);
+    --HQChart-DialogModifyIndexParam-TitleColor: rgb(250,250,250);
+    --HQChart-DialogModifyIndexParam-TitleBGColor: rgb(200, 66, 69);
+    --HQChart-DialogModifyIndexParam-ParamNameColor:rgb(210,210,210);
+    --HQChart-DialogModifyIndexParam-InputTextColor:rgb(210,210,210);
+
+    /*
+        JSDivFrameToolbar
+    */
+    --HQChart-DivFrameToolbar-BGColor:transparent;
+    --HQChart-DivFrameToolbar-TextColor:rgb(156,156,156);
+    --HQChart-DivFrameToolbar-HoverTextColor:rgb(255,255,255);
+    /*
+        JSToolbarTooltip
+    */
+    --HQChart-ToolbarTooltip-BGColor:rgb(32,32,32);
+    --HQChart-ToolbarTooltip-TextColor:rgb(204,204,204);
+    --HQChart-ToolbarTooltip-BorderColor:rgb(69,69,69);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+

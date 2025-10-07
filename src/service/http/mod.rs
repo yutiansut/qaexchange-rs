@@ -10,6 +10,7 @@ pub mod market;
 pub mod admin;
 pub mod management;
 pub mod auth;
+pub mod kline;
 
 use actix_web::{App, HttpServer as ActixHttpServer, middleware, web};
 use std::sync::Arc;

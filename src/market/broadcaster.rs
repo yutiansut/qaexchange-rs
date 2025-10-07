@@ -45,6 +45,14 @@ pub enum MarketDataEvent {
         price: f64,
         timestamp: i64,
     },
+
+    /// K线完成事件（用于实时推送）
+    KLineFinished {
+        instrument_id: String,
+        period: i32,  // HQChart周期格式 (0=日线, 4=1分钟, 5=5分钟等)
+        kline: super::kline::KLine,
+        timestamp: i64,
+    },
 }
 
 /// 订阅信息
@@ -136,12 +144,14 @@ impl MarketDataBroadcaster {
             MarketDataEvent::OrderBookUpdate { instrument_id, .. } => instrument_id,
             MarketDataEvent::Tick { instrument_id, .. } => instrument_id,
             MarketDataEvent::LastPrice { instrument_id, .. } => instrument_id,
+            MarketDataEvent::KLineFinished { instrument_id, .. } => instrument_id,
         };
 
         let channel = match &event {
             MarketDataEvent::OrderBookSnapshot { .. } | MarketDataEvent::OrderBookUpdate { .. } => "orderbook",
             MarketDataEvent::Tick { .. } => "tick",
             MarketDataEvent::LastPrice { .. } => "last_price",
+            MarketDataEvent::KLineFinished { .. } => "kline",
         };
 
         // 找到所有订阅了该合约和频道的订阅者

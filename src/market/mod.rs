@@ -8,6 +8,8 @@ pub mod snapshot_broadcaster;
 pub mod snapshot_generator;
 pub mod cache;
 pub mod recovery;
+pub mod kline;
+pub mod kline_actor;
 
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -82,6 +84,8 @@ pub struct MarketDataService {
     iceoryx_manager: Option<Arc<RwLock<crate::ipc::IceoryxManager>>>,
     /// 快照生成器（每秒级别市场快照）
     snapshot_generator: Option<Arc<snapshot_generator::MarketSnapshotGenerator>>,
+    /// K线管理器（实时K线聚合）
+    kline_manager: Arc<kline::KLineManager>,
 }
 
 impl MarketDataService {
@@ -94,6 +98,7 @@ impl MarketDataService {
             storage: None,
             iceoryx_manager: None,
             snapshot_generator: None,
+            kline_manager: Arc::new(kline::KLineManager::new()),
         }
     }
 
@@ -211,6 +216,7 @@ impl MarketDataService {
             storage: None,
             iceoryx_manager: None,
             snapshot_generator: None,
+            kline_manager: Arc::new(kline::KLineManager::new()),
         }
     }
 
@@ -586,6 +592,49 @@ impl MarketDataService {
             "total_asks": total_asks,
         }))
     }
+
+    /// 处理Tick数据并更新K线（成交时调用）
+    pub fn on_trade(&self, instrument_id: &str, price: f64, volume: i64) {
+        let timestamp_ms = chrono::Utc::now().timestamp_millis();
+
+        // 更新K线
+        let finished_klines = self.kline_manager.on_tick(instrument_id, price, volume, timestamp_ms);
+
+        // 记录完成的K线（可以发送到WebSocket订阅者）
+        for (period, kline) in finished_klines {
+            log::debug!(
+                "📊 [KLine] Finished {} {:?} K-line: O={:.2} H={:.2} L={:.2} C={:.2} V={}",
+                instrument_id,
+                period,
+                kline.open,
+                kline.high,
+                kline.low,
+                kline.close,
+                kline.volume
+            );
+
+            // TODO: 发送到 WebSocket DIFF 协议
+        }
+    }
+
+    /// 获取K线数据
+    pub fn get_klines(
+        &self,
+        instrument_id: &str,
+        period: kline::KLinePeriod,
+        count: usize,
+    ) -> Vec<kline::KLine> {
+        self.kline_manager.get_klines(instrument_id, period, count)
+    }
+
+    /// 获取当前未完成的K线
+    pub fn get_current_kline(
+        &self,
+        instrument_id: &str,
+        period: kline::KLinePeriod,
+    ) -> Option<kline::KLine> {
+        self.kline_manager.get_current_kline(instrument_id, period)
+    }
 }
 
 // 重新导出
@@ -594,3 +643,4 @@ pub use snapshot_broadcaster::SnapshotBroadcastService;
 pub use snapshot_generator::{MarketSnapshot, MarketSnapshotGenerator, SnapshotGeneratorConfig};
 pub use cache::{MarketDataCache, CacheStatsSnapshot};
 pub use recovery::{MarketDataRecovery, RecoveredMarketData, RecoveryStats};
+pub use kline_actor::{KLineActor, OnTrade, GetKLines, GetCurrentKLine};

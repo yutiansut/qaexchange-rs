@@ -34,7 +34,7 @@ use super::diff_messages::{DiffClientMessage, DiffServerMessage};
 use crate::protocol::diff::snapshot::SnapshotManager;
 use crate::user::UserManager;
 use crate::exchange::{OrderRouter, AccountManager};
-use crate::market::MarketDataBroadcaster;
+use crate::market::{MarketDataBroadcaster, kline_actor::KLineActor};
 
 /// DIFF 协议消息处理器
 pub struct DiffHandler {
@@ -52,6 +52,9 @@ pub struct DiffHandler {
 
     /// 市场数据广播器
     pub(crate) market_broadcaster: Option<Arc<MarketDataBroadcaster>>,
+
+    /// K线Actor地址（用于查询历史K线）
+    pub(crate) kline_actor: Option<Addr<KLineActor>>,
 }
 
 impl DiffHandler {
@@ -63,6 +66,7 @@ impl DiffHandler {
             account_mgr,
             order_router: None,
             market_broadcaster: None,
+            kline_actor: None,
         }
     }
 
@@ -81,6 +85,12 @@ impl DiffHandler {
     /// 设置市场数据广播器
     pub fn with_market_broadcaster(mut self, market_broadcaster: Arc<MarketDataBroadcaster>) -> Self {
         self.market_broadcaster = Some(market_broadcaster);
+        self
+    }
+
+    /// 设置K线Actor
+    pub fn with_kline_actor(mut self, kline_actor: Addr<KLineActor>) -> Self {
+        self.kline_actor = Some(kline_actor);
         self
     }
 
@@ -761,7 +771,7 @@ impl DiffHandler {
         }
     }
 
-    /// 处理K线订阅请求
+    /// 处理K线订阅请求（DIFF协议 set_chart）
     async fn handle_set_chart(
         &self,
         user_id: &str,
@@ -791,74 +801,140 @@ impl DiffHandler {
                 }
             });
 
-            let rtn_data = DiffServerMessage::RtnData {
-                data: vec![notify_patch],
-            };
-
-            ctx_addr.do_send(SendDiffMessage { message: rtn_data });
+            self.snapshot_mgr.push_patch(user_id, notify_patch).await;
             log::info!("User {} removed chart {}", user_id, chart_id);
             return;
         }
 
-        // 确定周期类型
-        let period_name = if duration == 0 {
-            "tick"
-        } else if duration == 60_000_000_000 {
-            "1m"
-        } else if duration == 300_000_000_000 {
-            "5m"
-        } else if duration == 900_000_000_000 {
-            "15m"
-        } else if duration == 3600_000_000_000 {
-            "1h"
-        } else if duration == 86400_000_000_000 {
-            "1d"
-        } else {
-            "custom"
-        };
+        // 转换duration(ns) 到 KLinePeriod
+        let period = crate::market::kline::KLinePeriod::from_duration_ns(duration);
 
-        // 发送订阅确认和初始K线数据
-        let notify_patch = serde_json::json!({
-            "notify": {
-                "chart_set": {
-                    "type": "MESSAGE",
-                    "level": "INFO",
-                    "code": 0,
-                    "content": format!("Chart {} set for {} instruments ({})", chart_id, instruments.len(), period_name)
-                }
-            },
-            "klines": {
-                // 这里应该包含初始K线数据
-                // 实际实现中应该从历史数据存储中查询
-                instruments[0].clone(): {
-                    duration.to_string(): {
-                        "last_id": 0,
-                        "data": {}
+        if period.is_none() {
+            // 不支持的周期
+            let notify_patch = serde_json::json!({
+                "notify": {
+                    "chart_error": {
+                        "type": "MESSAGE",
+                        "level": "ERROR",
+                        "code": 5001,
+                        "content": format!("Unsupported duration: {}", duration)
                     }
                 }
-            }
-        });
+            });
 
-        let rtn_data = DiffServerMessage::RtnData {
-            data: vec![notify_patch],
-        };
+            self.snapshot_mgr.push_patch(user_id, notify_patch).await;
+            log::warn!("Unsupported K-line duration: {}", duration);
+            return;
+        }
 
-        ctx_addr.do_send(SendDiffMessage { message: rtn_data });
+        let period = period.unwrap();
+        let period_name = format!("{:?}", period);
 
-        log::info!(
-            "User {} set chart {}: instruments={:?}, duration={}, view_width={}, period={}",
-            user_id,
-            chart_id,
-            instruments,
-            duration,
-            view_width,
-            period_name
-        );
+        // 查询历史K线数据（从KLineActor）
+        if let Some(ref kline_actor) = self.kline_actor {
+            // 取第一个合约作为主合约
+            let instrument_id = instruments[0].clone();
+            let count = view_width.max(100) as usize; // 至少100根
 
-        // TODO: 实际应该：
-        // 1. 从历史数据查询最近的K线数据
-        // 2. 持续订阅并推送新的K线更新
-        // 3. 管理view_width（滚动窗口）
+            // 异步查询K线
+            let kline_actor_clone = kline_actor.clone();
+            let snapshot_mgr = self.snapshot_mgr.clone();
+            let user_id_str = user_id.to_string();
+            let chart_id_clone = chart_id.clone();
+            let instruments_clone = instruments.clone();
+
+            tokio::spawn(async move {
+                // 查询历史K线
+                let klines = kline_actor_clone.send(crate::market::GetKLines {
+                    instrument_id: instrument_id.clone(),
+                    period,
+                    count,
+                }).await;
+
+                match klines {
+                    Ok(klines) => {
+                        // 转换为DIFF格式
+                        let mut kline_data = serde_json::Map::new();
+                        let mut kline_id = 0i64;
+
+                        for kline in klines.iter() {
+                            kline_data.insert(
+                                kline_id.to_string(),
+                                serde_json::json!({
+                                    "datetime": kline.timestamp,
+                                    "open": kline.open,
+                                    "high": kline.high,
+                                    "low": kline.low,
+                                    "close": kline.close,
+                                    "volume": kline.volume,
+                                    "open_oi": 0,  // TODO: 持仓量
+                                    "close_oi": 0,
+                                })
+                            );
+                            kline_id += 1;
+                        }
+
+                        // 发送K线数据
+                        let kline_patch = serde_json::json!({
+                            "notify": {
+                                "chart_set": {
+                                    "type": "MESSAGE",
+                                    "level": "INFO",
+                                    "code": 0,
+                                    "content": format!("Chart {} set for {} instruments", chart_id_clone, instruments_clone.len())
+                                }
+                            },
+                            "klines": {
+                                instrument_id: {
+                                    duration.to_string(): {
+                                        "last_id": kline_id - 1,
+                                        "data": kline_data
+                                    }
+                                }
+                            }
+                        });
+
+                        snapshot_mgr.push_patch(&user_id_str, kline_patch).await;
+                        log::info!(
+                            "📊 [DIFF] User {} set chart {}: instrument={}, period={:?}, bars={}",
+                            user_id_str, chart_id_clone, instrument_id, period, klines.len()
+                        );
+
+                        // TODO: 订阅实时K线更新（通过MarketDataBroadcaster的kline频道）
+                    }
+                    Err(e) => {
+                        let error_patch = serde_json::json!({
+                            "notify": {
+                                "chart_error": {
+                                    "type": "MESSAGE",
+                                    "level": "ERROR",
+                                    "code": 5002,
+                                    "content": format!("Failed to fetch K-line data: {}", e)
+                                }
+                            }
+                        });
+
+                        snapshot_mgr.push_patch(&user_id_str, error_patch).await;
+                        log::error!("Failed to fetch K-line data for chart {}: {}", chart_id_clone, e);
+                    }
+                }
+            });
+        } else {
+            // KLineActor 不可用
+            let notify_patch = serde_json::json!({
+                "notify": {
+                    "service_error": {
+                        "type": "MESSAGE",
+                        "level": "ERROR",
+                        "code": 5003,
+                        "content": "K-line service is not available"
+                    }
+                }
+            });
+
+            self.snapshot_mgr.push_patch(user_id, notify_patch).await;
+            log::error!("K-line service not available for set_chart request");
+        }
     }
 
     /// 将 MarketDataEvent 转换为 DIFF 格式的 JSON patch
@@ -932,6 +1008,34 @@ impl DiffHandler {
                         }
                     }))
                 }
+            }
+
+            MarketDataEvent::KLineFinished { instrument_id, period, kline, timestamp } => {
+                // 转换为 DIFF klines 格式（增量推送新K线）
+                let duration_ns = crate::market::kline::KLinePeriod::from_int(*period)
+                    .map(|p| p.to_duration_ns())
+                    .unwrap_or(0);
+
+                Some(serde_json::json!({
+                    "klines": {
+                        instrument_id: {
+                            duration_ns.to_string(): {
+                                "data": {
+                                    timestamp.to_string(): {
+                                        "datetime": kline.timestamp,
+                                        "open": kline.open,
+                                        "high": kline.high,
+                                        "low": kline.low,
+                                        "close": kline.close,
+                                        "volume": kline.volume,
+                                        "open_oi": 0,  // TODO: 持仓量
+                                        "close_oi": 0,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }))
             }
         }
     }
