@@ -22,7 +22,7 @@ const state = {
 
   // 配置
   config: {
-    url: process.env.VUE_APP_WS_URL || 'ws://localhost:8001/ws',
+    url: process.env.VUE_APP_WS_URL || 'ws://localhost:8095/ws/diff',
     autoConnect: true,
     autoReconnect: true,
     reconnectInterval: 3000,
@@ -96,8 +96,14 @@ const actions = {
   /**
    * 初始化 WebSocket
    */
-  async initWebSocket({ commit, rootState, dispatch }) {
+  async initWebSocket({ state, commit, rootState, dispatch }) {
     console.log('[WebSocket] Initializing...')
+
+    // ✅ 防止重复创建：如果已有连接，先销毁
+    if (state.ws) {
+      console.warn('[WebSocket] Already initialized, destroying existing instance...')
+      await dispatch('destroyWebSocket')
+    }
 
     // 获取当前用户 ID
     const userId = rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id)
@@ -168,12 +174,18 @@ const actions = {
    * 连接 WebSocket
    */
   async connectWebSocket({ state, dispatch }) {
+    console.log('[WebSocket] connectWebSocket called, current state:', {
+      hasWs: !!state.ws,
+      connectionState: state.connectionState
+    })
+
     if (!state.ws) {
+      console.log('[WebSocket] No ws instance, initializing...')
       await dispatch('initWebSocket')
     }
 
     if (state.ws && state.connectionState !== 'CONNECTED') {
-      console.log('[WebSocket] Connecting...')
+      console.log('[WebSocket] Connecting... (state:', state.connectionState, ')')
       try {
         await state.ws.connect()
         console.log('[WebSocket] Connected successfully')
@@ -181,6 +193,8 @@ const actions = {
         console.error('[WebSocket] Connection failed:', error)
         throw error
       }
+    } else if (state.connectionState === 'CONNECTED') {
+      console.log('[WebSocket] Already connected, skipping connection')
     }
   },
 
@@ -299,14 +313,14 @@ const actions = {
     // 转换周期为纳秒（DIFF协议要求）
     const periodToNs = (period) => {
       switch (period) {
-        case 0: return 86400_000_000_000  // 日线
-        case 3: return 3_000_000_000      // 3秒
-        case 4: return 60_000_000_000     // 1分钟
-        case 5: return 300_000_000_000    // 5分钟
-        case 6: return 900_000_000_000    // 15分钟
-        case 7: return 1_800_000_000_000  // 30分钟
-        case 8: return 3_600_000_000_000  // 60分钟
-        default: return 300_000_000_000   // 默认5分钟
+        case 0: return 86400000000000  // 日线
+        case 3: return 3000000000      // 3秒
+        case 4: return 60000000000     // 1分钟
+        case 5: return 300000000000    // 5分钟
+        case 6: return 900000000000    // 15分钟
+        case 7: return 1800000000000   // 30分钟
+        case 8: return 3600000000000   // 60分钟
+        default: return 300000000000   // 默认5分钟
       }
     }
 
@@ -390,7 +404,7 @@ const actions = {
       console.log('[WebSocket] Fetching accounts for user:', userId)
 
       // 调用 HTTP API 获取账户列表
-      const apiUrl = process.env.VUE_APP_API_URL || 'http://localhost:8001'
+      const apiUrl = process.env.VUE_APP_API_URL || 'http://localhost:8094'
       const response = await fetch(`${apiUrl}/api/user/${userId}/accounts`)
 
       if (!response.ok) {

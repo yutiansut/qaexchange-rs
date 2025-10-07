@@ -631,7 +631,7 @@ export default {
 
         // 将 K线数据转换为数组格式（HQChart 需要）
         const klineArray = Object.values(periodKlines.data).map(k => ({
-          datetime: k.datetime / 1_000_000,  // 纳秒转毫秒
+          datetime: k.datetime / 1000000,  // 纳秒转毫秒
           open: k.open,
           high: k.high,
           low: k.low,
@@ -902,14 +902,14 @@ export default {
     // 转换周期为纳秒（DIFF协议要求）
     periodToNs(period) {
       switch (period) {
-        case 0: return 86400_000_000_000  // 日线
-        case 3: return 3_000_000_000      // 3秒
-        case 4: return 60_000_000_000     // 1分钟
-        case 5: return 300_000_000_000    // 5分钟
-        case 6: return 900_000_000_000    // 15分钟
-        case 7: return 1_800_000_000_000  // 30分钟
-        case 8: return 3_600_000_000_000  // 60分钟
-        default: return 300_000_000_000   // 默认5分钟
+        case 0: return 86400000000000  // 日线
+        case 3: return 3000000000      // 3秒
+        case 4: return 60000000000     // 1分钟
+        case 5: return 300000000000    // 5分钟
+        case 6: return 900000000000    // 15分钟
+        case 7: return 1800000000000   // 30分钟
+        case 8: return 3600000000000   // 60分钟
+        default: return 300000000000   // 默认5分钟
       }
     },
 

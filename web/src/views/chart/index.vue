@@ -129,7 +129,7 @@ export default {
 
         // 转换为数组格式
         const klineArray = Object.values(periodKlines.data).map(k => ({
-          datetime: k.datetime / 1_000_000,  // 纳秒转毫秒
+          datetime: k.datetime / 1000000,  // 纳秒转毫秒
           open: k.open,
           high: k.high,
           low: k.low,
@@ -205,14 +205,14 @@ export default {
     // 转换周期为纳秒
     periodToNs(period) {
       switch (period) {
-        case 0: return 86400_000_000_000
-        case 3: return 3_000_000_000
-        case 4: return 60_000_000_000
-        case 5: return 300_000_000_000
-        case 6: return 900_000_000_000
-        case 7: return 1_800_000_000_000
-        case 8: return 3_600_000_000_000
-        default: return 300_000_000_000
+        case 0: return 86400000000000
+        case 3: return 3000000000
+        case 4: return 60000000000
+        case 5: return 300000000000
+        case 6: return 900000000000
+        case 7: return 1800000000000
+        case 8: return 3600000000000
+        default: return 300000000000
       }
     },
 
