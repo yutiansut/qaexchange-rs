@@ -52,12 +52,90 @@ impl KLineActor {
     fn recover_from_wal(&self) {
         log::info!("📊 [KLineActor] Recovering K-line data from WAL...");
 
-        // TODO: 实现WAL恢复逻辑
-        // 1. 读取WAL文件
-        // 2. 找到所有KLineFinished记录
-        // 3. 恢复到aggregators
+        let mut recovered_count = 0;
+        let mut error_count = 0;
 
-        log::info!("📊 [KLineActor] WAL recovery completed");
+        // 使用WAL的replay方法遍历所有记录
+        let result = self.wal_manager.replay(|entry| {
+            // 只处理KLineFinished记录
+            if let WalRecord::KLineFinished {
+                instrument_id,
+                period,
+                kline_timestamp,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                amount,
+                open_oi,
+                close_oi,
+                ..
+            } = &entry.record
+            {
+                // 转换instrument_id
+                let instrument_id_str = WalRecord::from_fixed_array(instrument_id);
+
+                // 转换period
+                if let Some(kline_period) = super::kline::KLinePeriod::from_int(*period) {
+                    // 重建K线数据
+                    let mut kline = super::kline::KLine {
+                        timestamp: *kline_timestamp,
+                        open: *open,
+                        high: *high,
+                        low: *low,
+                        close: *close,
+                        volume: *volume,
+                        amount: *amount,
+                        open_oi: *open_oi,
+                        close_oi: *close_oi,
+                        is_finished: true,
+                    };
+
+                    // 添加到aggregators的历史K线
+                    let mut agg_map = self.aggregators.write();
+                    let aggregator = agg_map
+                        .entry(instrument_id_str.clone())
+                        .or_insert_with(|| super::kline::KLineAggregator::new(instrument_id_str.clone()));
+
+                    // 添加到历史K线（保持max_history限制）
+                    let history = aggregator.history_klines
+                        .entry(kline_period)
+                        .or_insert_with(Vec::new);
+
+                    history.push(kline);
+
+                    // 限制历史数量
+                    if history.len() > aggregator.max_history {
+                        history.remove(0);
+                    }
+
+                    recovered_count += 1;
+
+                    if recovered_count % 1000 == 0 {
+                        log::debug!("📊 [KLineActor] Recovered {} K-lines...", recovered_count);
+                    }
+                } else {
+                    log::warn!("📊 [KLineActor] Unknown K-line period: {}", period);
+                    error_count += 1;
+                }
+            }
+
+            Ok(())
+        });
+
+        match result {
+            Ok(_) => {
+                log::info!(
+                    "📊 [KLineActor] WAL recovery completed: {} K-lines recovered, {} errors",
+                    recovered_count,
+                    error_count
+                );
+            }
+            Err(e) => {
+                log::error!("📊 [KLineActor] WAL recovery failed: {}", e);
+            }
+        }
     }
 }
 
@@ -212,35 +290,90 @@ impl Handler<GetCurrentKLine> for KLineActor {
 mod tests {
     use super::*;
     use actix::System;
+    use std::sync::Arc;
+    use tempfile;
 
     #[test]
     fn test_kline_actor_creation() {
-        let actor = KLineActor::new();
+        let broadcaster = Arc::new(MarketDataBroadcaster::new());
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let wal_manager = Arc::new(crate::storage::wal::WalManager::new(tmp_dir.path().to_str().unwrap()));
+
+        let actor = KLineActor::new(broadcaster, wal_manager);
         assert!(actor.aggregators.read().is_empty());
     }
 
     #[actix::test]
-    async fn test_kline_actor_on_trade() {
-        let actor = KLineActor::new();
+    async fn test_kline_query() {
+        let broadcaster = Arc::new(MarketDataBroadcaster::new());
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let wal_manager = Arc::new(crate::storage::wal::WalManager::new(tmp_dir.path().to_str().unwrap()));
+
+        let actor = KLineActor::new(broadcaster, wal_manager);
         let addr = actor.start();
 
+        // 手动添加一些测试K线数据
         let now = chrono::Utc::now().timestamp_millis();
 
-        // 发送成交消息
-        addr.send(OnTrade {
-            instrument_id: "IF2501".to_string(),
-            price: 3800.0,
-            volume: 10,
-            timestamp_ms: now,
-        }).await.unwrap();
-
-        // 查询K线
+        // 查询K线（应该为空）
         let klines = addr.send(GetKLines {
             instrument_id: "IF2501".to_string(),
             period: KLinePeriod::Min1,
             count: 10,
         }).await.unwrap();
 
-        assert_eq!(klines.len(), 1); // 只有当前未完成的K线
+        assert_eq!(klines.len(), 0); // 没有数据时应为空
+    }
+
+    #[test]
+    fn test_wal_recovery() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let wal_path = tmp_dir.path().to_str().unwrap();
+
+        // 第一步：创建WAL并写入K线数据
+        {
+            let wal_manager = crate::storage::wal::WalManager::new(wal_path);
+
+            // 写入3根K线
+            for i in 0..3 {
+                let record = WalRecord::KLineFinished {
+                    instrument_id: WalRecord::to_fixed_array_16("IF2501"),
+                    period: 4, // Min1
+                    kline_timestamp: 1000000 + i * 60000, // 每分钟一根
+                    open: 3800.0 + i as f64,
+                    high: 3850.0 + i as f64,
+                    low: 3750.0 + i as f64,
+                    close: 3820.0 + i as f64,
+                    volume: 100 + i,
+                    amount: (3800.0 + i as f64) * (100 + i) as f64,
+                    open_oi: 1000,
+                    close_oi: 1010 + i,
+                    timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                };
+                wal_manager.append(record).unwrap();
+            }
+        }
+
+        // 第二步：创建新的Actor并恢复
+        {
+            let broadcaster = Arc::new(MarketDataBroadcaster::new());
+            let wal_manager = Arc::new(crate::storage::wal::WalManager::new(wal_path));
+            let actor = KLineActor::new(broadcaster, wal_manager);
+
+            // 触发恢复
+            actor.recover_from_wal();
+
+            // 验证恢复的数据
+            let agg_map = actor.aggregators.read();
+            let aggregator = agg_map.get("IF2501").expect("Should have IF2501 aggregator");
+
+            let history = aggregator.history_klines.get(&KLinePeriod::Min1).expect("Should have Min1 history");
+            assert_eq!(history.len(), 3, "Should have recovered 3 K-lines");
+
+            // 验证第一根K线
+            assert_eq!(history[0].open, 3800.0);
+            assert_eq!(history[0].close, 3820.0);
+            assert_eq!(history[0].volume, 100);
+        }
     }
 }

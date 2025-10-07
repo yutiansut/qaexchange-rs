@@ -195,10 +195,10 @@ pub struct KLineAggregator {
     current_klines: HashMap<KLinePeriod, KLine>,
 
     /// 各周期的历史K线（最多保留1000根）
-    history_klines: HashMap<KLinePeriod, Vec<KLine>>,
+    pub(crate) history_klines: HashMap<KLinePeriod, Vec<KLine>>,
 
     /// 最大历史K线数量
-    max_history: usize,
+    pub(crate) max_history: usize,
 }
 
 impl KLineAggregator {
@@ -401,5 +401,115 @@ mod tests {
         let current = manager.get_current_kline("IF2501", KLinePeriod::Min1);
         assert!(current.is_some());
         assert_eq!(current.unwrap().volume, 15);
+    }
+
+    #[test]
+    fn test_kline_finish() {
+        let mut agg = KLineAggregator::new("IF2501".to_string());
+
+        // 对齐到分钟边界
+        let base_time = (chrono::Utc::now().timestamp_millis() / 60000) * 60000;
+
+        // 第一分钟的tick
+        agg.on_tick(3800.0, 10, base_time + 1000);
+        agg.on_tick(3810.0, 5, base_time + 30000);
+
+        // 跨到下一分钟 - 应该完成第一根K线
+        let finished = agg.on_tick(3820.0, 8, base_time + 61000);
+
+        // 至少会完成3s周期的K线
+        assert!(finished.len() > 0, "Should finish at least one K-line");
+
+        // 检查是否有1分钟K线完成
+        let min1_finished = finished.iter().find(|(period, _)| *period == KLinePeriod::Min1);
+        assert!(min1_finished.is_some(), "Should finish 1-minute K-line");
+
+        let (_, kline) = min1_finished.unwrap();
+        assert_eq!(kline.open, 3800.0);
+        assert_eq!(kline.close, 3810.0);
+        assert_eq!(kline.high, 3810.0);
+        assert_eq!(kline.low, 3800.0);
+        assert_eq!(kline.volume, 15);
+        assert!(kline.is_finished);
+    }
+
+    #[test]
+    fn test_multiple_periods() {
+        let mut agg = KLineAggregator::new("IF2501".to_string());
+
+        let base_time = (chrono::Utc::now().timestamp_millis() / 300000) * 300000; // 对齐到5分钟
+
+        // 填充5分钟的数据
+        for i in 0..5 {
+            let tick_time = base_time + i * 60000 + 1000; // 每分钟一个tick
+            agg.on_tick(3800.0 + i as f64, 10, tick_time);
+        }
+
+        // 跨到下一个5分钟 - 应该完成多个周期的K线
+        let finished = agg.on_tick(3900.0, 10, base_time + 301000);
+
+        // 应该完成3s, 1min, 5min周期的K线
+        assert!(finished.len() >= 3, "Should finish multiple periods");
+
+        // 验证有5分钟K线
+        let min5_finished = finished.iter().find(|(period, _)| *period == KLinePeriod::Min5);
+        assert!(min5_finished.is_some(), "Should finish 5-minute K-line");
+    }
+
+    #[test]
+    fn test_open_interest_update() {
+        let mut kline = KLine::new(1000000, 3800.0);
+
+        // 第一次更新持仓量
+        kline.update_open_interest(1000);
+        assert_eq!(kline.open_oi, 1000);
+        assert_eq!(kline.close_oi, 1000);
+
+        // 第二次更新持仓量
+        kline.update_open_interest(1050);
+        assert_eq!(kline.open_oi, 1000); // 起始持仓不变
+        assert_eq!(kline.close_oi, 1050); // 结束持仓更新
+    }
+
+    #[test]
+    fn test_period_conversion() {
+        // 测试HQChart格式转换
+        assert_eq!(KLinePeriod::Day.to_int(), 0);
+        assert_eq!(KLinePeriod::Sec3.to_int(), 3);
+        assert_eq!(KLinePeriod::Min1.to_int(), 4);
+        assert_eq!(KLinePeriod::Min5.to_int(), 5);
+
+        assert_eq!(KLinePeriod::from_int(0), Some(KLinePeriod::Day));
+        assert_eq!(KLinePeriod::from_int(4), Some(KLinePeriod::Min1));
+
+        // 测试DIFF协议纳秒转换
+        assert_eq!(KLinePeriod::Sec3.to_duration_ns(), 3_000_000_000);
+        assert_eq!(KLinePeriod::Min1.to_duration_ns(), 60_000_000_000);
+
+        assert_eq!(
+            KLinePeriod::from_duration_ns(60_000_000_000),
+            Some(KLinePeriod::Min1)
+        );
+    }
+
+    #[test]
+    fn test_history_limit() {
+        let mut agg = KLineAggregator::new("IF2501".to_string());
+
+        let base_time = (chrono::Utc::now().timestamp_millis() / 60000) * 60000;
+
+        // 生成1005根K线（超过max_history=1000）
+        for i in 0..1005 {
+            let tick_time = base_time + i * 60000;
+            agg.on_tick(3800.0, 10, tick_time);
+        }
+
+        // 检查历史K线数量
+        let history = agg.get_history_klines(KLinePeriod::Min1, 10000);
+        assert!(
+            history.len() <= 1000,
+            "History should be limited to max_history (1000), got {}",
+            history.len()
+        );
     }
 }
