@@ -891,7 +891,7 @@ impl DiffHandler {
                                 }
                             },
                             "klines": {
-                                instrument_id: {
+                                instrument_id.clone(): {
                                     duration.to_string(): {
                                         "last_id": last_kline_id,
                                         "data": kline_data
