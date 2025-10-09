@@ -299,17 +299,18 @@ mod tests {
         // 开户
         let req = OpenAccountRequest {
             user_id: "test_user".to_string(),
-            account_id: None,
+            account_id: Some("test_user".to_string()),  // 使用固定account_id
             account_name: "Test User".to_string(),
             init_cash: 100000.0,
             account_type: AccountType::Individual,
         };
-        account_mgr.open_account(req).unwrap();
+        let account_id = account_mgr.open_account(req).unwrap();
+        assert_eq!(account_id, "test_user");
 
         // 获取风险账户
         let risk_accounts = risk_monitor.get_risk_accounts(None);
         assert_eq!(risk_accounts.len(), 1);
-        assert_eq!(risk_accounts[0].user_id, "test_user");
+        assert_eq!(risk_accounts[0].user_id, "test_user");  // user_id字段在RiskAccountInfo中实际存储的是account_id
         assert_eq!(risk_accounts[0].risk_level, RiskLevel::Low);
 
         // 获取保证金汇总

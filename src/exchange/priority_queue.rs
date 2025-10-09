@@ -57,6 +57,9 @@ pub struct PriorityOrderQueue {
     /// 大额订单阈值（金额）
     critical_amount_threshold: f64,
 
+    /// 小额订单阈值（金额），小于此值为 Low 优先级
+    low_amount_threshold: f64,
+
     /// 统计：队列长度峰值
     max_queue_length: Arc<Mutex<usize>>,
 }
@@ -75,6 +78,7 @@ impl PriorityOrderQueue {
             low_queue_limit,
             vip_users: Arc::new(Mutex::new(Vec::new())),
             critical_amount_threshold,
+            low_amount_threshold: 500.0,  // 默认500以下为低优先级
             max_queue_length: Arc::new(Mutex::new(0)),
         }
     }
@@ -114,7 +118,13 @@ impl PriorityOrderQueue {
             return OrderPriority::Critical;
         }
 
-        // 3. 默认 → Normal
+        // 3. 小额订单 → Low
+        if order_amount < self.low_amount_threshold {
+            log::debug!("Small order detected: amount={:.2}", order_amount);
+            return OrderPriority::Low;
+        }
+
+        // 4. 中等订单 → Normal
         OrderPriority::Normal
     }
 
@@ -341,11 +351,12 @@ mod tests {
         let queue = PriorityOrderQueue::new(2, 1_000_000.0);  // 限制2个
 
         // 低优先级订单（价格×数量 < 阈值）
-        assert!(queue.enqueue(create_test_order("user1", 100.0, 10.0)));
-        assert!(queue.enqueue(create_test_order("user2", 100.0, 10.0)));
+        // 使用 10.0 * 10.0 = 100 < 500 (low_amount_threshold)
+        assert!(queue.enqueue(create_test_order("user1", 10.0, 10.0)));
+        assert!(queue.enqueue(create_test_order("user2", 10.0, 10.0)));
 
         // 第3个应该被拒绝（队列已满）
-        assert!(!queue.enqueue(create_test_order("user3", 100.0, 10.0)));
+        assert!(!queue.enqueue(create_test_order("user3", 10.0, 10.0)));
 
         let stats = queue.get_statistics();
         assert_eq!(stats.low_queue_length, 2);

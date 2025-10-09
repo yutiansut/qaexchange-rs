@@ -109,19 +109,21 @@ impl CapitalManager {
             return Err(ExchangeError::InvalidParameter("存款金额必须大于0".to_string()));
         }
 
-        // 获取账户当前余额
+        // 获取账户当前余额（通过QIFI slice计算）
         let balance_before = {
-            let account = self.account_mgr.get_account(&account_id)?;  // 改为get_account
-            let acc = account.read();
-            acc.accounts.balance
+            let qifi = self.account_mgr.get_qifi_slice(&account_id)?;
+            qifi.accounts.balance
         };
 
-        // 执行入金 (deposit内部也需要修改,但这里先保持调用)
+        // 执行入金
         let account = self.account_mgr.get_account(&account_id)?;
         account.write().deposit(amount);
 
-        // 获取交易后余额
-        let balance_after = balance_before + amount;
+        // 获取交易后余额（重新计算）
+        let balance_after = {
+            let qifi = self.account_mgr.get_qifi_slice(&account_id)?;
+            qifi.accounts.balance
+        };
 
         // 创建交易记录
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -177,11 +179,10 @@ impl CapitalManager {
             return Err(ExchangeError::InvalidParameter("取款金额必须大于0".to_string()));
         }
 
-        // 获取账户信息
+        // 获取账户当前余额和可用资金（通过QIFI slice计算）
         let (balance_before, available) = {
-            let account = self.account_mgr.get_account(&account_id)?;  // 改为get_account
-            let acc = account.read();
-            (acc.accounts.balance, acc.money)
+            let qifi = self.account_mgr.get_qifi_slice(&account_id)?;
+            (qifi.accounts.balance, qifi.accounts.available)
         };
 
         // 检查可用资金
@@ -195,8 +196,11 @@ impl CapitalManager {
         let account = self.account_mgr.get_account(&account_id)?;
         account.write().withdraw(amount);
 
-        // 获取交易后余额
-        let balance_after = balance_before - amount;
+        // 获取交易后余额（重新计算）
+        let balance_after = {
+            let qifi = self.account_mgr.get_qifi_slice(&account_id)?;
+            qifi.accounts.balance
+        };
 
         // 创建交易记录
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -299,6 +303,13 @@ mod tests {
         assert_eq!(deposit.balance_before, 10000.0);
         assert_eq!(deposit.balance_after, 15000.0);
         assert_eq!(deposit.status, TransactionStatus::Completed);
+
+        // 验证账户余额确实更新了（通过QIFI slice获取计算后的余额）
+        let actual_balance = {
+            let qifi = account_mgr.get_qifi_slice(&account_id).unwrap();
+            qifi.accounts.balance
+        };
+        assert_eq!(actual_balance, 15000.0, "Account balance should be updated after deposit");
 
         // 测试出金
         let withdrawal = capital_mgr.withdraw_with_record(
