@@ -414,17 +414,17 @@ watch: {
 ## 📚 参考资料
 
 **协议文档**：
-- [DIFF 协议规范](docs/04_api/websocket/diff_protocol.md)
-- [WebSocket API文档](docs/04_api/websocket/protocol.md)
+- [DIFF 协议规范](../04_api/websocket/diff_protocol.md)
+- [WebSocket API文档](../04_api/websocket/protocol.md)
 
 **技术文档**：
-- [K线聚合系统](docs/03_core_modules/market/kline.md)
-- [Actix Actor 架构](docs/02_architecture/actor_architecture.md)
-- [WAL 设计](docs/03_core_modules/storage/wal.md)
+- [K线聚合系统](../03_core_modules/market/kline.md)
+- [Actix Actor 架构](../02_architecture/actor_architecture.md)
+- [WAL 设计](../03_core_modules/storage/wal.md)
 
 **前端文档**：
-- [HQChart 集成](web/HQCHART_INTEGRATION.md)
-- [前端集成指南](docs/05_integration/frontend/integration_guide.md)
+- [HQChart 集成](../../web/HQCHART_INTEGRATION.md)
+- [前端集成指南](../05_integration/frontend/integration_guide.md)
 
 ---
 
