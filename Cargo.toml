@@ -132,10 +132,6 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# 并行编译优化
-[build]
-jobs = 8
-
 [[example]]
 name = "start_exchange"
 path = "examples/start_exchange.rs"
@@ -156,3 +152,11 @@ path = "examples/high_performance_demo.rs"
 name = "oltp_storage_bench"
 path = "benches/oltp_storage_bench.rs"
 harness = false
+
+[[bench]]
+name = "notification_serialization"
+path = "benches/notification_serialization.rs"
+
+[[bench]]
+name = "storage_bench"
+path = "benches/storage_bench.rs"
