@@ -585,6 +585,30 @@ impl AccountManager {
 
         Ok(())
     }
+
+    /// 获取某个合约的总持仓量（所有账户的多头+空头持仓量之和）
+    ///
+    /// # 参数
+    /// - `instrument_id`: 合约代码
+    ///
+    /// # 返回
+    /// 总持仓量（多头持仓量 + 空头持仓量）
+    pub fn get_instrument_open_interest(&self, instrument_id: &str) -> i64 {
+        let mut total_long: i64 = 0;
+        let mut total_short: i64 = 0;
+
+        // 遍历所有账户，累加持仓量
+        for entry in self.accounts.iter() {
+            let acc = entry.value().read();
+            if let Some(pos) = acc.get_position(instrument_id) {
+                total_long += pos.volume_long_unmut();
+                total_short += pos.volume_short_unmut();
+            }
+        }
+
+        // 返回总持仓量（多头+空头）
+        total_long + total_short
+    }
 }
 
 impl Default for AccountManager {

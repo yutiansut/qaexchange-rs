@@ -175,6 +175,9 @@ pub struct MarketSnapshotGenerator {
 
     /// 历史数据缓存（合约ID -> 日内统计）
     daily_stats: Arc<RwLock<HashMap<String, DailyStats>>>,
+
+    /// 账户管理器（用于获取持仓量）
+    account_manager: Option<Arc<crate::exchange::AccountManager>>,
 }
 
 /// 日内统计数据
@@ -209,7 +212,14 @@ impl MarketSnapshotGenerator {
             snapshot_rx: Arc::new(RwLock::new(rx)),
             snapshot_count: Arc::new(RwLock::new(0)),
             daily_stats: Arc::new(RwLock::new(HashMap::new())),
+            account_manager: None,
         }
+    }
+
+    /// 设置账户管理器（用于获取持仓量）
+    pub fn with_account_manager(mut self, account_manager: Arc<crate::exchange::AccountManager>) -> Self {
+        self.account_manager = Some(account_manager);
+        self
     }
 
     /// 启动快照生成器
@@ -319,11 +329,14 @@ impl MarketSnapshotGenerator {
         // 获取日内统计
         let mut daily_stats = self.daily_stats.write();
         let stats = daily_stats.entry(instrument_id.to_string()).or_insert_with(|| {
+            // 从撮合引擎获取昨收盘价
+            let pre_close = self.matching_engine.get_prev_close(instrument_id).unwrap_or(last_price);
+
             DailyStats {
                 open: last_price,
                 high: last_price,
                 low: last_price,
-                pre_close: last_price,  // TODO: 从配置或数据库获取昨收盘价
+                pre_close,
                 volume: 0,
                 turnover: 0.0,
             }
@@ -359,7 +372,10 @@ impl MarketSnapshotGenerator {
             pre_close: stats.pre_close,
             volume: stats.volume,
             turnover: stats.turnover,
-            open_interest: 0,  // TODO: 从持仓管理器获取
+            open_interest: self.account_manager
+                .as_ref()
+                .map(|mgr| mgr.get_instrument_open_interest(instrument_id))
+                .unwrap_or(0),
             upper_limit: stats.pre_close * 1.10,  // 假设10%涨停
             lower_limit: stats.pre_close * 0.90,  // 假设10%跌停
             ..Default::default()

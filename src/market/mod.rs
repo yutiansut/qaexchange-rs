@@ -86,6 +86,8 @@ pub struct MarketDataService {
     snapshot_generator: Option<Arc<snapshot_generator::MarketSnapshotGenerator>>,
     /// K线管理器（实时K线聚合）
     kline_manager: Arc<kline::KLineManager>,
+    /// 市场数据广播器（用于WebSocket推送）
+    broadcaster: Option<Arc<broadcaster::MarketDataBroadcaster>>,
 }
 
 impl MarketDataService {
@@ -99,6 +101,7 @@ impl MarketDataService {
             iceoryx_manager: None,
             snapshot_generator: None,
             kline_manager: Arc::new(kline::KLineManager::new()),
+            broadcaster: None,
         }
     }
 
@@ -118,6 +121,13 @@ impl MarketDataService {
     pub fn with_iceoryx(mut self, manager: Arc<RwLock<crate::ipc::IceoryxManager>>) -> Self {
         self.iceoryx_manager = Some(manager);
         log::info!("✅ Market data service: iceoryx2 enabled");
+        self
+    }
+
+    /// 设置市场数据广播器（用于WebSocket推送）
+    pub fn with_broadcaster(mut self, broadcaster: Arc<broadcaster::MarketDataBroadcaster>) -> Self {
+        self.broadcaster = Some(broadcaster);
+        log::info!("✅ Market data service: broadcaster enabled");
         self
     }
 
@@ -421,8 +431,9 @@ impl MarketDataService {
         let ask_price = ob.ask_queue.get_sorted_orders()
             .and_then(|orders| orders.first().map(|o| o.price));
 
-        // TODO: 从成交记录获取成交量
-        let volume = 0;
+        // 从成交记录获取成交量
+        let trade_stats = self.matching_engine.get_trade_recorder().get_trade_stats(instrument_id);
+        let volume = trade_stats.total_volume as i64;
 
         let tick = TickData {
             instrument_id: instrument_id.to_string(),
@@ -600,7 +611,7 @@ impl MarketDataService {
         // 更新K线
         let finished_klines = self.kline_manager.on_tick(instrument_id, price, volume, timestamp_ms);
 
-        // 记录完成的K线（可以发送到WebSocket订阅者）
+        // 记录完成的K线并广播到WebSocket订阅者
         for (period, kline) in finished_klines {
             log::debug!(
                 "📊 [KLine] Finished {} {:?} K-line: O={:.2} H={:.2} L={:.2} C={:.2} V={}",
@@ -613,7 +624,14 @@ impl MarketDataService {
                 kline.volume
             );
 
-            // TODO: 发送到 WebSocket DIFF 协议
+            // 广播到 WebSocket DIFF 协议
+            if let Some(broadcaster) = &self.broadcaster {
+                broadcaster.broadcast_kline(
+                    instrument_id.to_string(),
+                    period.to_int(),
+                    kline,
+                );
+            }
         }
     }
 
