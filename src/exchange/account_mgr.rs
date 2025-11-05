@@ -760,4 +760,68 @@ mod tests {
             _ => panic!("Expected AccountError for nonexistent account"),
         }
     }
+
+    #[test]
+    fn test_get_instrument_open_interest() {
+        use crate::core::QA_Account;
+
+        let mgr = AccountManager::new();
+
+        // 创建两个账户
+        let req1 = OpenAccountRequest {
+            user_id: "user1".to_string(),
+            account_id: Some("ACC001".to_string()),
+            account_name: "Account 1".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        let req2 = OpenAccountRequest {
+            user_id: "user2".to_string(),
+            account_id: Some("ACC002".to_string()),
+            account_name: "Account 2".to_string(),
+            init_cash: 200000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req1).unwrap();
+        mgr.open_account(req2).unwrap();
+
+        // 获取账户并建立持仓
+        let acc1 = mgr.get_account("ACC001").unwrap();
+        let acc2 = mgr.get_account("ACC002").unwrap();
+
+        // 模拟成交：账户1买开10手，账户2卖开20手
+        {
+            let mut a1 = acc1.write();
+            a1.receive_deal_sim(
+                "TEST2301".to_string(),
+                1.0,  // towards=1 (买开)
+                100.0,
+                10.0,
+                "order1".to_string(),
+            );
+        }
+
+        {
+            let mut a2 = acc2.write();
+            a2.receive_deal_sim(
+                "TEST2301".to_string(),
+                -1.0, // towards=-1 (卖开)
+                100.0,
+                20.0,
+                "order2".to_string(),
+            );
+        }
+
+        // 获取TEST2301的总持仓量
+        let open_interest = mgr.get_instrument_open_interest("TEST2301");
+
+        // 验证：10（多头） + 20（空头） = 30
+        assert_eq!(open_interest, 30);
+
+        // 验证不存在的合约返回0
+        let open_interest_none = mgr.get_instrument_open_interest("NONEXISTENT");
+        assert_eq!(open_interest_none, 0);
+    }
 }

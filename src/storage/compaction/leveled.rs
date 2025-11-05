@@ -169,6 +169,7 @@ impl LeveledCompaction {
         // 合并迭代器 - 使用优先队列合并多个有序流
         let mut entries: Vec<(MemTableKey, MemTableValue)> = Vec::new();
         let mut seen_keys: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut total_read_count = 0u64; // 读取的总记录数
 
         for sst in &sstables {
             // 使用 range_query 获取所有记录
@@ -176,6 +177,7 @@ impl LeveledCompaction {
                 .map_err(|e| format!("Range query failed: {}", e))?;
 
             for (timestamp, sequence, record) in sst_entries {
+                total_read_count += 1;
                 let key = MemTableKey::new(timestamp, sequence);
                 let value = MemTableValue::new(record);
                 let key_bytes = key.to_bytes();
@@ -188,6 +190,7 @@ impl LeveledCompaction {
                         entries.push((key.clone(), value.clone()));
                         seen_keys.insert(key_bytes.clone(), timestamp);
                     }
+                    // 否则丢弃旧版本（被去重删除）
                 } else {
                     entries.push((key.clone(), value.clone()));
                     seen_keys.insert(key_bytes, timestamp);
@@ -199,7 +202,8 @@ impl LeveledCompaction {
         entries.sort_by(|a, b| a.0.to_bytes().cmp(&b.0.to_bytes()));
 
         let merged_count = entries.len() as u64;
-        let deleted_count = 0u64; // TODO: 统计删除的记录
+        // 删除的记录数 = 读取总数 - 合并后的记录数
+        let deleted_count = total_read_count.saturating_sub(merged_count);
 
         // 写入新的 SSTable
         let mut writer = RkyvSSTableWriter::create(&task.output_path)
