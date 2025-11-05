@@ -86,6 +86,8 @@ pub struct MarketDataService {
     snapshot_generator: Option<Arc<snapshot_generator::MarketSnapshotGenerator>>,
     /// K线管理器（实时K线聚合）
     kline_manager: Arc<kline::KLineManager>,
+    /// 市场数据广播器（用于WebSocket推送）
+    broadcaster: Option<Arc<broadcaster::MarketDataBroadcaster>>,
 }
 
 impl MarketDataService {
@@ -99,6 +101,7 @@ impl MarketDataService {
             iceoryx_manager: None,
             snapshot_generator: None,
             kline_manager: Arc::new(kline::KLineManager::new()),
+            broadcaster: None,
         }
     }
 
@@ -118,6 +121,13 @@ impl MarketDataService {
     pub fn with_iceoryx(mut self, manager: Arc<RwLock<crate::ipc::IceoryxManager>>) -> Self {
         self.iceoryx_manager = Some(manager);
         log::info!("✅ Market data service: iceoryx2 enabled");
+        self
+    }
+
+    /// 设置市场数据广播器（用于WebSocket推送）
+    pub fn with_broadcaster(mut self, broadcaster: Arc<broadcaster::MarketDataBroadcaster>) -> Self {
+        self.broadcaster = Some(broadcaster);
+        log::info!("✅ Market data service: broadcaster enabled");
         self
     }
 
@@ -421,8 +431,9 @@ impl MarketDataService {
         let ask_price = ob.ask_queue.get_sorted_orders()
             .and_then(|orders| orders.first().map(|o| o.price));
 
-        // TODO: 从成交记录获取成交量
-        let volume = 0;
+        // 从成交记录获取成交量
+        let trade_stats = self.matching_engine.get_trade_recorder().get_trade_stats(instrument_id);
+        let volume = trade_stats.total_volume as i64;
 
         let tick = TickData {
             instrument_id: instrument_id.to_string(),
@@ -600,7 +611,7 @@ impl MarketDataService {
         // 更新K线
         let finished_klines = self.kline_manager.on_tick(instrument_id, price, volume, timestamp_ms);
 
-        // 记录完成的K线（可以发送到WebSocket订阅者）
+        // 记录完成的K线并广播到WebSocket订阅者
         for (period, kline) in finished_klines {
             log::debug!(
                 "📊 [KLine] Finished {} {:?} K-line: O={:.2} H={:.2} L={:.2} C={:.2} V={}",
@@ -613,7 +624,14 @@ impl MarketDataService {
                 kline.volume
             );
 
-            // TODO: 发送到 WebSocket DIFF 协议
+            // 广播到 WebSocket DIFF 协议
+            if let Some(broadcaster) = &self.broadcaster {
+                broadcaster.broadcast_kline(
+                    instrument_id.to_string(),
+                    period.to_int(),
+                    kline,
+                );
+            }
         }
     }
 
@@ -644,3 +662,88 @@ pub use snapshot_generator::{MarketSnapshot, MarketSnapshotGenerator, SnapshotGe
 pub use cache::{MarketDataCache, CacheStatsSnapshot};
 pub use recovery::{MarketDataRecovery, RecoveredMarketData, RecoveryStats};
 pub use kline_actor::{KLineActor, GetKLines, GetCurrentKLine};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试从成交记录获取成交量
+    #[test]
+    fn test_get_tick_with_volume_from_trades() {
+        let engine = Arc::new(ExchangeMatchingEngine::new());
+        engine.register_instrument("TEST2301".to_string(), 100.0).unwrap();
+
+        let mds = MarketDataService::new(engine.clone());
+
+        // 记录一些成交
+        let recorder = engine.get_trade_recorder();
+        recorder.record_trade(
+            "TEST2301".to_string(),
+            "user1".to_string(),
+            "user2".to_string(),
+            "order1".to_string(),
+            "order2".to_string(),
+            100.5,
+            10.0,
+            "2025-11-05".to_string(),
+        );
+
+        recorder.record_trade(
+            "TEST2301".to_string(),
+            "user1".to_string(),
+            "user3".to_string(),
+            "order3".to_string(),
+            "order4".to_string(),
+            101.0,
+            20.0,
+            "2025-11-05".to_string(),
+        );
+
+        // 获取Tick数据
+        let tick = mds.get_tick("TEST2301").unwrap();
+
+        // 验证成交量
+        assert_eq!(tick.volume, 30); // 10 + 20
+        assert_eq!(tick.instrument_id, "TEST2301");
+    }
+
+    /// 测试K线广播功能
+    #[test]
+    fn test_kline_broadcast() {
+        let engine = Arc::new(ExchangeMatchingEngine::new());
+        engine.register_instrument("TEST2301".to_string(), 100.0).unwrap();
+
+        let broadcaster = Arc::new(MarketDataBroadcaster::new());
+        let mds = MarketDataService::new(engine.clone())
+            .with_broadcaster(broadcaster.clone());
+
+        // 订阅K线频道
+        let _rx = broadcaster.subscribe(
+            "test_subscriber".to_string(),
+            vec!["TEST2301".to_string()],
+            vec!["kline".to_string()],
+        );
+
+        // 触发成交，应该生成K线
+        mds.on_trade("TEST2301", 100.5, 10);
+
+        // 验证订阅者数量
+        assert_eq!(broadcaster.subscriber_count(), 1);
+    }
+
+    /// 测试市场数据服务的基本功能
+    #[test]
+    fn test_market_data_service_basic() {
+        let engine = Arc::new(ExchangeMatchingEngine::new());
+        engine.register_instrument("TEST2301".to_string(), 100.0).unwrap();
+        engine.register_instrument("TEST2302".to_string(), 200.0).unwrap();
+
+        let mds = MarketDataService::new(engine);
+
+        // 获取合约列表
+        let instruments = mds.get_instruments();
+        assert_eq!(instruments.len(), 2);
+        assert!(instruments.contains(&"TEST2301".to_string()));
+        assert!(instruments.contains(&"TEST2302".to_string()));
+    }
+}

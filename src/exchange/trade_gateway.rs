@@ -595,7 +595,30 @@ impl TradeGateway {
             ExchangeError::StorageError(format!("Failed to append ExchangeResponseRecord: {}", e))
         })?;
 
-        // TODO: 推送回报给账户 (Phase 4)
+        // 推送回报给账户
+        if let Some(broker) = &self.notification_broker {
+            let notification = NewNotification::new(
+                NotificationType::OrderAccepted,
+                user_id,
+                NotificationPayload::OrderAccepted(OrderAcceptedNotify {
+                    order_id: order_id.to_string(),
+                    exchange_order_id: exchange_order_id.to_string(),
+                    instrument_id: instrument_id.to_string(),
+                    direction: direction.to_string(),
+                    offset: offset.to_string(),
+                    price,
+                    volume,
+                    order_type: price_type.to_string(),
+                    frozen_margin: 0.0, // TODO: 计算冻结保证金
+                    timestamp,
+                }),
+                "TradeGateway",
+            );
+
+            if let Err(e) = broker.publish(notification) {
+                log::warn!("Failed to publish OrderAccepted notification: {}", e);
+            }
+        }
 
         log::info!(
             "Order accepted: exchange_order_id={}, instrument={}, user={}, order_id={}",
@@ -627,7 +650,25 @@ impl TradeGateway {
             timestamp,
         };
 
-        // TODO: 推送回报给账户 (Phase 4)
+        // 推送回报给账户
+        if let Some(broker) = &self.notification_broker {
+            let notification = NewNotification::new(
+                NotificationType::OrderRejected,
+                user_id,
+                NotificationPayload::OrderRejected(OrderRejectedNotify {
+                    order_id: order_id.to_string(),
+                    instrument_id: instrument_id.to_string(),
+                    reason: reason.to_string(),
+                    error_code: 0, // TODO: 添加具体错误码
+                    timestamp,
+                }),
+                "TradeGateway",
+            );
+
+            if let Err(e) = broker.publish(notification) {
+                log::warn!("Failed to publish OrderRejected notification: {}", e);
+            }
+        }
 
         log::warn!(
             "Order rejected: exchange_order_id={}, instrument={}, user={}, order_id={}, reason={}",
@@ -732,7 +773,31 @@ impl TradeGateway {
                 instrument_id, volume, turnover);
         }
 
-        // TODO: 推送回报给账户 (Phase 4)
+        // 推送回报给账户
+        if let Some(broker) = &self.notification_broker {
+            let notification = NewNotification::new(
+                NotificationType::TradeExecuted,
+                user_id,
+                NotificationPayload::TradeExecuted(TradeExecutedNotify {
+                    trade_id: trade_id.to_string(),
+                    order_id: order_id.to_string(),
+                    exchange_order_id: exchange_order_id.to_string(),
+                    instrument_id: instrument_id.to_string(),
+                    direction: direction.to_string(),
+                    offset: "".to_string(), // TODO: 需要从订单信息获取
+                    price,
+                    volume,
+                    commission: 0.0, // TODO: 计算手续费
+                    fill_type: "PARTIAL".to_string(), // 账户端自己判断FILLED/PARTIAL
+                    timestamp,
+                }),
+                "TradeGateway",
+            );
+
+            if let Err(e) = broker.publish(notification) {
+                log::warn!("Failed to publish TradeExecuted notification: {}", e);
+            }
+        }
 
         log::info!(
             "Trade executed: trade_id={}, exchange_order_id={}, instrument={}, volume={}, price={}",
@@ -761,7 +826,25 @@ impl TradeGateway {
             timestamp,
         };
 
-        // TODO: 推送回报给账户 (Phase 4)
+        // 推送回报给账户
+        if let Some(broker) = &self.notification_broker {
+            let notification = NewNotification::new(
+                NotificationType::OrderCanceled,
+                user_id,
+                NotificationPayload::OrderCanceled(OrderCanceledNotify {
+                    order_id: order_id.to_string(),
+                    exchange_order_id: exchange_order_id.to_string(),
+                    instrument_id: instrument_id.to_string(),
+                    reason: "User requested cancellation".to_string(),
+                    timestamp,
+                }),
+                "TradeGateway",
+            );
+
+            if let Err(e) = broker.publish(notification) {
+                log::warn!("Failed to publish OrderCanceled notification: {}", e);
+            }
+        }
 
         log::info!(
             "Cancel accepted: exchange_order_id={}, instrument={}, user={}, order_id={}",
@@ -792,7 +875,25 @@ impl TradeGateway {
             timestamp,
         };
 
-        // TODO: 推送回报给账户 (Phase 4)
+        // 推送回报给账户（使用OrderRejected类型，因为撤单拒绝也是一种订单操作拒绝）
+        if let Some(broker) = &self.notification_broker {
+            let notification = NewNotification::new(
+                NotificationType::OrderRejected,
+                user_id,
+                NotificationPayload::OrderRejected(OrderRejectedNotify {
+                    order_id: order_id.to_string(),
+                    instrument_id: instrument_id.to_string(),
+                    reason: format!("Cancel rejected: {}", reason),
+                    error_code: 1, // 撤单拒绝错误码
+                    timestamp,
+                }),
+                "TradeGateway",
+            );
+
+            if let Err(e) = broker.publish(notification) {
+                log::warn!("Failed to publish CancelRejected notification: {}", e);
+            }
+        }
 
         log::warn!(
             "Cancel rejected: exchange_order_id={}, instrument={}, user={}, order_id={}, reason={}",

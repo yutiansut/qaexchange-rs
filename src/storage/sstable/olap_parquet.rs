@@ -181,11 +181,46 @@ impl ParquetSSTable {
 
         // 提取统计信息
         let mut entry_count = 0u64;
-        let min_timestamp = 0i64; // TODO: 从 Parquet 统计信息提取
-        let max_timestamp = 0i64; // TODO: 从 Parquet 统计信息提取
+        let mut min_timestamp = i64::MAX;
+        let mut max_timestamp = i64::MIN;
 
+        // 遍历所有row groups，提取时间戳统计信息
         for row_group in parquet_metadata.row_groups.iter() {
             entry_count += row_group.num_rows() as u64;
+
+            // 查找timestamp列（通常是第一列或名为"timestamp"的列）
+            for (col_idx, column) in row_group.columns().iter().enumerate() {
+                // 获取列名
+                let col_name = &parquet_metadata.schema().fields()[col_idx].name;
+
+                // 如果是timestamp列，提取统计信息
+                if col_name == "timestamp" || col_name == "time" || col_idx == 0 {
+                    if let Some(stats) = column.metadata().statistics() {
+                        // 尝试提取i64类型的统计信息
+                        if let Some(min_val) = stats.min_value.as_ref() {
+                            if min_val.len() >= 8 {
+                                let val = i64::from_le_bytes(min_val[0..8].try_into().unwrap_or([0; 8]));
+                                min_timestamp = min_timestamp.min(val);
+                            }
+                        }
+                        if let Some(max_val) = stats.max_value.as_ref() {
+                            if max_val.len() >= 8 {
+                                let val = i64::from_le_bytes(max_val[0..8].try_into().unwrap_or([0; 8]));
+                                max_timestamp = max_timestamp.max(val);
+                            }
+                        }
+                    }
+                    break; // 找到timestamp列后退出
+                }
+            }
+        }
+
+        // 如果没有找到有效的时间戳，使用默认值
+        if min_timestamp == i64::MAX {
+            min_timestamp = 0;
+        }
+        if max_timestamp == i64::MIN {
+            max_timestamp = 0;
         }
 
         let file_size = std::fs::metadata(&file_path)

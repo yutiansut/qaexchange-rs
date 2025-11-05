@@ -364,10 +364,9 @@ impl DiffHandler {
         }
 
         // 更新用户快照中的ins_list
-        // TODO: 实际应该调用 SnapshotManager::update() 更新用户快照
-        // self.snapshot_mgr.update_user(user_id, serde_json::json!({
-        //     "ins_list": ins_list
-        // })).await;
+        self.snapshot_mgr.push_patch(user_id, serde_json::json!({
+            "ins_list": ins_list
+        })).await;
 
         // 发送订阅确认（通过 SnapshotManager 推送，触发 peek_message）
         let notify_patch = serde_json::json!({

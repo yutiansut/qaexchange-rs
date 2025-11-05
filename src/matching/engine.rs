@@ -34,6 +34,9 @@ pub struct ExchangeMatchingEngine {
 
     /// 当前交易日
     trading_day: Arc<RwLock<String>>,
+
+    /// 合约代码 -> 昨收盘价映射
+    prev_close_prices: DashMap<String, f64>,
 }
 
 impl ExchangeMatchingEngine {
@@ -42,6 +45,7 @@ impl ExchangeMatchingEngine {
             orderbooks: DashMap::new(),
             trade_recorder: Arc::new(TradeRecorder::new()),
             trading_day: Arc::new(RwLock::new(String::new())),
+            prev_close_prices: DashMap::new(),
         }
     }
 
@@ -50,6 +54,7 @@ impl ExchangeMatchingEngine {
         let asset = InstrumentAsset::from_code(&instrument_id);
         let orderbook = Orderbook::new(asset, prev_close);
         self.orderbooks.insert(instrument_id.clone(), Arc::new(RwLock::new(orderbook)));
+        self.prev_close_prices.insert(instrument_id.clone(), prev_close);
         log::info!("Registered instrument: {} with prev_close: {}", instrument_id, prev_close);
         Ok(())
     }
@@ -97,6 +102,11 @@ impl ExchangeMatchingEngine {
     /// 获取最新价格
     pub fn get_last_price(&self, instrument_id: &str) -> Option<f64> {
         self.get_orderbook(instrument_id).map(|ob| ob.read().lastprice)
+    }
+
+    /// 获取昨收盘价
+    pub fn get_prev_close(&self, instrument_id: &str) -> Option<f64> {
+        self.prev_close_prices.get(instrument_id).map(|r| *r.value())
     }
 }
 

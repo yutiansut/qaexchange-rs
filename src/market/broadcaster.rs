@@ -244,6 +244,23 @@ impl MarketDataBroadcaster {
         self.broadcast(event);
     }
 
+    /// 广播K线完成事件
+    pub fn broadcast_kline(
+        &self,
+        instrument_id: String,
+        period: i32,
+        kline: super::kline::KLine,
+    ) {
+        let event = MarketDataEvent::KLineFinished {
+            instrument_id,
+            period,
+            kline,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        };
+
+        self.broadcast(event);
+    }
+
     /// 获取订阅者数量
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.len()
