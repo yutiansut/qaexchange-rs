@@ -95,7 +95,6 @@
 
 - [WebSocket 集成指南](./06_development/websocket_integration.md) - DIFF 协议接入详解
 - [测试指南](./06_development/testing.md) - 单元测试与集成测试
-- [K线系统测试指南](../KLINE_TESTING_GUIDE.md) - K线端到端测试流程 ✨ **最新**
 - [部署指南](./06_development/deployment.md) - 生产环境部署
 
 ---
@@ -149,10 +148,10 @@
 ### 按主题查找
 - **性能优化**: [高性能架构](./02_architecture/high_performance.md), [解耦存储](./02_architecture/decoupled_storage.md)
 - **数据持久化**: [WAL](./03_core_modules/storage/wal.md), [SSTable](./03_core_modules/storage/sstable.md)
-- **市场数据**: [快照生成器](./03_core_modules/market/snapshot_generator.md), [K线聚合系统](./03_core_modules/market/kline.md), [K线实时推送](../KLINE_IMPLEMENTATION_SUMMARY.md) ✨ **最新**
+- **市场数据**: [快照生成器](./03_core_modules/market/snapshot_generator.md), [K线聚合系统](./03_core_modules/market/kline.md), [K线实时推送](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md)
 - **协议集成**: [DIFF 协议](./04_api/websocket/diff_protocol.md), [数据模型](./02_architecture/data_models.md)
-- **WebSocket**: [协议规范](./04_api/websocket/protocol.md), [前端集成](./05_integration/frontend/integration_guide.md), [K线推送](../KLINE_IMPLEMENTATION_SUMMARY.md)
-- **测试部署**: [测试指南](./06_development/testing.md), [K线测试](../KLINE_TESTING_GUIDE.md), [部署指南](./06_development/deployment.md)
+- **WebSocket**: [协议规范](./04_api/websocket/protocol.md), [前端集成](./05_integration/frontend/integration_guide.md), [K线推送](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md)
+- **测试部署**: [测试指南](./06_development/testing.md), [K线测试](./06_development/KLINE_TESTING_GUIDE.md), [部署指南](./06_development/deployment.md)
 - **因子计算**: [因子系统](./03_core_modules/factor/README.md) - 流批一体化、增量算子、DAG 依赖 ✨ **新增**
 - **集群管理**: [集群系统](./03_core_modules/cluster/README.md) - 一致性哈希、分片路由、副本分布 ✨ **新增**
 - **查询引擎**: [查询引擎](./03_core_modules/storage/query_engine.md) - Polars SQL、流批混合查询 ✨ **更新**

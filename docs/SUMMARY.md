@@ -75,7 +75,6 @@
 - [开发指南](06_development/README.md)
   - [WebSocket 集成指南](06_development/websocket_integration.md)
   - [测试指南](06_development/testing.md)
-  - [K线系统测试指南](../KLINE_TESTING_GUIDE.md) - ✨ **K线端到端测试**
   - [部署指南](06_development/deployment.md)
 
 ---
