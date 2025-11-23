@@ -10,10 +10,9 @@
 
 use actix_web::{middleware, web, App, HttpServer as ActixHttpServer};
 use qaexchange::exchange::instrument_registry::InstrumentInfo;
-use qaexchange::exchange::{AccountManager, InstrumentRegistry, OrderRouter, TradeGateway};
+use qaexchange::exchange::{AccountManager, InstrumentRegistry, OrderRouter, SettlementEngine, TradeGateway};
 use qaexchange::market::MarketDataBroadcaster;
 use qaexchange::matching::engine::ExchangeMatchingEngine;
-use qaexchange::service::http::HttpServer;
 use qaexchange::service::websocket::WebSocketServer;
 use qaexchange::storage::hybrid::oltp::OltpHybridConfig;
 use qaexchange::storage::subscriber::{StorageSubscriber, StorageSubscriberConfig};
@@ -85,6 +84,7 @@ impl ExchangeServer {
         let instrument_registry = Arc::new(InstrumentRegistry::new());
         let trade_gateway = Arc::new(TradeGateway::new(account_mgr.clone()));
         let market_broadcaster = Arc::new(MarketDataBroadcaster::new());
+        let settlement_engine = Arc::new(SettlementEngine::new(account_mgr.clone()));
 
         // 2. 创建订单路由器
         let order_router = Arc::new(OrderRouter::new(
@@ -104,6 +104,7 @@ impl ExchangeServer {
             trade_gateway,
             order_router,
             market_broadcaster,
+            settlement_engine,
         }
     }
 
@@ -157,7 +158,7 @@ impl ExchangeServer {
         ];
 
         for inst in instruments {
-            self.instrument_registry.register(inst.clone());
+            let _ = self.instrument_registry.register(inst.clone());
 
             // 注册到撮合引擎（初始价格）
             let init_price = match inst.instrument_id.as_str() {
