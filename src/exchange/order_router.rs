@@ -47,6 +47,19 @@ pub struct SubmitOrderResponse {
     pub error_code: Option<u32>,
 }
 
+/// 提交行为控制选项
+#[derive(Clone, Copy, Debug)]
+struct OrderSubmitOptions {
+    /// 是否为强制（风险绕过）订单
+    force: bool,
+}
+
+impl Default for OrderSubmitOptions {
+    fn default() -> Self {
+        Self { force: false }
+    }
+}
+
 /// 订单状态枚举
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum OrderStatus {
@@ -271,45 +284,58 @@ impl OrderRouter {
 
     /// 提交订单 (核心方法)
     pub fn submit_order(&self, req: SubmitOrderRequest) -> SubmitOrderResponse {
+        self.submit_order_with_options(req, OrderSubmitOptions::default())
+    }
+
+    /// 提交强制订单（跳过风控/资金校验，用于强平等场景）
+    pub fn submit_force_order(&self, req: SubmitOrderRequest) -> SubmitOrderResponse {
+        self.submit_order_with_options(req, OrderSubmitOptions { force: true })
+    }
+
+    fn submit_order_with_options(&self, req: SubmitOrderRequest, opts: OrderSubmitOptions) -> SubmitOrderResponse {
         // 1. 生成订单ID
         let order_id = self.generate_order_id();
 
         // 2. 风控检查
-        let risk_check_req = OrderCheckRequest {
-            account_id: req.account_id.clone(),
-            instrument_id: req.instrument_id.clone(),
-            direction: req.direction.clone(),
-            offset: req.offset.clone(),
-            volume: req.volume,
-            price: req.price,
-            limit_price: req.price,           // ✅ price 作为 limit_price
-            price_type: req.order_type.clone(), // ✅ order_type 作为 price_type
-        };
+        if !opts.force {
+            let risk_check_req = OrderCheckRequest {
+                account_id: req.account_id.clone(),
+                instrument_id: req.instrument_id.clone(),
+                direction: req.direction.clone(),
+                offset: req.offset.clone(),
+                volume: req.volume,
+                price: req.price,
+                limit_price: req.price,           // ✅ price 作为 limit_price
+                price_type: req.order_type.clone(), // ✅ order_type 作为 price_type
+            };
 
-        match self.risk_checker.check(&risk_check_req) {
-            Ok(RiskCheckResult::Pass) => {
-                // 风控通过，继续处理
+            match self.risk_checker.check(&risk_check_req) {
+                Ok(RiskCheckResult::Pass) => {
+                    // 风控通过，继续处理
+                }
+                Ok(RiskCheckResult::Reject { reason, code }) => {
+                    log::warn!("Order rejected by risk check: {:?} - {}", code, reason);
+                    return SubmitOrderResponse {
+                        success: false,
+                        order_id: Some(order_id.clone()),
+                        status: Some("rejected".to_string()),
+                        error_message: Some(reason),
+                        error_code: Some(code as u32),
+                    };
+                }
+                Err(e) => {
+                    log::error!("Risk check error: {}", e);
+                    return SubmitOrderResponse {
+                        success: false,
+                        order_id: Some(order_id.clone()),
+                        status: Some("rejected".to_string()),
+                        error_message: Some(format!("Risk check error: {}", e)),
+                        error_code: Some(9999),
+                    };
+                }
             }
-            Ok(RiskCheckResult::Reject { reason, code }) => {
-                log::warn!("Order rejected by risk check: {:?} - {}", code, reason);
-                return SubmitOrderResponse {
-                    success: false,
-                    order_id: Some(order_id.clone()),
-                    status: Some("rejected".to_string()),
-                    error_message: Some(reason),
-                    error_code: Some(code as u32),
-                };
-            }
-            Err(e) => {
-                log::error!("Risk check error: {}", e);
-                return SubmitOrderResponse {
-                    success: false,
-                    order_id: Some(order_id.clone()),
-                    status: Some("rejected".to_string()),
-                    error_message: Some(format!("Risk check error: {}", e)),
-                    error_code: Some(9999),
-                };
-            }
+        } else {
+            log::warn!("⚠️  Force order submitted for account {} instrument {} volume {}", req.account_id, req.instrument_id, req.volume);
         }
 
         // 3. 创建订单 (复用 qars QAOrder)
@@ -358,7 +384,7 @@ impl OrderRouter {
             estimated_commission
         };
 
-        if acc.money < required_funds {
+        if !opts.force && acc.money < required_funds {
             log::warn!(
                 "Insufficient funds (double-check): account={}, available={:.2}, required={:.2}",
                 req.account_id, acc.money, required_funds

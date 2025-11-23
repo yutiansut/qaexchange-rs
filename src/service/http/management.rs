@@ -6,7 +6,7 @@ use actix_web::{web, HttpResponse, Result};
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
-use crate::exchange::{AccountManager, CapitalManager, FundTransaction};
+use crate::exchange::{AccountManager, CapitalManager, FundTransaction, SettlementEngine};
 use crate::risk::{RiskMonitor, RiskAccount, LiquidationRecord, MarginSummary, RiskLevel};
 use super::models::ApiResponse;
 
@@ -15,6 +15,7 @@ pub struct ManagementAppState {
     pub account_mgr: Arc<AccountManager>,
     pub capital_mgr: Arc<CapitalManager>,
     pub risk_monitor: Arc<RiskMonitor>,
+    pub settlement_engine: Arc<SettlementEngine>,
 }
 
 // ============================================================================
@@ -227,6 +228,13 @@ pub struct LiquidationQuery {
     pub end_date: Option<String>,
 }
 
+/// 强平请求
+#[derive(Debug, Deserialize)]
+pub struct ForceLiquidateRequest {
+    pub account_id: String,
+    pub reason: Option<String>,
+}
+
 /// 获取风险账户列表
 pub async fn get_risk_accounts(
     query: web::Query<RiskQuery>,
@@ -266,4 +274,20 @@ pub async fn get_liquidation_records(
     };
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(records)))
+}
+
+/// 触发强平
+pub async fn force_liquidate_account(
+    req: web::Json<ForceLiquidateRequest>,
+    state: web::Data<ManagementAppState>,
+) -> Result<HttpResponse> {
+    match state
+        .settlement_engine
+        .force_liquidate_account(&req.account_id, req.reason.clone())
+    {
+        Ok(result) => Ok(HttpResponse::Ok().json(ApiResponse::success(result))),
+        Err(e) => Ok(HttpResponse::BadRequest().json(
+            ApiResponse::<()>::error(400, format!("Force liquidation failed: {}", e))
+        )),
+    }
 }

@@ -297,12 +297,14 @@ impl ExchangeServer {
 
         // 4. 创建结算引擎
         let settlement_engine = Arc::new(SettlementEngine::new(account_mgr.clone()));
+        settlement_engine.set_order_router(order_router.clone());
 
         // 5. 创建资金管理器
         let capital_mgr = Arc::new(CapitalManager::new(account_mgr.clone()));
 
         // 6. 创建风险监控器
         let risk_monitor = Arc::new(RiskMonitor::new(account_mgr.clone()));
+        settlement_engine.set_risk_monitor(risk_monitor.clone());
 
         // 7. 创建市场数据服务（包含快照生成器）
         let market_data_service = {
@@ -327,6 +329,7 @@ impl ExchangeServer {
 
             Arc::new(service)
         };
+        settlement_engine.set_market_data_service(market_data_service.clone());
         log::info!("✅ Market data service with snapshot generator initialized");
 
         // 7.1 设置 market_data_service 到 trade_gateway（用于更新快照统计）
@@ -624,6 +627,7 @@ impl ExchangeServer {
             account_mgr: self.account_mgr.clone(),
             capital_mgr: self.capital_mgr.clone(),
             risk_monitor: self.risk_monitor.clone(),
+            settlement_engine: self.settlement_engine.clone(),
         };
         let management_data = web::Data::new(management_state);
 

@@ -122,5 +122,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route("/risk/accounts", web::get().to(management::get_risk_accounts))
                 .route("/risk/margin-summary", web::get().to(management::get_margin_summary))
                 .route("/risk/liquidations", web::get().to(management::get_liquidation_records))
+                .route("/risk/force-liquidate", web::post().to(management::force_liquidate_account))
         );
 }

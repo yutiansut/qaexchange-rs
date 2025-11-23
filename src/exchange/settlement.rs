@@ -2,14 +2,19 @@
 //!
 //! 负责日终结算、盯市盈亏计算、强平处理等
 
-use std::sync::Arc;
 use std::collections::HashMap;
-use dashmap::DashMap;
-use chrono::{Utc, NaiveDate};
-use serde::{Deserialize, Serialize};
-use log;
+use std::sync::{Arc, Weak};
 
-use super::AccountManager;
+use chrono::Utc;
+use dashmap::DashMap;
+use log;
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+
+use super::{AccountManager, OrderRouter};
+use crate::exchange::order_router::SubmitOrderRequest;
+use crate::market::MarketDataService;
+use crate::risk::RiskMonitor;
 use crate::ExchangeError;
 
 /// 结算结果
@@ -51,6 +56,26 @@ pub struct AccountSettlement {
     pub force_close: bool,      // 是否强平
 }
 
+/// 强平订单结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForceLiquidationOrder {
+    pub instrument_id: String,
+    pub direction: String,
+    pub offset: String,
+    pub volume: f64,
+    pub price: f64,
+    pub order_id: Option<String>,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+/// 强平执行结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForceLiquidationResult {
+    pub account_id: String,
+    pub orders: Vec<ForceLiquidationOrder>,
+}
+
 /// 结算引擎
 pub struct SettlementEngine {
     /// 账户管理器
@@ -64,6 +89,15 @@ pub struct SettlementEngine {
 
     /// 结算历史 (date -> SettlementResult)
     settlement_history: Arc<DashMap<String, SettlementResult>>,
+
+    /// 订单路由引用（强平下单）
+    order_router: RwLock<Option<Weak<OrderRouter>>>,
+
+    /// 市场数据服务（用于获取强平价格参考）
+    market_data_service: RwLock<Option<Arc<MarketDataService>>>,
+
+    /// 风险监控器（记录强平）
+    risk_monitor: RwLock<Option<Arc<RiskMonitor>>>,
 }
 
 impl SettlementEngine {
@@ -74,7 +108,25 @@ impl SettlementEngine {
             settlement_prices: Arc::new(DashMap::new()),
             force_close_threshold: 1.0, // 风险度 >= 100% 强平
             settlement_history: Arc::new(DashMap::new()),
+            order_router: RwLock::new(None),
+            market_data_service: RwLock::new(None),
+            risk_monitor: RwLock::new(None),
         }
+    }
+
+    /// 注入订单路由引用
+    pub fn set_order_router(&self, order_router: Arc<OrderRouter>) {
+        *self.order_router.write() = Some(Arc::downgrade(&order_router));
+    }
+
+    /// 注入市场数据服务（用于强平价格参考）
+    pub fn set_market_data_service(&self, service: Arc<MarketDataService>) {
+        *self.market_data_service.write() = Some(service);
+    }
+
+    /// 注入风险监控器
+    pub fn set_risk_monitor(&self, monitor: Arc<RiskMonitor>) {
+        *self.risk_monitor.write() = Some(monitor);
     }
 
     /// 设置结算价
@@ -207,7 +259,7 @@ impl SettlementEngine {
             drop(acc); // 释放写锁
             drop(account); // 释放账户引用
 
-            if let Err(e) = self.force_close_account(user_id) {
+            if let Err(e) = self.force_liquidate_account(user_id, Some("Settlement risk threshold".to_string())) {
                 log::error!("Failed to force close account {}: {}", user_id, e);
             } else {
                 log::info!("Successfully force closed account {}", user_id);
@@ -237,20 +289,124 @@ impl SettlementEngine {
         Ok(settlement)
     }
 
-    /// 强平账户
-    pub fn force_close_account(&self, user_id: &str) -> Result<(), ExchangeError> {
-        let account = self.account_mgr.get_account(user_id)?;
+    /// 强平账户（提交真实订单）
+    pub fn force_liquidate_account(
+        &self,
+        account_id: &str,
+        remark: Option<String>,
+    ) -> Result<ForceLiquidationResult, ExchangeError> {
+        let order_router = self
+            .order_router
+            .read()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+            .ok_or_else(|| ExchangeError::InternalError("OrderRouter not configured for SettlementEngine".to_string()))?;
+
+        let account = self.account_mgr.get_account(account_id)?;
         let mut acc = account.write();
+        let balance_before = acc.get_balance();
+        let risk_ratio_before = acc.get_riskratio();
 
-        // 清空所有持仓
-        acc.hold.clear();
-        acc.accounts.margin = 0.0;
-        acc.money = acc.accounts.balance;
-        acc.accounts.available = acc.money;  // 同步更新 QIFI 协议字段
+        let mut plans = Vec::new();
+        for (instrument_id, pos) in acc.hold.iter() {
+            let long_volume = pos.volume_long_today + pos.volume_long_his;
+            if long_volume > 0.0 {
+                plans.push(ForcePlan {
+                    instrument_id: instrument_id.clone(),
+                    direction: "SELL".to_string(),
+                    offset: "CLOSE".to_string(),
+                    volume: long_volume,
+                    reference_price: if pos.open_price_long > 0.0 { pos.open_price_long } else { 1.0 },
+                });
+            }
 
-        log::warn!("Force closed account {}: all positions cleared", user_id);
+            let short_volume = pos.volume_short_today + pos.volume_short_his;
+            if short_volume > 0.0 {
+                plans.push(ForcePlan {
+                    instrument_id: instrument_id.clone(),
+                    direction: "BUY".to_string(),
+                    offset: "CLOSE".to_string(),
+                    volume: short_volume,
+                    reference_price: if pos.open_price_short > 0.0 { pos.open_price_short } else { 1.0 },
+                });
+            }
+        }
 
-        Ok(())
+        if plans.is_empty() {
+            log::info!("Force liquidation skipped: account {} has no positions", account_id);
+            return Ok(ForceLiquidationResult {
+                account_id: account_id.to_string(),
+                orders: Vec::new(),
+            });
+        }
+
+        drop(acc); // 释放账户锁，避免阻塞撮合
+
+        let mut orders = Vec::with_capacity(plans.len());
+        for plan in plans.into_iter() {
+            let price = self.calculate_force_price(&plan.instrument_id, &plan.direction, plan.reference_price);
+            let submit_req = SubmitOrderRequest {
+                account_id: account_id.to_string(),
+                instrument_id: plan.instrument_id.clone(),
+                direction: plan.direction.clone(),
+                offset: plan.offset.clone(),
+                volume: plan.volume,
+                price,
+                order_type: "LIMIT".to_string(),
+            };
+
+            let response = order_router.submit_force_order(submit_req);
+            let (status, error) = if response.success {
+                (
+                    response.status.unwrap_or_else(|| "submitted".to_string()),
+                    None,
+                )
+            } else {
+                (
+                    response.status.unwrap_or_else(|| "rejected".to_string()),
+                    response.error_message.clone(),
+                )
+            };
+
+            orders.push(ForceLiquidationOrder {
+                instrument_id: plan.instrument_id,
+                direction: plan.direction,
+                offset: plan.offset,
+                volume: plan.volume,
+                price,
+                order_id: response.order_id,
+                status,
+                error,
+            });
+        }
+
+        // 读取最新权益（下单完成后）
+        let balance_after = self
+            .account_mgr
+            .get_account(account_id)
+            .ok()
+            .and_then(|acc| {
+                let acc = acc.write();
+                Some(acc.get_balance())
+            })
+            .unwrap_or(balance_before);
+
+        if let Some(risk_monitor) = self.risk_monitor.read().clone() {
+            let instruments: Vec<String> = orders.iter().map(|o| o.instrument_id.clone()).collect();
+            risk_monitor.record_liquidation(
+                account_id.to_string(),
+                risk_ratio_before,
+                balance_before,
+                balance_after,
+                instruments,
+                remark,
+            );
+        }
+
+        Ok(ForceLiquidationResult {
+            account_id: account_id.to_string(),
+            orders,
+        })
     }
 
     /// 获取所有结算历史
@@ -280,7 +436,46 @@ impl Default for SettlementEngine {
             settlement_prices: Arc::new(DashMap::new()),
             force_close_threshold: 1.0,
             settlement_history: Arc::new(DashMap::new()),
+            order_router: RwLock::new(None),
+            market_data_service: RwLock::new(None),
+            risk_monitor: RwLock::new(None),
         }
+    }
+}
+
+struct ForcePlan {
+    instrument_id: String,
+    direction: String,
+    offset: String,
+    volume: f64,
+    reference_price: f64,
+}
+
+impl SettlementEngine {
+    fn calculate_force_price(&self, instrument_id: &str, direction: &str, reference_price: f64) -> f64 {
+        let fallback = reference_price.max(0.01);
+        let market_price = self
+            .market_data_service
+            .read()
+            .as_ref()
+            .and_then(|svc| svc.get_tick_data(instrument_id).ok())
+            .and_then(|tick| {
+                match direction {
+                    "SELL" => tick.bid_price.or(Some(tick.last_price)),
+                    "BUY" => tick.ask_price.or(Some(tick.last_price)),
+                    _ => Some(tick.last_price),
+                }
+            })
+            .filter(|price| *price > 0.0)
+            .unwrap_or(fallback);
+
+        let adjusted = match direction {
+            "SELL" => (market_price * 0.995).max(0.01),
+            "BUY" => (market_price * 1.005).max(0.01),
+            _ => market_price,
+        };
+
+        adjusted
     }
 }
 
