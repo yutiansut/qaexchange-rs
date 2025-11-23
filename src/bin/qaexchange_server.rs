@@ -226,6 +226,7 @@ impl ExchangeServer {
         let app_state = Arc::new(AppState {
             order_router: self.order_router.clone(),
             account_mgr: self.account_mgr.clone(),
+            settlement_engine: self.settlement_engine.clone(),
             trade_recorder: Arc::new(TradeRecorder::new()),
             user_mgr: Arc::new(UserManager::new()),
             storage_stats: None,

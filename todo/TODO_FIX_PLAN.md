@@ -9,20 +9,19 @@
 
 ## 一、后端 TODO
 
-1. **结算引擎强平逻辑 (`src/exchange/settlement.rs:199-253`)**  
-   - 当前 `SettlementEngine::force_close_account` 仅清空内存持仓，需要改为调用 `OrderRouter` 提交市价平仓单，确保强平走完整撮合/通知链路。  
-   - 输出强平记录，可供 `/api/management/liquidation-records` 查询。
+1. ✅ **结算引擎强平逻辑 (`src/exchange/settlement.rs`)**  
+   - 已改为通过 `submit_force_order` 提交真实撤单，并将执行结果写入 WAL/风险监控。  
+   - `SettlementEngine` 现在跟踪账户结算历史与强平记录，可供查询。
 
-2. **风险控制强平 API**  
-   - 风险页的“强平”按钮尚无后端接口，需提供 `POST /api/management/force-liquidate`，内部校验风险阈值并触发上面的强平逻辑，返回批次 ID 及处理结果。
+2. ✅ **风险控制强平 API**  
+   - 新增 `POST /api/management/force-liquidate`，可从风险监控页触发强平并返回具体订单状态。
 
 ---
 
 ## 二、前端 TODO（含 Mock/占位逻辑）
 
-1. **资金曲线页 (`web/src/views/user/account-curve.vue:187-380`)**  
-   - 替换 `generateMockData()`，调用真实 `GET /api/account/{user_id}/equity-curve`。  
-   - 补充 Excel 导出按钮实现（当前 `// TODO: 实现 Excel 导出`）。
+1. ✅ **资金曲线页 (`web/src/views/user/account-curve.vue`)**  
+   - 已切换到实时 API，支持账户切换、时间区间过滤与 CSV 导出。
 
 2. **平仓表单 (`web/src/views/trade/components/CloseForm.vue:118-154`)**  
    - `availableVolume` 仍写死为 10，需要从父组件传入持仓信息或实时查询；提交前做超量校验。
@@ -47,8 +46,8 @@
 
 ## 三、API 缺口
 
-1. `GET /api/account/{user_id}/equity-curve` —— 返回账户权益曲线、收益率、回撤等数据，供前端替换 mock。  
-2. `POST /api/management/force-liquidate` —— 触发强平任务，返回任务状态，用于风险页按钮。
+1. ✅ `GET /api/account/{user_id}/equity-curve` —— 已返回账户权益曲线、收益率与回撤统计，前端可直接消费。  
+2. ✅ `POST /api/management/force-liquidate` —— 触发强平任务，返回批次状态，用于风险页按钮。
 
 ---
 

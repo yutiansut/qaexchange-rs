@@ -306,6 +306,8 @@ impl SettlementEngine {
             balance: acc.accounts.balance,
             risk_ratio,
             force_close,
+            margin: acc.accounts.margin,
+            available: acc.accounts.available,
         };
 
         self.account_history
@@ -482,6 +484,14 @@ impl SettlementEngine {
         self.settlement_history.get(date).map(|r| r.value().clone())
     }
 
+    /// 获取账户结算历史
+    pub fn get_account_settlements(&self, account_id: &str) -> Vec<AccountSettlement> {
+        self.account_history
+            .get(account_id)
+            .map(|entry| entry.value().clone())
+            .unwrap_or_default()
+    }
+
     /// 设置强平阈值
     pub fn set_force_close_threshold(&mut self, threshold: f64) {
         self.force_close_threshold = threshold;
@@ -496,6 +506,7 @@ impl Default for SettlementEngine {
             settlement_prices: Arc::new(DashMap::new()),
             force_close_threshold: 1.0,
             settlement_history: Arc::new(DashMap::new()),
+            account_history: Arc::new(DashMap::new()),
             order_router: RwLock::new(None),
             market_data_service: RwLock::new(None),
             risk_monitor: RwLock::new(None),

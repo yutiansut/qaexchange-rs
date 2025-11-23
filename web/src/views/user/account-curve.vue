@@ -1,16 +1,21 @@
 <template>
-  <div class="account-curve-container">
+  <div class="account-curve-container" v-loading="loading">
     <!-- 页面标题 -->
     <div class="page-header">
       <h2>账户资金曲线</h2>
       <div class="header-controls">
-        <el-select v-model="currentUser" placeholder="选择账户" style="width: 200px;" @change="loadData">
+        <el-select
+          v-model="selectedAccountId"
+          placeholder="选择账户"
+          style="width: 240px;"
+          :disabled="accountOptions.length === 0"
+        >
           <el-option
-            v-for="user in userList"
-            :key="user.user_id"
-            :label="`${user.user_name} (${user.user_id})`"
-            :value="user.user_id"
-          ></el-option>
+            v-for="account in accountOptions"
+            :key="account.account_id"
+            :label="`${account.account_name} (${account.account_id})`"
+            :value="account.account_id"
+          />
         </el-select>
 
         <el-radio-group v-model="timeRange" size="small" @change="loadData">
@@ -145,19 +150,19 @@
 <script>
 import * as echarts from 'echarts'
 import dayjs from 'dayjs'
+import { mapGetters } from 'vuex'
+import { getEquityCurve, getUserAccounts } from '@/api'
 
 export default {
   name: 'AccountCurve',
   data() {
     return {
-      currentUser: 'user1',
       timeRange: 'month',
-      userList: [
-        { user_id: 'user1', user_name: '张三' },
-        { user_id: 'user2', user_name: '李四' },
-        { user_id: 'user3', user_name: '王五' }
-      ],
+      accountOptions: [],
+      selectedAccountId: '',
       curveData: [],
+      allCurveData: {},
+      accountStatistics: {},
       statistics: {
         totalProfit: 0,
         totalProfitRate: 0,
@@ -169,12 +174,27 @@ export default {
         avgDailyProfit: 0,
         sharpeRatio: 0
       },
-      chart: null
+      chart: null,
+      loading: false
+    }
+  },
+  computed: {
+    ...mapGetters(['currentUser'])
+  },
+  watch: {
+    currentUser() {
+      this.initialize()
+    },
+    timeRange() {
+      this.applyTimeFilter()
+    },
+    selectedAccountId() {
+      this.applyTimeFilter()
     }
   },
   mounted() {
     this.initChart()
-    this.loadData()
+    this.initialize()
   },
   beforeDestroy() {
     if (this.chart) {
@@ -182,130 +202,209 @@ export default {
     }
   },
   methods: {
-    // 初始化图表
+    async initialize() {
+      if (!this.currentUser) {
+        this.$message.error('请先登录')
+        return
+      }
+      this.selectedAccountId = ''
+      this.allCurveData = {}
+      this.accountStatistics = {}
+      await this.fetchAccounts()
+      await this.fetchEquityCurve()
+    },
+
+    async fetchAccounts() {
+      try {
+        const res = await getUserAccounts(this.currentUser)
+        this.accountOptions = res.accounts || []
+        if (!this.selectedAccountId && this.accountOptions.length > 0) {
+          this.selectedAccountId = this.accountOptions[0].account_id
+        }
+      } catch (error) {
+        this.$message.error('获取账户列表失败')
+        console.error(error)
+      }
+    },
+
+    async fetchEquityCurve() {
+      if (!this.currentUser) return
+      this.loading = true
+      try {
+        const res = await getEquityCurve(this.currentUser)
+        this.allCurveData = {}
+        this.accountStatistics = {}
+        ;(res.accounts || []).forEach(account => {
+          const id = account.accountId || account.account_id
+          this.allCurveData[id] = account.points || []
+          this.accountStatistics[id] = account.statistics || null
+          if (!this.selectedAccountId) {
+            this.selectedAccountId = id
+          }
+        })
+        this.applyTimeFilter()
+      } catch (error) {
+        this.$message.error('加载资金曲线失败')
+        console.error(error)
+      } finally {
+        this.loading = false
+      }
+    },
+
     initChart() {
       const chartDom = document.getElementById('equity-chart')
       this.chart = echarts.init(chartDom)
     },
 
-    // 加载数据
-    async loadData() {
-      try {
-        // TODO: 调用真实 API
-        // const data = await getEquityCurve(this.currentUser, this.timeRange)
-
-        // 生成模拟数据
-        this.generateMockData()
-
-        // 计算统计指标
-        this.calculateStatistics()
-
-        // 更新图表
+    applyTimeFilter() {
+      if (!this.selectedAccountId) {
+        this.curveData = []
+        this.statistics = this.calculateStatisticsFromCurve([])
         this.updateChart()
-      } catch (error) {
-        this.$message.error('加载数据失败')
-        console.error(error)
-      }
-    },
-
-    // 生成模拟数据
-    generateMockData() {
-      const days = {
-        'today': 1,
-        'week': 7,
-        'month': 30,
-        'all': 90
-      }[this.timeRange]
-
-      this.curveData = []
-      let balance = 1000000
-      const startDate = dayjs().subtract(days, 'day')
-
-      for (let i = 0; i <= days; i++) {
-        const date = startDate.add(i, 'day').format('YYYY-MM-DD')
-        const dailyProfit = (Math.random() - 0.45) * 20000
-        const prevBalance = i === 0 ? balance : this.curveData[i - 1].balance
-
-        balance = prevBalance + dailyProfit
-        const margin = balance * (0.3 + Math.random() * 0.2)
-        const available = balance - margin
-
-        this.curveData.push({
-          date,
-          balance: balance,
-          available: available,
-          margin: margin,
-          daily_profit: dailyProfit,
-          daily_profit_rate: dailyProfit / prevBalance,
-          trade_count: Math.floor(Math.random() * 10),
-          commission: Math.abs(dailyProfit) * 0.0001
-        })
-      }
-    },
-
-    // 计算统计指标
-    calculateStatistics() {
-      if (this.curveData.length === 0) {
         return
       }
 
-      const startBalance = this.curveData[0].balance - this.curveData[0].daily_profit
-      const endBalance = this.curveData[this.curveData.length - 1].balance
+      const points = this.allCurveData[this.selectedAccountId] || []
+      const filtered = this.filterByRange(points)
+      this.curveData = filtered
 
-      // 累计收益
-      this.statistics.totalProfit = endBalance - startBalance
-      this.statistics.totalProfitRate = this.statistics.totalProfit / startBalance
+      const stats = this.accountStatistics[this.selectedAccountId]
+      if (stats) {
+        this.statistics = this.normalizeStatistics(stats)
+      } else {
+        this.statistics = this.calculateStatisticsFromCurve(filtered)
+      }
 
-      // 最大回撤
+      this.updateChart()
+    },
+
+    filterByRange(points) {
+      if (!points || points.length === 0) return []
+      if (this.timeRange === 'all') {
+        return [...points]
+      }
+
+      const rangeMap = {
+        today: 1,
+        week: 7,
+        month: 30
+      }
+      const limit = rangeMap[this.timeRange]
+      if (!limit || points.length <= limit) {
+        return [...points]
+      }
+      const start = Math.max(points.length - limit, 0)
+      return points.slice(start)
+    },
+
+    normalizeStatistics(stats) {
+      return {
+        totalProfit: stats.totalProfit || 0,
+        totalProfitRate: stats.totalProfitRate || 0,
+        maxDrawdown: stats.maxDrawdown || 0,
+        maxDrawdownRate: stats.maxDrawdownRate || 0,
+        profitDays: stats.profitDays || 0,
+        lossDays: stats.lossDays || 0,
+        winRate: stats.winRate || 0,
+        avgDailyProfit: stats.avgDailyProfit || 0,
+        sharpeRatio: stats.sharpeRatio || 0
+      }
+    },
+
+    calculateStatisticsFromCurve(data) {
+      if (!data || data.length === 0) {
+        return {
+          totalProfit: 0,
+          totalProfitRate: 0,
+          maxDrawdown: 0,
+          maxDrawdownRate: 0,
+          profitDays: 0,
+          lossDays: 0,
+          winRate: 0,
+          avgDailyProfit: 0,
+          sharpeRatio: 0
+        }
+      }
+
+      const startBalance = data[0].balance
+      const endBalance = data[data.length - 1].balance
+      const totalProfit = endBalance - startBalance
+      const totalProfitRate = startBalance !== 0 ? totalProfit / startBalance : 0
+
       let maxBalance = startBalance
       let maxDrawdown = 0
       let maxDrawdownRate = 0
+      let profitDays = 0
+      let lossDays = 0
+      const dailyReturns = []
 
-      this.curveData.forEach(item => {
-        if (item.balance > maxBalance) {
-          maxBalance = item.balance
+      for (let i = 1; i < data.length; i++) {
+        const prev = data[i - 1]
+        const current = data[i]
+        if (current.balance > maxBalance) {
+          maxBalance = current.balance
         }
-        const drawdown = maxBalance - item.balance
-        const drawdownRate = drawdown / maxBalance
-
+        const drawdown = maxBalance - current.balance
+        const drawdownRate = maxBalance > 0 ? drawdown / maxBalance : 0
         if (drawdown > maxDrawdown) {
           maxDrawdown = drawdown
           maxDrawdownRate = drawdownRate
         }
-      })
 
-      this.statistics.maxDrawdown = maxDrawdown
-      this.statistics.maxDrawdownRate = maxDrawdownRate
+        const dailyProfit = current.balance - prev.balance
+        if (dailyProfit >= 0) {
+          profitDays += 1
+        } else {
+          lossDays += 1
+        }
 
-      // 盈亏天数
-      this.statistics.profitDays = this.curveData.filter(d => d.daily_profit > 0).length
-      this.statistics.lossDays = this.curveData.filter(d => d.daily_profit < 0).length
-      this.statistics.winRate = this.statistics.profitDays / (this.statistics.profitDays + this.statistics.lossDays)
+        if (prev.balance !== 0) {
+          dailyReturns.push(dailyProfit / prev.balance)
+        }
+      }
 
-      // 平均日收益
-      const totalDailyProfit = this.curveData.reduce((sum, d) => sum + d.daily_profit, 0)
-      this.statistics.avgDailyProfit = totalDailyProfit / this.curveData.length
+      const avgDailyProfit = data.length > 1 ? totalProfit / (data.length - 1) : 0
+      const winRate = profitDays + lossDays > 0 ? profitDays / (profitDays + lossDays) : 0
 
-      // 夏普比率（简化计算）
-      const dailyReturns = this.curveData.map(d => d.daily_profit_rate)
-      const avgReturn = dailyReturns.reduce((sum, r) => sum + r, 0) / dailyReturns.length
-      const variance = dailyReturns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / dailyReturns.length
+      const avgReturn = dailyReturns.length
+        ? dailyReturns.reduce((sum, r) => sum + r, 0) / dailyReturns.length
+        : 0
+      const variance = dailyReturns.length
+        ? dailyReturns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / dailyReturns.length
+        : 0
       const stdDev = Math.sqrt(variance)
-      this.statistics.sharpeRatio = stdDev > 0 ? (avgReturn * Math.sqrt(252)) / stdDev : 0
+      const sharpeRatio = stdDev > 0 ? (avgReturn * Math.sqrt(252)) / stdDev : 0
+
+      return {
+        totalProfit,
+        totalProfitRate,
+        maxDrawdown,
+        maxDrawdownRate,
+        profitDays,
+        lossDays,
+        winRate,
+        avgDailyProfit,
+        sharpeRatio
+      }
     },
 
-    // 更新图表
     updateChart() {
+      if (!this.chart) {
+        return
+      }
+      const account = this.accountOptions.find(acc => acc.account_id === this.selectedAccountId)
+      const title = account ? `${account.account_name} (${account.account_id})` : this.selectedAccountId || '账户'
+
       const option = {
         title: {
-          text: `${this.currentUser} 的权益曲线`,
+          text: `${title} 的权益曲线`,
           left: 'center'
         },
         tooltip: {
           trigger: 'axis',
           formatter: (params) => {
-            const data = params[0]
-            const item = this.curveData[data.dataIndex]
+            if (!params.length) return ''
+            const item = this.curveData[params[0].dataIndex]
             return `
               ${item.date}<br/>
               权益: ${item.balance.toLocaleString()}<br/>
@@ -333,9 +432,7 @@ export default {
         yAxis: {
           type: 'value',
           axisLabel: {
-            formatter: (value) => {
-              return (value / 10000).toFixed(1) + 'w'
-            }
+            formatter: (value) => `${(value / 10000).toFixed(1)}w`
           }
         },
         series: [
@@ -372,14 +469,40 @@ export default {
       this.chart.setOption(option)
     },
 
-    // 导出数据
     exportData() {
-      this.$message.info('导出功能开发中...')
-      // TODO: 实现 Excel 导出
+      if (!this.curveData.length) {
+        this.$message.warning('暂无数据可导出')
+        return
+      }
+
+      const headers = ['日期', '权益', '可用资金', '保证金', '日盈亏', '日收益率', '手续费']
+      const rows = this.curveData.map(item => [
+        item.date,
+        item.balance.toFixed(2),
+        item.available.toFixed(2),
+        item.margin.toFixed(2),
+        item.daily_profit.toFixed(2),
+        (item.daily_profit_rate * 100).toFixed(2) + '%',
+        item.commission.toFixed(2)
+      ])
+
+      const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('
+')
+      const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const filename = `equity_curve_${this.selectedAccountId || 'account'}_${dayjs().format('YYYYMMDD_HHmmss')}.csv`
+      link.href = url
+      link.setAttribute('download', filename)
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
     }
   }
 }
 </script>
+
 
 <style scoped>
 .account-curve-container {

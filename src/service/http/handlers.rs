@@ -1,7 +1,9 @@
 //! HTTP API 请求处理器
 
 use actix_web::{web, HttpResponse, Result};
+use chrono::Utc;
 use log;
+use serde::Serialize;
 use std::sync::Arc;
 
 use super::models::*;
@@ -9,7 +11,8 @@ use crate::core::account_ext::{AccountType, OpenAccountRequest as CoreOpenAccoun
 use crate::exchange::order_router::{
     CancelOrderRequest as CoreCancelOrderRequest, SubmitOrderRequest as CoreSubmitOrderRequest,
 };
-use crate::exchange::{AccountManager, OrderRouter};
+use crate::exchange::settlement::AccountSettlement;
+use crate::exchange::{AccountManager, OrderRouter, SettlementEngine};
 use crate::matching::trade_recorder::TradeRecorder;
 use crate::storage::conversion::ConversionManager;
 use crate::storage::subscriber::SubscriberStats;
@@ -19,6 +22,7 @@ use crate::user::UserManager;
 pub struct AppState {
     pub order_router: Arc<OrderRouter>,
     pub account_mgr: Arc<AccountManager>,
+    pub settlement_engine: Arc<SettlementEngine>,
     pub trade_recorder: Arc<TradeRecorder>,
     pub user_mgr: Arc<UserManager>,
     pub storage_stats: Option<Arc<parking_lot::Mutex<SubscriberStats>>>,
@@ -308,6 +312,237 @@ pub async fn query_user_orders(
             "total": order_infos.len()
         }))),
     )
+}
+
+/// 获取账户权益曲线
+pub async fn get_equity_curve(
+    user_id: web::Path<String>,
+    state: web::Data<Arc<AppState>>,
+) -> Result<HttpResponse> {
+    let user_id = user_id.into_inner();
+    if user_id.is_empty() {
+        return Ok(HttpResponse::BadRequest()
+            .json(ApiResponse::<()>::error(400, "Missing user_id".to_string())));
+    }
+
+    let accounts = state.account_mgr.get_accounts_by_user(&user_id);
+
+    let mut account_responses = Vec::new();
+    for account in accounts {
+        let (account_id, account_name, balance, available, margin) = {
+            let acc = account.read();
+            (
+                acc.account_cookie.clone(),
+                acc.user_cookie.clone(),
+                acc.accounts.balance,
+                acc.accounts.available,
+                acc.accounts.margin,
+            )
+        };
+
+        let settlements = state.settlement_engine.get_account_settlements(&account_id);
+        let mut points = convert_settlements(settlements);
+
+        if points.is_empty() {
+            points.push(EquityCurvePoint {
+                date: Utc::now().format("%Y-%m-%d").to_string(),
+                balance,
+                available,
+                margin,
+                daily_profit: 0.0,
+                daily_profit_rate: 0.0,
+                trade_count: 0,
+                commission: 0.0,
+            });
+        }
+
+        let stats = compute_statistics(&points);
+
+        account_responses.push(EquityCurveAccountResponse {
+            account_id,
+            account_name,
+            points,
+            statistics: stats,
+        });
+    }
+
+    let response = EquityCurveResponse {
+        user_id,
+        accounts: account_responses,
+    };
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EquityCurvePoint {
+    date: String,
+    balance: f64,
+    available: f64,
+    margin: f64,
+    daily_profit: f64,
+    daily_profit_rate: f64,
+    trade_count: i32,
+    commission: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct EquityStatistics {
+    start_balance: f64,
+    end_balance: f64,
+    total_profit: f64,
+    total_profit_rate: f64,
+    max_drawdown: f64,
+    max_drawdown_rate: f64,
+    profit_days: usize,
+    loss_days: usize,
+    win_rate: f64,
+    avg_daily_profit: f64,
+    sharpe_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EquityCurveAccountResponse {
+    account_id: String,
+    account_name: String,
+    points: Vec<EquityCurvePoint>,
+    statistics: EquityStatistics,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EquityCurveResponse {
+    user_id: String,
+    accounts: Vec<EquityCurveAccountResponse>,
+}
+
+fn convert_settlements(mut settlements: Vec<AccountSettlement>) -> Vec<EquityCurvePoint> {
+    if settlements.is_empty() {
+        return Vec::new();
+    }
+
+    settlements.sort_by(|a, b| a.date.cmp(&b.date));
+
+    let mut points = Vec::with_capacity(settlements.len());
+    let mut prev_balance: Option<f64> = None;
+
+    for settlement in settlements {
+        let previous = prev_balance.unwrap_or(settlement.balance - settlement.close_profit);
+        let daily_profit = settlement.balance - previous;
+        let daily_profit_rate = if previous.abs() > f64::EPSILON {
+            daily_profit / previous
+        } else {
+            0.0
+        };
+
+        points.push(EquityCurvePoint {
+            date: settlement.date,
+            balance: settlement.balance,
+            available: settlement.available,
+            margin: settlement.margin,
+            daily_profit,
+            daily_profit_rate,
+            trade_count: 0,
+            commission: settlement.commission,
+        });
+
+        prev_balance = Some(settlement.balance);
+    }
+
+    points
+}
+
+fn compute_statistics(points: &[EquityCurvePoint]) -> EquityStatistics {
+    if points.is_empty() {
+        return EquityStatistics::default();
+    }
+
+    let start_balance = points.first().map(|p| p.balance).unwrap_or(0.0);
+    let end_balance = points.last().map(|p| p.balance).unwrap_or(start_balance);
+    let total_profit = end_balance - start_balance;
+    let total_profit_rate = if start_balance.abs() > f64::EPSILON {
+        total_profit / start_balance
+    } else {
+        0.0
+    };
+
+    let mut peak = start_balance;
+    let mut max_drawdown: f64 = 0.0;
+    let mut max_drawdown_rate: f64 = 0.0;
+    let mut profit_days = 0;
+    let mut loss_days = 0;
+    let mut returns = Vec::new();
+
+    for window in points.windows(2) {
+        let prev = window[0].balance;
+        let curr = window[1].balance;
+        peak = peak.max(curr);
+        let dd = peak - curr;
+        max_drawdown = max_drawdown.max(dd);
+        if peak > 0.0 {
+            max_drawdown_rate = max_drawdown_rate.max(dd / peak);
+        }
+
+        let daily_profit = curr - prev;
+        if daily_profit >= 0.0 {
+            profit_days += 1;
+        } else {
+            loss_days += 1;
+        }
+
+        if prev.abs() > f64::EPSILON {
+            returns.push(daily_profit / prev);
+        }
+    }
+
+    let total_days = (points.len().saturating_sub(1)) as f64;
+    let avg_daily_profit = if total_days > 0.0 {
+        total_profit / total_days
+    } else {
+        0.0
+    };
+
+    let win_rate = if profit_days + loss_days > 0 {
+        profit_days as f64 / (profit_days + loss_days) as f64
+    } else {
+        0.0
+    };
+
+    let sharpe_ratio = if !returns.is_empty() {
+        let mean = returns.iter().copied().sum::<f64>() / returns.len() as f64;
+        let variance = returns
+            .iter()
+            .map(|r| {
+                let diff = r - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / returns.len() as f64;
+        let std_dev = variance.sqrt();
+        if std_dev > 0.0 {
+            mean / std_dev * (returns.len() as f64).sqrt()
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    EquityStatistics {
+        start_balance,
+        end_balance,
+        total_profit,
+        total_profit_rate,
+        max_drawdown,
+        max_drawdown_rate,
+        profit_days,
+        loss_days,
+        win_rate,
+        avg_daily_profit,
+        sharpe_ratio,
+    }
 }
 
 /// 查询持仓（按account_id查询单个账户）

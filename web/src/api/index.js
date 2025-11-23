@@ -112,6 +112,16 @@ export function withdraw(data) {
   })
 }
 
+/**
+ * 获取账户权益曲线
+ */
+export function getEquityCurve(userId) {
+  return request({
+    url: `/account/${userId}/equity-curve`,
+    method: 'get'
+  })
+}
+
 // ============= 订单管理 API =============
 
 /**

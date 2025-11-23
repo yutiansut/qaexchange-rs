@@ -16,7 +16,7 @@ use actix_web::{middleware, web, App, HttpServer as ActixHttpServer};
 use std::io;
 use std::sync::Arc;
 
-use crate::exchange::{AccountManager, OrderRouter};
+use crate::exchange::{AccountManager, OrderRouter, SettlementEngine};
 use crate::market::MarketDataService;
 use crate::matching::engine::ExchangeMatchingEngine;
 use crate::user::UserManager;
@@ -40,6 +40,7 @@ impl HttpServer {
         order_router: Arc<OrderRouter>,
         account_mgr: Arc<AccountManager>,
         user_mgr: Arc<UserManager>,
+        settlement_engine: Arc<SettlementEngine>,
         matching_engine: Arc<ExchangeMatchingEngine>,
         bind_address: String,
     ) -> Self {
@@ -48,6 +49,7 @@ impl HttpServer {
         let app_state = Arc::new(AppState {
             order_router,
             account_mgr,
+            settlement_engine,
             trade_recorder,
             user_mgr,
             storage_stats: None,

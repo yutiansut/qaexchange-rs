@@ -40,7 +40,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route("/open", web::post().to(handlers::open_account))
                 .route("/{account_id}", web::get().to(handlers::query_account)) // 修复: 明确是 account_id
                 .route("/deposit", web::post().to(handlers::deposit))
-                .route("/withdraw", web::post().to(handlers::withdraw)),
+                .route("/withdraw", web::post().to(handlers::withdraw))
+                .route(
+                    "/{user_id}/equity-curve",
+                    web::get().to(handlers::get_equity_curve),
+                ),
         )
         // 订单管理
         .service(

@@ -611,6 +611,7 @@ impl ExchangeServer {
         let app_state = Arc::new(qaexchange::service::http::handlers::AppState {
             order_router: self.order_router.clone(),
             account_mgr: self.account_mgr.clone(),
+            settlement_engine: self.settlement_engine.clone(),
             trade_recorder: self.matching_engine.get_trade_recorder(),
             user_mgr: self.user_mgr.clone(),
             storage_stats: self.storage_stats.clone(),
