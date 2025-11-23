@@ -797,10 +797,150 @@ let lf = LazyFrame::scan_parquet_files(files, args)?
     .select(&[col("price"), col("volume")]); // 列剪裁
 ```
 
+## 🔄 流批混合查询 ✨ NEW
+
+`src/query/hybrid.rs` 提供流式和批处理混合的查询能力：
+
+### 架构设计
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  流批混合查询架构                             │
+│                                                             │
+│    Client Query                                             │
+│          │                                                  │
+│          ▼                                                  │
+│    ┌─────────────────────────────────────┐                 │
+│    │         HybridQueryEngine           │                 │
+│    │  ┌─────────────┬─────────────────┐  │                 │
+│    │  │ StreamBuffer│   BatchSource   │  │                 │
+│    │  │  (实时数据)  │   (历史数据)    │  │                 │
+│    │  │  DashMap    │   Parquet/SST   │  │                 │
+│    │  └─────────────┴─────────────────┘  │                 │
+│    │           │               │         │                 │
+│    │           └───────┬───────┘         │                 │
+│    │                   ▼                 │                 │
+│    │           MergeStrategy             │                 │
+│    │   (ByTimestamp/StreamFirst/Latest)  │                 │
+│    └─────────────────────────────────────┘                 │
+│                   │                                         │
+│                   ▼                                         │
+│            QueryResult                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 流数据缓存 (StreamBuffer)
+
+```rust
+use qaexchange::query::hybrid::{StreamBuffer, Record, RecordValue};
+
+// 创建流缓存（最大 5 分钟，最多 10000 条）
+let buffer = StreamBuffer::new(Duration::from_secs(300), 10000);
+
+// 推送实时数据
+buffer.push(Record::new("cu2501", timestamp)
+    .with_value("price", RecordValue::Float(85000.0))
+    .with_value("volume", RecordValue::Int(100)));
+
+// 查询最新 N 条
+let latest = buffer.query_latest("cu2501", 10);
+
+// 查询时间范围
+let range = buffer.query_range("cu2501", start_ts, end_ts);
+```
+
+### 混合查询引擎
+
+```rust
+use qaexchange::query::hybrid::{HybridQueryEngine, HybridConfig, MergeStrategy};
+
+// 配置混合查询
+let config = HybridConfig {
+    stream_max_latency: Duration::from_millis(100),  // 流数据最大延迟
+    batch_timeout: Duration::from_secs(30),           // 批查询超时
+    merge_strategy: MergeStrategy::ByTimestamp,       // 按时间戳合并
+    stream_priority_window: Duration::from_secs(60),  // 1分钟内优先流数据
+};
+
+let engine = HybridQueryEngine::new(config)
+    .with_batch_source(batch_data_source);
+
+// 执行混合查询
+let result = engine.query(
+    "cu2501",
+    start_ts,
+    end_ts,
+    &["price".to_string(), "volume".to_string()],
+).await?;
+
+println!("来源: {:?}", result.source);  // DataSource::Merged
+println!("记录数: {}", result.records.len());
+println!("执行时间: {:?}", result.execution_time);
+```
+
+### 合并策略
+
+| 策略 | 说明 | 适用场景 |
+|------|------|----------|
+| `StreamFirst` | 流数据优先，批数据补充旧数据 | 实时性要求高 |
+| `BatchFirst` | 批数据优先，流数据补充新数据 | 数据一致性要求高 |
+| `ByTimestamp` | 按时间戳合并去重 | 通用场景 |
+| `Latest` | 取最新数据 | 只关心最新状态 |
+
+### 批处理数据源接口
+
+```rust
+#[async_trait]
+pub trait BatchDataSource: Send + Sync {
+    /// 查询历史数据
+    async fn query(
+        &self,
+        key: &str,
+        start_ts: i64,
+        end_ts: i64,
+        fields: &[String],
+    ) -> Result<Vec<Record>, BatchQueryError>;
+
+    /// 聚合查询
+    async fn aggregate(
+        &self,
+        key: &str,
+        start_ts: i64,
+        end_ts: i64,
+        aggregations: &[Aggregation],
+    ) -> Result<AggregateResult, BatchQueryError>;
+}
+```
+
+### 聚合操作
+
+```rust
+use qaexchange::query::hybrid::{Aggregation, AggregateOp};
+
+let aggregations = vec![
+    Aggregation { field: "price".to_string(), op: AggregateOp::Avg, alias: "avg_price".to_string() },
+    Aggregation { field: "volume".to_string(), op: AggregateOp::Sum, alias: "total_volume".to_string() },
+    Aggregation { field: "price".to_string(), op: AggregateOp::Max, alias: "high".to_string() },
+    Aggregation { field: "price".to_string(), op: AggregateOp::Min, alias: "low".to_string() },
+];
+```
+
+### 性能指标
+
+| 操作 | 延迟 | 说明 |
+|------|------|------|
+| StreamBuffer.push() | ~50 ns | DashMap 写入 |
+| StreamBuffer.query_latest() | ~200 ns | DashMap 读取 |
+| HybridQuery (缓存命中) | < 1 ms | 流数据直接返回 |
+| HybridQuery (批查询) | < 50 ms | Parquet 扫描 + 合并 |
+
+---
+
 ## 📚 相关文档
 
 - [SSTable 格式](sstable.md) - Parquet SSTable 详细格式
 - [MemTable 实现](memtable.md) - OLAP MemTable 与查询引擎集成
+- [因子计算系统](../factor/README.md) - 因子 DAG 与查询引擎集成
 - [Polars 官方文档](https://pola-rs.github.io/polars-book/) - 完整 API 参考
 - [Arrow2 文档](https://jorgecarleitao.github.io/arrow2/) - 底层列式格式
 - [查询引擎详细设计](../../storage/05_ARROW2_QUERY_ENGINE.md) - 架构细节

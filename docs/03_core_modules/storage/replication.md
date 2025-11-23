@@ -1464,17 +1464,109 @@ heartbeat_interval_ms = 100  # 保持不变
 
 ## 🎓 11. 进阶主题
 
-### 11.1 网络层集成（TODO）
+### 11.1 gRPC 网络层 ✨ NEW
 
-当前实现缺少网络层，实际部署需要集成 gRPC 或 WebSocket:
+`src/replication/grpc.rs` 实现了完整的 gRPC 通信层：
+
+#### 消息类型定义
 
 ```rust
-// 示例: gRPC 服务定义
-service ReplicationService {
-    rpc ReplicateLog(ReplicationRequest) returns (ReplicationResponse);
-    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
-    rpc RequestVote(VoteRequest) returns (VoteResponse);
+// 日志复制请求
+pub struct AppendEntriesRequest {
+    pub term: u64,
+    pub leader_id: String,
+    pub prev_log_sequence: u64,
+    pub prev_log_term: u64,
+    pub entries: Vec<LogEntry>,
+    pub leader_commit: u64,
 }
+
+// 心跳请求（带节点状态）
+pub struct HeartbeatRequest {
+    pub term: u64,
+    pub leader_id: String,
+    pub leader_commit: u64,
+    pub timestamp: i64,
+}
+
+// 节点状态监控
+pub struct NodeStatus {
+    pub cpu_usage: f32,
+    pub memory_usage: f32,
+    pub disk_usage: f32,
+    pub pending_logs: u64,
+    pub replication_lag_ms: u64,
+}
+
+// 投票请求
+pub struct VoteRequest {
+    pub term: u64,
+    pub candidate_id: String,
+    pub last_log_sequence: u64,
+    pub last_log_term: u64,
+}
+
+// 快照分块传输
+pub struct SnapshotChunk {
+    pub term: u64,
+    pub last_included_sequence: u64,
+    pub chunk_index: u64,
+    pub total_chunks: u64,
+    pub data: Vec<u8>,
+    pub is_last: bool,
+}
+```
+
+#### gRPC 配置
+
+```rust
+pub struct GrpcConfig {
+    pub listen_addr: SocketAddr,           // 监听地址 (默认 0.0.0.0:9090)
+    pub connect_timeout: Duration,         // 连接超时 (默认 5s)
+    pub request_timeout: Duration,         // 请求超时 (默认 30s)
+    pub max_message_size: usize,           // 最大消息 (默认 64MB)
+    pub max_concurrent_streams: u32,       // 并发流 (默认 100)
+}
+```
+
+#### 集群管理器
+
+```rust
+let manager = ClusterManager::new("node1".to_string(), GrpcConfig::default());
+
+// 添加集群节点
+manager.add_node(ClusterNode {
+    id: "node2".to_string(),
+    addr: "192.168.1.2:9090".to_string(),
+    is_active: true,
+    last_heartbeat: 0,
+    match_index: 0,
+    next_index: 1,
+});
+
+// 广播日志到所有节点
+let results = manager.broadcast_append_entries(request).await;
+
+// 更新复制进度
+manager.update_replication_progress("node2", 1000);
+```
+
+#### 文件结构更新
+
+```
+src/replication/
+├── mod.rs              # 模块入口
+├── role.rs             # 节点角色管理
+├── replicator.rs       # 日志复制器
+├── heartbeat.rs        # 心跳管理
+├── failover.rs         # 故障转移
+├── protocol.rs         # 协议定义
+└── grpc.rs             # ✨ gRPC 网络层 (NEW)
+    ├── GrpcConfig          # gRPC 配置
+    ├── ReplicationContext  # 复制上下文
+    ├── ReplicationServiceImpl  # 服务实现
+    ├── ReplicationClient   # 客户端
+    └── ClusterManager      # 集群管理
 ```
 
 ### 11.2 快照传输

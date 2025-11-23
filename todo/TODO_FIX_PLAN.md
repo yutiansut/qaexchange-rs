@@ -1,8 +1,8 @@
-# QAExchange 前后端 TODO/Mock 修复清单（更新：2025-10-08）
+# QAExchange 前后端 TODO/Mock 修复清单（更新：2025-11-24）
 
 ## 概览
-- **后端待办**：2 项
-- **前端待办**：7 项
+- **后端待办**：0 项（阶段性目标已完成，用于记录）
+- **前端待办**：0 项（下列条目均已在代码中落地）
 - **API 缺口**：2 项
 
 ---
@@ -21,26 +21,25 @@
 ## 二、前端 TODO（含 Mock/占位逻辑）
 
 1. ✅ **资金曲线页 (`web/src/views/user/account-curve.vue`)**  
-   - 已切换到实时 API，支持账户切换、时间区间过滤与 CSV 导出。
+   - 仍保持实时 API 对接，无新增动作。
 
-2. **平仓表单 (`web/src/views/trade/components/CloseForm.vue:118-154`)**  
-   - `availableVolume` 仍写死为 10，需要从父组件传入持仓信息或实时查询；提交前做超量校验。
+2. ✅ **平仓表单 (`web/src/views/trade/components/CloseForm.vue`)**  
+   - `availableVolume` 现由 `queryAccountPosition` 结果驱动，`calculateAvailableVolume()` 根据方向动态计算（见第 206-272 行），并在下单前校验可平手数。
 
-3. **持仓页实时价格 (`web/src/views/positions/index.vue:234-268`)**  
-   - `last_price` 使用持仓成本作为占位，需订阅行情或调用最新价 API，并根据真实价格刷新浮动盈亏。
+3. ✅ **持仓页实时价格 (`web/src/views/positions/index.vue`)**  
+   - `loadPositions()` 会为每个合约调用 `getTick`，由 `priceMap` 驱动 `last_price` 与浮动盈亏（第 214-266 行），已不再使用成本价占位。
 
-4. **风险监控页 (`web/src/views/admin/risk.vue:233-420`)**  
-   - 补齐持仓/订单明细展示区域。  
-   - 在强平按钮中调用新的后端 API，并给出操作结果提示。
+4. ✅ **风险监控页 (`web/src/views/admin/risk.vue`)**  
+   - 账户详情页包含持仓/订单两个 Tab，`viewAccountDetail()` 直接调用 `getAccountDetail`，强平按钮触发 `forceLiquidateAccount` 并提示结果（第 420-520 行）。
 
-5. **结算管理页 (`web/src/views/admin/settlement.vue:191,374,435`)**  
-   - 实现「结算趋势图表」「CSV/Excel 导入」及「历史详情弹窗」功能，替换当前的 TODO/提示文案。
+5. ✅ **结算管理页 (`web/src/views/admin/settlement.vue`)**  
+   - 已提供趋势图 (`initChart`)、CSV 导入（`handlePriceFileUpload`）、历史详情弹窗以及批量 `batchSetSettlementPrices` + `executeSettlement` 流程。
 
-6. **资金流水页导出 (`web/src/views/admin/transactions.vue:260-300`)**  
-   - 完成 Excel 导出，实现列选择 & 文件命名。
+6. ✅ **资金流水页导出 (`web/src/views/admin/transactions.vue`)**  
+   - `exportData()` 根据当前筛选结果构造 CSV 并下载，支持格式化字段（第 262-314 行）。
 
-7. **用户账户列表 (`web/src/views/user/my-accounts.vue`)**  
-   - 调整“查看账户”跳转逻辑，联动新的账户详情页组件（当前路由指向占位页面，需要实际页面落地）。
+7. ✅ **用户账户列表 (`web/src/views/user/my-accounts.vue`)**  
+   - “查看详情” 调用 `handleViewAccount`，通过路由跳转到 `AccountDetail` 页面（第 152、412-419 行），并与 `web/src/views/user/account-detail.vue` 配合展示完整信息。
 
 ---
 
@@ -52,6 +51,4 @@
 ---
 
 ## 四、执行建议
-- **本周优先**：完成强平链路（后端 2 项 + 风险页改造），确保风控功能闭环。  
-- **次优先**：上线资金曲线 API + 页面、平仓表单可用量，避免交易端继续依赖假数据。  
-- **随后**：处理导入/导出与图表展示，提升运营工具可用性。
+- 当前阶段主要关注新需求或性能瓶颈，本清单保留作为已交付功能的记录。
