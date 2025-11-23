@@ -1,15 +1,15 @@
 //! WebSocket 消息处理器
 
-use std::sync::Arc;
-use std::collections::HashMap;
-use crossbeam::channel::{Sender, Receiver, unbounded};
 use actix::Addr;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use log;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::messages::{ClientMessage, ServerMessage};
-use super::session::{WsSession, WsSessionMessage, SendMessage};
-use crate::exchange::{OrderRouter, AccountManager};
-use crate::exchange::order_router::{SubmitOrderRequest, CancelOrderRequest};
+use super::session::{SendMessage, WsSession, WsSessionMessage};
+use crate::exchange::order_router::{CancelOrderRequest, SubmitOrderRequest};
+use crate::exchange::{AccountManager, OrderRouter};
 
 /// WebSocket 消息处理器
 pub struct WsMessageHandler {
@@ -87,15 +87,18 @@ impl WsMessageHandler {
 
     /// 处理消息
     fn handle_message(&self, msg: WsSessionMessage) -> Result<(), String> {
-        let session_addr = self.get_session(&msg.session_id)
+        let session_addr = self
+            .get_session(&msg.session_id)
             .ok_or_else(|| format!("Session not found: {}", msg.session_id))?;
 
-        let user_id = msg.user_id.as_ref()
+        let user_id = msg
+            .user_id
+            .as_ref()
             .ok_or_else(|| "User ID not found".to_string())?;
 
         match msg.message {
             ClientMessage::SubmitOrder {
-                account_id: client_account_id,  // ✨ 新增字段（来自客户端）
+                account_id: client_account_id, // ✨ 新增字段（来自客户端）
                 instrument_id,
                 direction,
                 offset,
@@ -125,13 +128,16 @@ impl WsMessageHandler {
                         Ok(account_arc) => {
                             let acc = account_arc.read();
                             acc.account_cookie.clone()
-                        },
+                        }
                         Err(e) => {
                             let server_msg = ServerMessage::OrderResponse {
                                 success: false,
                                 order_id: None,
                                 error_code: Some(4000),
-                                error_message: Some(format!("Account not found for user {}: {}", user_id, e)),
+                                error_message: Some(format!(
+                                    "Account not found for user {}: {}",
+                                    user_id, e
+                                )),
                             };
                             session_addr.do_send(SendMessage(server_msg));
                             return Ok(());
@@ -140,7 +146,7 @@ impl WsMessageHandler {
                 };
 
                 let req = SubmitOrderRequest {
-                    account_id,  // 交易层只关心 account_id
+                    account_id, // 交易层只关心 account_id
                     instrument_id,
                     direction,
                     offset,
@@ -161,7 +167,10 @@ impl WsMessageHandler {
                 session_addr.do_send(SendMessage(server_msg));
             }
 
-            ClientMessage::CancelOrder { account_id: client_account_id, order_id } => {
+            ClientMessage::CancelOrder {
+                account_id: client_account_id,
+                order_id,
+            } => {
                 // 服务层：验证账户所有权并获取 account_id
                 let account_id = if let Some(ref acc_id) = client_account_id {
                     // ✅ 客户端明确传递了 account_id，验证所有权
@@ -184,13 +193,16 @@ impl WsMessageHandler {
                         Ok(account_arc) => {
                             let acc = account_arc.read();
                             acc.account_cookie.clone()
-                        },
+                        }
                         Err(e) => {
                             let server_msg = ServerMessage::OrderResponse {
                                 success: false,
                                 order_id: Some(order_id.clone()),
                                 error_code: Some(4000),
-                                error_message: Some(format!("Account not found for user {}: {}", user_id, e)),
+                                error_message: Some(format!(
+                                    "Account not found for user {}: {}",
+                                    user_id, e
+                                )),
                             };
                             session_addr.do_send(SendMessage(server_msg));
                             return Ok(());
@@ -199,7 +211,7 @@ impl WsMessageHandler {
                 };
 
                 let req = CancelOrderRequest {
-                    account_id,  // 交易层只关心 account_id
+                    account_id, // 交易层只关心 account_id
                     order_id: order_id.clone(),
                 };
 
@@ -256,38 +268,36 @@ impl WsMessageHandler {
                 }
             }
 
-            ClientMessage::QueryAccount => {
-                match self.account_mgr.get_account(user_id) {
-                    Ok(account) => {
-                        let acc = account.read();
-                        let frozen = acc.accounts.balance - acc.money;
-                        let data = serde_json::json!({
-                            "account": {
-                                "user_id": acc.account_cookie,
-                                "balance": acc.accounts.balance,
-                                "available": acc.money,
-                                "frozen": frozen,
-                                "margin": acc.accounts.margin,
-                                "profit": acc.accounts.close_profit,
-                                "risk_ratio": acc.accounts.risk_ratio,
-                            }
-                        });
+            ClientMessage::QueryAccount => match self.account_mgr.get_account(user_id) {
+                Ok(account) => {
+                    let acc = account.read();
+                    let frozen = acc.accounts.balance - acc.money;
+                    let data = serde_json::json!({
+                        "account": {
+                            "user_id": acc.account_cookie,
+                            "balance": acc.accounts.balance,
+                            "available": acc.money,
+                            "frozen": frozen,
+                            "margin": acc.accounts.margin,
+                            "profit": acc.accounts.close_profit,
+                            "risk_ratio": acc.accounts.risk_ratio,
+                        }
+                    });
 
-                        let server_msg = ServerMessage::QueryResponse {
-                            request_type: "query_account".to_string(),
-                            data,
-                        };
-                        session_addr.do_send(SendMessage(server_msg));
-                    }
-                    Err(e) => {
-                        let server_msg = ServerMessage::Error {
-                            code: 1003,
-                            message: format!("Query account failed: {:?}", e),
-                        };
-                        session_addr.do_send(SendMessage(server_msg));
-                    }
+                    let server_msg = ServerMessage::QueryResponse {
+                        request_type: "query_account".to_string(),
+                        data,
+                    };
+                    session_addr.do_send(SendMessage(server_msg));
                 }
-            }
+                Err(e) => {
+                    let server_msg = ServerMessage::Error {
+                        code: 1003,
+                        message: format!("Query account failed: {:?}", e),
+                    };
+                    session_addr.do_send(SendMessage(server_msg));
+                }
+            },
 
             ClientMessage::QueryPosition { instrument_id } => {
                 match self.account_mgr.get_account(user_id) {
@@ -355,7 +365,11 @@ impl WsMessageHandler {
 pub fn create_handler(
     order_router: Arc<OrderRouter>,
     account_mgr: Arc<AccountManager>,
-) -> (WsMessageHandler, Sender<WsSessionMessage>, Arc<parking_lot::RwLock<HashMap<String, Addr<WsSession>>>>) {
+) -> (
+    WsMessageHandler,
+    Sender<WsSessionMessage>,
+    Arc<parking_lot::RwLock<HashMap<String, Addr<WsSession>>>>,
+) {
     let (sender, receiver) = unbounded();
     let sessions = Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let handler = WsMessageHandler {

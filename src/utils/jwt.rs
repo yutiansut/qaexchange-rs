@@ -56,7 +56,10 @@ impl Claims {
 }
 
 /// 生成 JWT token
-pub fn generate_token(user_id: &str, username: &str) -> Result<String, jsonwebtoken::errors::Error> {
+pub fn generate_token(
+    user_id: &str,
+    username: &str,
+) -> Result<String, jsonwebtoken::errors::Error> {
     let claims = Claims::new(user_id.to_string(), username.to_string());
 
     let header = Header::new(Algorithm::HS256);

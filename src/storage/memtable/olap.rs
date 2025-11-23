@@ -7,16 +7,15 @@
 // - 支持高效的列式过滤和投影
 
 use arrow2::array::{
-    Array, MutableArray,
-    MutablePrimitiveArray, MutableFixedSizeBinaryArray,
-    PrimitiveArray, FixedSizeBinaryArray, BooleanArray,
+    Array, BooleanArray, FixedSizeBinaryArray, MutableArray, MutableFixedSizeBinaryArray,
+    MutablePrimitiveArray, PrimitiveArray,
 };
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 
-use crate::storage::wal::record::WalRecord;
 use super::types::{MemTableKey, MemTableValue};
+use crate::storage::wal::record::WalRecord;
 
 /// OLAP MemTable Schema
 ///
@@ -24,10 +23,9 @@ use super::types::{MemTableKey, MemTableValue};
 pub fn create_olap_schema() -> Schema {
     Schema::from(vec![
         // 主键字段
-        Field::new("timestamp", DataType::Int64, false),  // 纳秒时间戳
-        Field::new("sequence", DataType::UInt64, false),  // WAL 序列号
+        Field::new("timestamp", DataType::Int64, false), // 纳秒时间戳
+        Field::new("sequence", DataType::UInt64, false), // WAL 序列号
         Field::new("record_type", DataType::UInt8, false), // 0=OrderInsert, 1=TradeExecuted, 2=AccountUpdate, 3=Checkpoint, 13=KLineFinished
-
         // Order 字段
         Field::new("order_id", DataType::UInt64, true),
         Field::new("user_id", DataType::FixedSizeBinary(32), true),
@@ -36,28 +34,25 @@ pub fn create_olap_schema() -> Schema {
         Field::new("offset", DataType::UInt8, true),
         Field::new("price", DataType::Float64, true),
         Field::new("volume", DataType::Float64, true),
-
         // Trade 字段
         Field::new("trade_id", DataType::UInt64, true),
         Field::new("exchange_order_id", DataType::UInt64, true),
-
         // Account 字段
         Field::new("balance", DataType::Float64, true),
         Field::new("available", DataType::Float64, true),
         Field::new("frozen", DataType::Float64, true),
         Field::new("margin", DataType::Float64, true),
-
         // K线字段
-        Field::new("kline_period", DataType::Int32, true),      // K线周期
-        Field::new("kline_timestamp", DataType::Int64, true),   // K线起始时间戳（毫秒）
-        Field::new("kline_open", DataType::Float64, true),      // 开盘价
-        Field::new("kline_high", DataType::Float64, true),      // 最高价
-        Field::new("kline_low", DataType::Float64, true),       // 最低价
-        Field::new("kline_close", DataType::Float64, true),     // 收盘价
-        Field::new("kline_volume", DataType::Int64, true),      // 成交量
-        Field::new("kline_amount", DataType::Float64, true),    // 成交额
-        Field::new("kline_open_oi", DataType::Int64, true),     // 起始持仓量
-        Field::new("kline_close_oi", DataType::Int64, true),    // 结束持仓量
+        Field::new("kline_period", DataType::Int32, true), // K线周期
+        Field::new("kline_timestamp", DataType::Int64, true), // K线起始时间戳（毫秒）
+        Field::new("kline_open", DataType::Float64, true), // 开盘价
+        Field::new("kline_high", DataType::Float64, true), // 最高价
+        Field::new("kline_low", DataType::Float64, true),  // 最低价
+        Field::new("kline_close", DataType::Float64, true), // 收盘价
+        Field::new("kline_volume", DataType::Int64, true), // 成交量
+        Field::new("kline_amount", DataType::Float64, true), // 成交额
+        Field::new("kline_open_oi", DataType::Int64, true), // 起始持仓量
+        Field::new("kline_close_oi", DataType::Int64, true), // 结束持仓量
     ])
 }
 
@@ -191,7 +186,10 @@ impl OlapMemTable {
             }
 
             let sequence = sequence_array.value(i);
-            let key = MemTableKey { timestamp: ts, sequence };
+            let key = MemTableKey {
+                timestamp: ts,
+                sequence,
+            };
 
             // 重建 WalRecord
             let record = reconstruct_record(i, record_type_array.value(i), &self.chunk);
@@ -376,7 +374,9 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 push_null_kline_fields!();
             }
 
-            WalRecord::AccountOpen { user_id, init_cash, .. } => {
+            WalRecord::AccountOpen {
+                user_id, init_cash, ..
+            } => {
                 record_type_builder.push(Some(4)); // 新类型ID
 
                 // Order 字段（部分为 null）
@@ -622,7 +622,7 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 // Order/Trade/Account字段为 null（K线记录不使用这些字段）
                 order_id_builder.push(None);
                 user_id_builder.push(None::<&[u8]>);
-                instrument_id_builder.push(Some(kline_instrument_id.as_slice()));  // K线合约ID
+                instrument_id_builder.push(Some(kline_instrument_id.as_slice())); // K线合约ID
                 direction_builder.push(None);
                 offset_builder.push(None);
                 price_builder.push(None);
@@ -889,7 +889,10 @@ fn reconstruct_record(index: usize, record_type: u8, chunk: &Chunk<Box<dyn Array
                 .unwrap()
                 .value(index);
 
-            WalRecord::Checkpoint { sequence, timestamp }
+            WalRecord::Checkpoint {
+                sequence,
+                timestamp,
+            }
         }
 
         _ => panic!("Unknown record type: {}", record_type),

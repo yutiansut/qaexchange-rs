@@ -3,11 +3,11 @@
 //! 记录所有撮合成交记录，供查询和统计使用
 
 use crate::core::Trade;
+use chrono::Utc;
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use std::sync::Arc;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// 成交记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,7 +112,8 @@ impl TradeRecorder {
     /// 查询合约的所有成交
     pub fn get_trades_by_instrument(&self, instrument_id: &str) -> Vec<TradeRecord> {
         if let Some(trade_ids) = self.by_instrument.get(instrument_id) {
-            trade_ids.read()
+            trade_ids
+                .read()
                 .iter()
                 .filter_map(|id| self.get_trade(id))
                 .collect()
@@ -124,7 +125,8 @@ impl TradeRecorder {
     /// 查询账户的所有成交
     pub fn get_trades_by_user(&self, user_id: &str) -> Vec<TradeRecord> {
         if let Some(trade_ids) = self.by_user.get(user_id) {
-            trade_ids.read()
+            trade_ids
+                .read()
                 .iter()
                 .filter_map(|id| self.get_trade(id))
                 .collect()
@@ -143,9 +145,16 @@ impl TradeRecorder {
 
         let total_volume: f64 = trades.iter().map(|t| t.volume).sum();
         let total_amount: f64 = trades.iter().map(|t| t.price * t.volume).sum();
-        let avg_price = if total_volume > 0.0 { total_amount / total_volume } else { 0.0 };
+        let avg_price = if total_volume > 0.0 {
+            total_amount / total_volume
+        } else {
+            0.0
+        };
 
-        let highest_price = trades.iter().map(|t| t.price).fold(f64::NEG_INFINITY, f64::max);
+        let highest_price = trades
+            .iter()
+            .map(|t| t.price)
+            .fold(f64::NEG_INFINITY, f64::max);
         let lowest_price = trades.iter().map(|t| t.price).fold(f64::INFINITY, f64::min);
 
         TradeStats {

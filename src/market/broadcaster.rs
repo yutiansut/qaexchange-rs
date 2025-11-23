@@ -2,12 +2,12 @@
 //!
 //! 负责将订单簿变化、成交数据广播给所有订阅者
 
-use std::sync::Arc;
-use dashmap::DashMap;
-use crossbeam::channel::{Sender, Receiver, unbounded};
-use serde::{Serialize, Deserialize};
-use crate::ExchangeError;
 use super::PriceLevel;
+use crate::ExchangeError;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// 市场数据事件类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,9 +24,9 @@ pub enum MarketDataEvent {
     /// 订单簿增量更新
     OrderBookUpdate {
         instrument_id: String,
-        side: String,  // "bid" or "ask"
+        side: String, // "bid" or "ask"
         price: f64,
-        volume: f64,  // 0 表示删除该价格档位
+        volume: f64, // 0 表示删除该价格档位
         timestamp: i64,
     },
 
@@ -35,7 +35,7 @@ pub enum MarketDataEvent {
         instrument_id: String,
         price: f64,
         volume: f64,
-        direction: String,  // "buy" or "sell"
+        direction: String, // "buy" or "sell"
         timestamp: i64,
     },
 
@@ -49,7 +49,7 @@ pub enum MarketDataEvent {
     /// K线完成事件（用于实时推送）
     KLineFinished {
         instrument_id: String,
-        period: i32,  // HQChart周期格式 (0=日线, 4=1分钟, 5=5分钟等)
+        period: i32, // HQChart周期格式 (0=日线, 4=1分钟, 5=5分钟等)
         kline: super::kline::KLine,
         timestamp: i64,
     },
@@ -100,7 +100,8 @@ impl MarketDataBroadcaster {
             channels: channels.clone(),
         };
 
-        self.subscribers.insert(subscriber_id.clone(), (sender, subscription));
+        self.subscribers
+            .insert(subscriber_id.clone(), (sender, subscription));
 
         log::info!(
             "Market data subscriber {} subscribed to instruments: {:?}, channels: {:?}",
@@ -148,7 +149,9 @@ impl MarketDataBroadcaster {
         };
 
         let channel = match &event {
-            MarketDataEvent::OrderBookSnapshot { .. } | MarketDataEvent::OrderBookUpdate { .. } => "orderbook",
+            MarketDataEvent::OrderBookSnapshot { .. } | MarketDataEvent::OrderBookUpdate { .. } => {
+                "orderbook"
+            }
             MarketDataEvent::Tick { .. } => "tick",
             MarketDataEvent::LastPrice { .. } => "last_price",
             MarketDataEvent::KLineFinished { .. } => "kline",
@@ -160,7 +163,10 @@ impl MarketDataBroadcaster {
 
             // 检查是否订阅了该合约
             let subscribed_instrument = subscription.instruments.is_empty()
-                || subscription.instruments.iter().any(|id| id == instrument_id);
+                || subscription
+                    .instruments
+                    .iter()
+                    .any(|id| id == instrument_id);
 
             // 检查是否订阅了该频道
             let subscribed_channel = subscription.channels.is_empty()
@@ -256,7 +262,10 @@ impl MarketDataBroadcaster {
             .filter(|entry| {
                 let subscription = &entry.value().1;
                 subscription.instruments.is_empty()
-                    || subscription.instruments.iter().any(|id| id == instrument_id)
+                    || subscription
+                        .instruments
+                        .iter()
+                        .any(|id| id == instrument_id)
             })
             .count()
     }
@@ -286,8 +295,14 @@ mod tests {
         // 广播订单簿快照
         broadcaster.broadcast_orderbook_snapshot(
             "IX2301".to_string(),
-            vec![PriceLevel { price: 100.0, volume: 10 }],
-            vec![PriceLevel { price: 101.0, volume: 5 }],
+            vec![PriceLevel {
+                price: 100.0,
+                volume: 10,
+            }],
+            vec![PriceLevel {
+                price: 101.0,
+                volume: 5,
+            }],
         );
 
         // 接收事件
@@ -327,12 +342,7 @@ mod tests {
             vec!["tick".to_string()],
         );
 
-        broadcaster.broadcast_tick(
-            "IX2301".to_string(),
-            100.5,
-            10.0,
-            "buy".to_string(),
-        );
+        broadcaster.broadcast_tick("IX2301".to_string(), 100.5, 10.0, "buy".to_string());
 
         let event = receiver.try_recv().unwrap();
         match event {

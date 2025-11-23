@@ -4,8 +4,8 @@
 
 // 重导出 qars 撮合引擎核心类型
 pub use qars::qamarket::matchengine::{
-    domain::{Order as MatchOrder, OrderDirection, OrderType, OrderTrait},
-    orderbook::{Orderbook, Success, Failed, TradingState, OrderProcessingResult},
+    domain::{Order as MatchOrder, OrderDirection, OrderTrait, OrderType},
+    orderbook::{Failed, OrderProcessingResult, Orderbook, Success, TradingState},
     orders::{self, OrderRequest},
 };
 

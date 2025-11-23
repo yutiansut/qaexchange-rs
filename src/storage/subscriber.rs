@@ -22,11 +22,11 @@
 //! 3. 存储故障不影响交易
 //! 4. 可扩展到 iceoryx2 跨进程分发
 
-use crate::storage::hybrid::oltp::{OltpHybridStorage, OltpHybridConfig};
-use crate::storage::wal::record::WalRecord;
 use crate::notification::message::{Notification, NotificationPayload};
-use std::sync::Arc;
+use crate::storage::hybrid::oltp::{OltpHybridConfig, OltpHybridStorage};
+use crate::storage::wal::record::WalRecord;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 
@@ -50,9 +50,9 @@ impl Default for StorageSubscriberConfig {
     fn default() -> Self {
         Self {
             storage_config: OltpHybridConfig::default(),
-            batch_size: 1000,          // 批量 1000 条
-            batch_timeout_ms: 10,      // 10ms 超时
-            buffer_size: 10000,        // 缓冲 10K 条
+            batch_size: 1000,     // 批量 1000 条
+            batch_timeout_ms: 10, // 10ms 超时
+            buffer_size: 10000,   // 缓冲 10K 条
         }
     }
 }
@@ -86,7 +86,13 @@ impl StorageSubscriber {
     /// 创建订阅器
     ///
     /// 返回：(订阅器实例, 通知发送器, 统计信息句柄)
-    pub fn new(config: StorageSubscriberConfig) -> (Self, mpsc::UnboundedSender<Notification>, Arc<parking_lot::Mutex<SubscriberStats>>) {
+    pub fn new(
+        config: StorageSubscriberConfig,
+    ) -> (
+        Self,
+        mpsc::UnboundedSender<Notification>,
+        Arc<parking_lot::Mutex<SubscriberStats>>,
+    ) {
         let (sender, receiver) = mpsc::unbounded_channel();
         let stats = Arc::new(parking_lot::Mutex::new(SubscriberStats::default()));
 
@@ -101,7 +107,10 @@ impl StorageSubscriber {
     }
 
     /// 获取或创建品种的 Storage
-    fn get_or_create_storage(&mut self, instrument_id: &str) -> Result<Arc<OltpHybridStorage>, String> {
+    fn get_or_create_storage(
+        &mut self,
+        instrument_id: &str,
+    ) -> Result<Arc<OltpHybridStorage>, String> {
         if let Some(storage) = self.storages.get(instrument_id) {
             return Ok(storage.clone());
         }
@@ -111,7 +120,8 @@ impl StorageSubscriber {
             self.config.storage_config.clone(),
         )?);
 
-        self.storages.insert(instrument_id.to_string(), storage.clone());
+        self.storages
+            .insert(instrument_id.to_string(), storage.clone());
         Ok(storage)
     }
 
@@ -166,25 +176,23 @@ impl StorageSubscriber {
         let mut total_persisted = 0;
         for (instrument_id, records) in grouped {
             match self.get_or_create_storage(&instrument_id) {
-                Ok(storage) => {
-                    match storage.write_batch(records.clone()) {
-                        Ok(sequences) => {
-                            total_persisted += sequences.len();
-                            log::debug!(
-                                "Persisted {} records for {} in {:?}",
-                                sequences.len(),
-                                instrument_id,
-                                start.elapsed()
-                            );
-                        }
-                        Err(e) => {
-                            log::error!("Failed to persist batch for {}: {}", instrument_id, e);
-                            let mut stats = self.stats.lock();
-                            stats.total_errors += 1;
-                            stats.last_error = Some(e);
-                        }
+                Ok(storage) => match storage.write_batch(records.clone()) {
+                    Ok(sequences) => {
+                        total_persisted += sequences.len();
+                        log::debug!(
+                            "Persisted {} records for {} in {:?}",
+                            sequences.len(),
+                            instrument_id,
+                            start.elapsed()
+                        );
                     }
-                }
+                    Err(e) => {
+                        log::error!("Failed to persist batch for {}: {}", instrument_id, e);
+                        let mut stats = self.stats.lock();
+                        stats.total_errors += 1;
+                        stats.last_error = Some(e);
+                    }
+                },
                 Err(e) => {
                     log::error!("Failed to get storage for {}: {}", instrument_id, e);
                     let mut stats = self.stats.lock();
@@ -338,7 +346,9 @@ impl Clone for SubscriberStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notification::message::{NotificationType, NotificationPayload, TradeExecutedNotify};
+    use crate::notification::message::{
+        NotificationPayload, NotificationType, TradeExecutedNotify,
+    };
 
     #[tokio::test]
     async fn test_storage_subscriber() {

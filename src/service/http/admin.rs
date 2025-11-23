@@ -3,13 +3,13 @@
 //! 提供合约管理、风控监控、结算管理等管理员功能的 HTTP API
 
 use actix_web::{web, HttpResponse};
+use log;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use log;
 
+use crate::exchange::instrument_registry::{InstrumentInfo, InstrumentStatus, InstrumentType};
+use crate::exchange::{AccountManager, InstrumentRegistry, SettlementEngine};
 use crate::ExchangeError;
-use crate::exchange::{InstrumentRegistry, SettlementEngine, AccountManager};
-use crate::exchange::instrument_registry::{InstrumentInfo, InstrumentType, InstrumentStatus};
 
 // ============================================================================
 // 管理端应用状态
@@ -236,9 +236,7 @@ pub async fn delist_instrument(
             accounts_with_positions.join(", ")
         );
         log::error!("{}", error_msg);
-        return Ok(HttpResponse::BadRequest().json(
-            ApiResponse::<()>::error(error_msg)
-        ));
+        return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(error_msg)));
     }
 
     match state.instrument_registry.delist(&instrument_id) {
@@ -288,7 +286,10 @@ pub async fn batch_set_settlement_prices(
     state: web::Data<AdminAppState>,
     req: web::Json<BatchSetSettlementPricesRequest>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    log::info!("POST /api/admin/settlement/batch-set-prices: {} prices", req.prices.len());
+    log::info!(
+        "POST /api/admin/settlement/batch-set-prices: {} prices",
+        req.prices.len()
+    );
 
     for price in &req.prices {
         state
@@ -307,7 +308,9 @@ pub async fn execute_settlement(
 
     match state.settlement_engine.daily_settlement() {
         Ok(result) => Ok(HttpResponse::Ok().json(ApiResponse::success(result))),
-        Err(e) => Ok(HttpResponse::InternalServerError().json(ApiResponse::<()>::error(e.to_string()))),
+        Err(e) => {
+            Ok(HttpResponse::InternalServerError().json(ApiResponse::<()>::error(e.to_string())))
+        }
     }
 }
 
@@ -332,7 +335,8 @@ pub async fn get_settlement_detail(
 
     match state.settlement_engine.get_settlement_detail(&date) {
         Some(detail) => Ok(HttpResponse::Ok().json(ApiResponse::success(detail))),
-        None => Ok(HttpResponse::NotFound().json(ApiResponse::<()>::error("Settlement not found".to_string()))),
+        None => Ok(HttpResponse::NotFound()
+            .json(ApiResponse::<()>::error("Settlement not found".to_string()))),
     }
 }
 

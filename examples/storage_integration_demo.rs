@@ -7,13 +7,13 @@
 //!
 //! 运行: cargo run --example storage_integration_demo
 
-use qaexchange::storage::hybrid::oltp::{OltpHybridStorage, OltpHybridConfig};
-use qaexchange::storage::wal::record::WalRecord;
-use qaexchange::exchange::{AccountManager, InstrumentRegistry, TradeGateway};
-use qaexchange::exchange::order_router::{OrderRouter, SubmitOrderRequest};
+use qaexchange::core::account_ext::{AccountType, OpenAccountRequest};
 use qaexchange::exchange::instrument_registry::InstrumentInfo;
-use qaexchange::core::account_ext::{OpenAccountRequest, AccountType};
+use qaexchange::exchange::order_router::{OrderRouter, SubmitOrderRequest};
+use qaexchange::exchange::{AccountManager, InstrumentRegistry, TradeGateway};
 use qaexchange::matching::engine::ExchangeMatchingEngine;
+use qaexchange::storage::hybrid::oltp::{OltpHybridConfig, OltpHybridStorage};
+use qaexchange::storage::wal::record::WalRecord;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -42,7 +42,8 @@ impl StorageIntegratedRouter {
 
     /// 获取或创建品种的 Storage
     fn get_or_create_storage(&self, instrument_id: &str) -> Arc<OltpHybridStorage> {
-        self.storages.entry(instrument_id.to_string())
+        self.storages
+            .entry(instrument_id.to_string())
             .or_insert_with(|| {
                 let storage = OltpHybridStorage::create(instrument_id, self.config.clone())
                     .expect("Create storage failed");
@@ -95,10 +96,15 @@ impl StorageIntegratedRouter {
         };
 
         // 2. 写入 Storage (WAL + MemTable)
-        let sequence = storage.write(wal_record)
+        let sequence = storage
+            .write(wal_record)
             .map_err(|e| format!("Storage write failed: {}", e))?;
 
-        println!("✅ WAL写入成功: sequence={}, 耗时={:?}", sequence, start.elapsed());
+        println!(
+            "✅ WAL写入成功: sequence={}, 耗时={:?}",
+            sequence,
+            start.elapsed()
+        );
 
         // 3. 调用原始订单路由器
         let response = self.router.submit_order(req);
@@ -106,12 +112,21 @@ impl StorageIntegratedRouter {
         if response.success {
             Ok(response.order_id.unwrap_or(order_id))
         } else {
-            Err(response.error_message.unwrap_or("Unknown error".to_string()))
+            Err(response
+                .error_message
+                .unwrap_or("Unknown error".to_string()))
         }
     }
 
     /// 记录成交 (持久化)
-    fn record_trade(&self, instrument_id: &str, order_id: u64, trade_id: u64, price: f64, volume: f64) -> Result<u64, String> {
+    fn record_trade(
+        &self,
+        instrument_id: &str,
+        order_id: u64,
+        trade_id: u64,
+        price: f64,
+        volume: f64,
+    ) -> Result<u64, String> {
         let storage = self.get_or_create_storage(instrument_id);
 
         let wal_record = WalRecord::TradeExecuted {
@@ -127,7 +142,14 @@ impl StorageIntegratedRouter {
     }
 
     /// 记录账户更新 (持久化)
-    fn record_account_update(&self, instrument_id: &str, user_id: &str, balance: f64, available: f64, margin: f64) -> Result<u64, String> {
+    fn record_account_update(
+        &self,
+        instrument_id: &str,
+        user_id: &str,
+        balance: f64,
+        available: f64,
+        margin: f64,
+    ) -> Result<u64, String> {
         let storage = self.get_or_create_storage(instrument_id);
 
         let mut user_id_bytes = [0u8; 32];
@@ -176,7 +198,7 @@ fn main() {
 
     // 1.3 创建合约注册表
     let instrument_registry = Arc::new(InstrumentRegistry::new());
-    use qaexchange::exchange::instrument_registry::{InstrumentType, InstrumentStatus};
+    use qaexchange::exchange::instrument_registry::{InstrumentStatus, InstrumentType};
     let mut info = InstrumentInfo::new(
         "IF2501".to_string(),
         "沪深300股指期货2501".to_string(),
@@ -184,7 +206,9 @@ fn main() {
         "CFFEX".to_string(),
     );
     info.status = InstrumentStatus::Active;
-    instrument_registry.register(info).expect("Failed to register instrument");
+    instrument_registry
+        .register(info)
+        .expect("Failed to register instrument");
 
     // 1.4 创建成交网关
     let trade_gateway = Arc::new(TradeGateway::new(account_mgr.clone()));
@@ -250,7 +274,8 @@ fn main() {
     };
 
     // 注册合约到撮合引擎
-    matching_engine.register_instrument("IF2501".to_string(), 3800.0)
+    matching_engine
+        .register_instrument("IF2501".to_string(), 3800.0)
         .expect("Register instrument failed");
 
     println!("✅ 合约注册成功:");
@@ -338,7 +363,13 @@ fn main() {
         println!("   • 保证金: ¥{:.2}\n", margin);
 
         let start = Instant::now();
-        match integrated_router.record_account_update("IF2501", "trader_001", balance, available, margin) {
+        match integrated_router.record_account_update(
+            "IF2501",
+            "trader_001",
+            balance,
+            available,
+            margin,
+        ) {
             Ok(sequence) => {
                 println!("✅ 账户更新持久化成功!");
                 println!("   • WAL序号: {}", sequence);

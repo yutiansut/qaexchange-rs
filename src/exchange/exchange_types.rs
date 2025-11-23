@@ -117,11 +117,21 @@ impl ExchangeResponse {
     /// 获取交易所订单号
     pub fn exchange_order_id(&self) -> i64 {
         match self {
-            ExchangeResponse::OrderAccepted { exchange_order_id, .. } => *exchange_order_id,
-            ExchangeResponse::OrderRejected { exchange_order_id, .. } => *exchange_order_id,
-            ExchangeResponse::Trade { exchange_order_id, .. } => *exchange_order_id,
-            ExchangeResponse::CancelAccepted { exchange_order_id, .. } => *exchange_order_id,
-            ExchangeResponse::CancelRejected { exchange_order_id, .. } => *exchange_order_id,
+            ExchangeResponse::OrderAccepted {
+                exchange_order_id, ..
+            } => *exchange_order_id,
+            ExchangeResponse::OrderRejected {
+                exchange_order_id, ..
+            } => *exchange_order_id,
+            ExchangeResponse::Trade {
+                exchange_order_id, ..
+            } => *exchange_order_id,
+            ExchangeResponse::CancelAccepted {
+                exchange_order_id, ..
+            } => *exchange_order_id,
+            ExchangeResponse::CancelRejected {
+                exchange_order_id, ..
+            } => *exchange_order_id,
         }
     }
 

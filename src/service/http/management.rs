@@ -3,12 +3,12 @@
 //! 提供账户列表查询、出入金、资金流水、风险监控等管理功能
 
 use actix_web::{web, HttpResponse, Result};
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-use crate::exchange::{AccountManager, CapitalManager, FundTransaction, SettlementEngine};
-use crate::risk::{RiskMonitor, RiskAccount, LiquidationRecord, MarginSummary, RiskLevel};
 use super::models::ApiResponse;
+use crate::exchange::{AccountManager, CapitalManager, FundTransaction, SettlementEngine};
+use crate::risk::{LiquidationRecord, MarginSummary, RiskAccount, RiskLevel, RiskMonitor};
 
 /// 管理端应用状态
 pub struct ManagementAppState {
@@ -58,13 +58,15 @@ pub async fn list_all_accounts(
 ) -> Result<HttpResponse> {
     let accounts = state.account_mgr.get_all_accounts();
 
-    let mut account_list: Vec<AccountListItem> = accounts.iter()
+    let mut account_list: Vec<AccountListItem> = accounts
+        .iter()
         .filter_map(|account| {
             let mut acc = account.write();
 
             // 获取元数据
-            let (_owner_user_id, account_name, account_type, created_at) =
-                state.account_mgr.get_account_metadata(&acc.account_cookie)?;
+            let (_owner_user_id, account_name, account_type, created_at) = state
+                .account_mgr
+                .get_account_metadata(&acc.account_cookie)?;
 
             Some(AccountListItem {
                 user_id: acc.account_cookie.clone(),
@@ -93,12 +95,14 @@ pub async fn list_all_accounts(
         account_list = vec![];
     }
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "accounts": account_list,
-    }))))
+    Ok(
+        HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "accounts": account_list,
+        }))),
+    )
 }
 
 /// 获取账户详情
@@ -110,15 +114,21 @@ pub async fn get_account_detail(
         Ok(qifi) => {
             let detail = AccountDetailResponse {
                 account_info: serde_json::to_value(&qifi.accounts).unwrap(),
-                positions: qifi.positions.iter().map(|p| serde_json::to_value(p).unwrap()).collect(),
-                orders: qifi.orders.iter().map(|o| serde_json::to_value(o).unwrap()).collect(),
+                positions: qifi
+                    .positions
+                    .iter()
+                    .map(|p| serde_json::to_value(p).unwrap())
+                    .collect(),
+                orders: qifi
+                    .orders
+                    .iter()
+                    .map(|o| serde_json::to_value(o).unwrap())
+                    .collect(),
             };
 
             Ok(HttpResponse::Ok().json(ApiResponse::success(detail)))
         }
-        Err(e) => Ok(HttpResponse::BadRequest().json(
-            ApiResponse::<()>::error(400, e.to_string())
-        )),
+        Err(e) => Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(400, e.to_string()))),
     }
 }
 
@@ -164,9 +174,7 @@ pub async fn deposit(
         req.remark.clone(),
     ) {
         Ok(transaction) => Ok(HttpResponse::Ok().json(ApiResponse::success(transaction))),
-        Err(e) => Ok(HttpResponse::BadRequest().json(
-            ApiResponse::<()>::error(400, e.to_string())
-        )),
+        Err(e) => Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(400, e.to_string()))),
     }
 }
 
@@ -175,7 +183,9 @@ pub async fn withdraw(
     req: web::Json<WithdrawRequest>,
     state: web::Data<ManagementAppState>,
 ) -> Result<HttpResponse> {
-    let remark = req.bank_account.as_ref()
+    let remark = req
+        .bank_account
+        .as_ref()
         .map(|acc| format!("提现至银行账户: {}", acc));
 
     match state.capital_mgr.withdraw_with_record(
@@ -185,9 +195,7 @@ pub async fn withdraw(
         remark,
     ) {
         Ok(transaction) => Ok(HttpResponse::Ok().json(ApiResponse::success(transaction))),
-        Err(e) => Ok(HttpResponse::BadRequest().json(
-            ApiResponse::<()>::error(400, e.to_string())
-        )),
+        Err(e) => Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(400, e.to_string()))),
     }
 }
 
@@ -199,7 +207,9 @@ pub async fn get_transactions(
 ) -> Result<HttpResponse> {
     let transactions = if let (Some(start), Some(end)) = (&query.start_date, &query.end_date) {
         // 按日期范围查询
-        state.capital_mgr.get_transactions_by_date_range(&user_id, start, end)
+        state
+            .capital_mgr
+            .get_transactions_by_date_range(&user_id, start, end)
     } else if let Some(limit) = query.limit {
         // 查询最近N条
         state.capital_mgr.get_recent_transactions(&user_id, limit)
@@ -240,24 +250,23 @@ pub async fn get_risk_accounts(
     query: web::Query<RiskQuery>,
     state: web::Data<ManagementAppState>,
 ) -> Result<HttpResponse> {
-    let risk_level_filter = query.risk_level.as_ref().and_then(|level| {
-        match level.as_str() {
+    let risk_level_filter = query
+        .risk_level
+        .as_ref()
+        .and_then(|level| match level.as_str() {
             "low" => Some(RiskLevel::Low),
             "medium" => Some(RiskLevel::Medium),
             "high" => Some(RiskLevel::High),
             "critical" => Some(RiskLevel::Critical),
             _ => None,
-        }
-    });
+        });
 
     let accounts = state.risk_monitor.get_risk_accounts(risk_level_filter);
     Ok(HttpResponse::Ok().json(ApiResponse::success(accounts)))
 }
 
 /// 获取保证金监控汇总
-pub async fn get_margin_summary(
-    state: web::Data<ManagementAppState>,
-) -> Result<HttpResponse> {
+pub async fn get_margin_summary(state: web::Data<ManagementAppState>) -> Result<HttpResponse> {
     let summary = state.risk_monitor.get_margin_summary();
     Ok(HttpResponse::Ok().json(ApiResponse::success(summary)))
 }
@@ -268,7 +277,9 @@ pub async fn get_liquidation_records(
     state: web::Data<ManagementAppState>,
 ) -> Result<HttpResponse> {
     let records = if let (Some(start), Some(end)) = (&query.start_date, &query.end_date) {
-        state.risk_monitor.get_liquidation_records_by_date_range(start, end)
+        state
+            .risk_monitor
+            .get_liquidation_records_by_date_range(start, end)
     } else {
         state.risk_monitor.get_all_liquidation_records()
     };
@@ -286,8 +297,9 @@ pub async fn force_liquidate_account(
         .force_liquidate_account(&req.account_id, req.reason.clone())
     {
         Ok(result) => Ok(HttpResponse::Ok().json(ApiResponse::success(result))),
-        Err(e) => Ok(HttpResponse::BadRequest().json(
-            ApiResponse::<()>::error(400, format!("Force liquidation failed: {}", e))
-        )),
+        Err(e) => Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+            400,
+            format!("Force liquidation failed: {}", e),
+        ))),
     }
 }

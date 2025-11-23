@@ -2,32 +2,28 @@
 //!
 //! 负责处理撮合引擎的成交结果，更新账户，并推送成交回报到客户端
 
-use crate::core::{QA_Account, Order, Trade};
-use crate::exchange::{AccountManager, ExchangeResponse, ExchangeOrderRecord, ExchangeTradeRecord, ExchangeIdGenerator};
-use crate::matching::{Success, Failed};
-use crate::ExchangeError;
+use crate::core::{Order, QA_Account, Trade};
+use crate::exchange::{
+    AccountManager, ExchangeIdGenerator, ExchangeOrderRecord, ExchangeResponse, ExchangeTradeRecord,
+};
+use crate::matching::{Failed, Success};
 use crate::notification::broker::NotificationBroker;
 use crate::notification::message::{
-    Notification as NewNotification,
-    NotificationType,
-    NotificationPayload,
+    AccountUpdateNotify, Notification as NewNotification, NotificationPayload, NotificationType,
+    OrderAcceptedNotify, OrderCanceledNotify, OrderFilledNotify, OrderPartiallyFilledNotify,
     TradeExecutedNotify,
-    AccountUpdateNotify,
-    OrderAcceptedNotify,
-    OrderFilledNotify,
-    OrderPartiallyFilledNotify,
-    OrderCanceledNotify,
 };
 use crate::protocol::diff::snapshot::SnapshotManager;
 use crate::protocol::diff::types::{DiffAccount, DiffTrade};
 use crate::storage::wal::manager::WalManager;
-use crate::storage::wal::record::{WalRecord, WalEntry};
-use std::sync::Arc;
+use crate::storage::wal::record::{WalEntry, WalRecord};
+use crate::ExchangeError;
+use chrono::Utc;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use crossbeam::channel::{unbounded, Sender, Receiver};
 use serde::{Deserialize, Serialize};
-use chrono::Utc;
+use std::sync::Arc;
 
 /// 成交回报消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,8 +32,8 @@ pub struct TradeNotification {
     pub user_id: String,
     pub order_id: String,
     pub instrument_id: String,
-    pub direction: String,      // BUY/SELL
-    pub offset: String,          // OPEN/CLOSE
+    pub direction: String, // BUY/SELL
+    pub offset: String,    // OPEN/CLOSE
     pub price: f64,
     pub volume: f64,
     pub timestamp: i64,
@@ -63,20 +59,20 @@ pub struct AccountUpdateNotification {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderStatusNotification {
     // 交易所回报字段
-    pub exchange_id: String,          // 交易所ID
-    pub instrument_id: String,        // 合约ID
-    pub exchange_order_id: String,    // 交易所订单号（关键标识）
-    pub direction: String,            // BUY/SELL
-    pub offset: String,               // OPEN/CLOSE (towards: 1=买开, -1=卖开, 3=买平, -3=卖平)
-    pub price_type: String,           // LIMIT/MARKET
-    pub volume: f64,                  // 本次成交量（对于ACCEPTED是委托量）
-    pub price: f64,                   // 价格（对于ACCEPTED是委托价）
-    pub status: String,               // ACCEPTED/FILLED/PARTIAL_FILLED/CANCELLED
-    pub timestamp: i64,               // 回报时间
+    pub exchange_id: String,       // 交易所ID
+    pub instrument_id: String,     // 合约ID
+    pub exchange_order_id: String, // 交易所订单号（关键标识）
+    pub direction: String,         // BUY/SELL
+    pub offset: String,            // OPEN/CLOSE (towards: 1=买开, -1=卖开, 3=买平, -3=卖平)
+    pub price_type: String,        // LIMIT/MARKET
+    pub volume: f64,               // 本次成交量（对于ACCEPTED是委托量）
+    pub price: f64,                // 价格（对于ACCEPTED是委托价）
+    pub status: String,            // ACCEPTED/FILLED/PARTIAL_FILLED/CANCELLED
+    pub timestamp: i64,            // 回报时间
 
     // 内部映射字段（通过 exchange_order_id 查找得到）
-    pub order_id: String,             // 内部订单ID
-    pub user_id: String,              // 用户ID
+    pub order_id: String, // 内部订单ID
+    pub user_id: String,  // 用户ID
 }
 
 /// 通知类型
@@ -161,13 +157,19 @@ impl TradeGateway {
     }
 
     /// 设置成交记录器
-    pub fn set_trade_recorder(mut self, trade_recorder: Arc<crate::matching::trade_recorder::TradeRecorder>) -> Self {
+    pub fn set_trade_recorder(
+        mut self,
+        trade_recorder: Arc<crate::matching::trade_recorder::TradeRecorder>,
+    ) -> Self {
         self.trade_recorder = Some(trade_recorder);
         self
     }
 
     /// 设置市场数据服务（用于更新快照统计）
-    pub fn set_market_data_service(&mut self, market_data_service: Arc<crate::market::MarketDataService>) {
+    pub fn set_market_data_service(
+        &mut self,
+        market_data_service: Arc<crate::market::MarketDataService>,
+    ) {
         self.market_data_service = Some(market_data_service);
     }
 
@@ -235,7 +237,15 @@ impl TradeGateway {
         qa_order_id: &str, // qars 内部订单ID
     ) -> Result<(), ExchangeError> {
         // 1. 更新账户 (Phase 4: 调用 order.trade() 更新 volume_left，并获取订单状态)
-        let (order_status, volume_left, volume_orign) = self.update_account(user_id, instrument_id, direction, offset, price, volume, qa_order_id)?;
+        let (order_status, volume_left, volume_orign) = self.update_account(
+            user_id,
+            instrument_id,
+            direction,
+            offset,
+            price,
+            volume,
+            qa_order_id,
+        )?;
 
         // 2. 生成成交回报
         let trade_notification = self.create_trade_notification(
@@ -259,9 +269,9 @@ impl TradeGateway {
             direction: direction.to_string(),
             offset: offset.to_string(),
             price_type: price_type.to_string(),
-            volume: volume_left,  // 剩余未成交量
+            volume: volume_left, // 剩余未成交量
             price,
-            status: order_status.clone(),  // 实际状态：ALIVE 或 FINISHED
+            status: order_status.clone(), // 实际状态：ALIVE 或 FINISHED
             timestamp: Utc::now().timestamp_nanos_opt().unwrap_or(0),
             order_id: order_id.to_string(),
             user_id: user_id.to_string(),
@@ -309,8 +319,16 @@ impl TradeGateway {
             });
         }
 
-        log::info!("Trade executed for order {}: {} @ {} x {} | status={}, volume_left={}/{}",
-            order_id, instrument_id, price, volume, order_status, volume_left, volume_orign);
+        log::info!(
+            "Trade executed for order {}: {} @ {} x {} | status={}, volume_left={}/{}",
+            order_id,
+            instrument_id,
+            price,
+            volume,
+            order_status,
+            volume_left,
+            volume_orign
+        );
 
         Ok(())
     }
@@ -331,7 +349,15 @@ impl TradeGateway {
         qa_order_id: &str, // qars 内部订单ID
     ) -> Result<(), ExchangeError> {
         // 1. 更新账户 (Phase 4: 调用 order.trade() 更新 volume_left，并获取订单状态)
-        let (order_status, volume_left, volume_orign) = self.update_account(user_id, instrument_id, direction, offset, price, volume, qa_order_id)?;
+        let (order_status, volume_left, volume_orign) = self.update_account(
+            user_id,
+            instrument_id,
+            direction,
+            offset,
+            price,
+            volume,
+            qa_order_id,
+        )?;
 
         // 2. 生成成交回报
         let trade_notification = self.create_trade_notification(
@@ -355,9 +381,9 @@ impl TradeGateway {
             direction: direction.to_string(),
             offset: offset.to_string(),
             price_type: price_type.to_string(),
-            volume: volume_left,  // 剩余未成交量
+            volume: volume_left, // 剩余未成交量
             price,
-            status: order_status.clone(),  // 实际状态：ALIVE 或 FINISHED
+            status: order_status.clone(), // 实际状态：ALIVE 或 FINISHED
             timestamp: Utc::now().timestamp_nanos_opt().unwrap_or(0),
             order_id: order_id.to_string(),
             user_id: user_id.to_string(),
@@ -405,8 +431,16 @@ impl TradeGateway {
             });
         }
 
-        log::info!("Trade executed for order {}: {} @ {} x {} | status={}, volume_left={}/{}",
-            order_id, instrument_id, price, volume, order_status, volume_left, volume_orign);
+        log::info!(
+            "Trade executed for order {}: {} @ {} x {} | status={}, volume_left={}/{}",
+            order_id,
+            instrument_id,
+            price,
+            volume,
+            order_status,
+            volume_left,
+            volume_orign
+        );
 
         Ok(())
     }
@@ -430,7 +464,8 @@ impl TradeGateway {
         _qa_order_id: &str,
     ) -> Result<(), ExchangeError> {
         Err(ExchangeError::OrderError(
-            "handle_accepted_original is deprecated, use handle_accepted with exchange fields".to_string()
+            "handle_accepted_original is deprecated, use handle_accepted with exchange fields"
+                .to_string(),
         ))
     }
 
@@ -456,8 +491,8 @@ impl TradeGateway {
             direction: direction.to_string(),
             offset: offset.to_string(),
             price_type: price_type.to_string(),
-            volume,  // 委托量
-            price,   // 委托价格
+            volume, // 委托量
+            price,  // 委托价格
             status: "ACCEPTED".to_string(),
             timestamp: Utc::now().timestamp_nanos_opt().unwrap_or(0),
             // 内部映射字段
@@ -483,7 +518,7 @@ impl TradeGateway {
         offset: &str,
         price_type: &str,
         price: f64,
-        volume: f64,  // 撤单时的剩余量
+        volume: f64, // 撤单时的剩余量
     ) -> Result<(), ExchangeError> {
         let order_status = OrderStatusNotification {
             // 交易所回报字段
@@ -493,8 +528,8 @@ impl TradeGateway {
             direction: direction.to_string(),
             offset: offset.to_string(),
             price_type: price_type.to_string(),
-            volume,  // 撤单时的剩余量
-            price,   // 委托价格
+            volume, // 撤单时的剩余量
+            price,  // 委托价格
             status: "CANCELLED".to_string(),
             timestamp: Utc::now().timestamp_nanos_opt().unwrap_or(0),
             // 内部映射字段
@@ -524,13 +559,13 @@ impl TradeGateway {
     /// 交易所接受订单，推送OrderAccepted回报给账户
     pub fn handle_order_accepted_new(
         &self,
-        exchange: &str,          // 交易所代码
+        exchange: &str, // 交易所代码
         instrument_id: &str,
-        user_id: &str,           // 用于映射
-        order_id: &str,          // 内部订单ID
-        direction: &str,         // BUY/SELL
-        offset: &str,            // OPEN/CLOSE/CLOSETODAY
-        price_type: &str,        // LIMIT/MARKET
+        user_id: &str,    // 用于映射
+        order_id: &str,   // 内部订单ID
+        direction: &str,  // BUY/SELL
+        offset: &str,     // OPEN/CLOSE/CLOSETODAY
+        price_type: &str, // LIMIT/MARKET
         price: f64,
         volume: f64,
     ) -> Result<i64, ExchangeError> {
@@ -581,9 +616,9 @@ impl TradeGateway {
             instrument: WalRecord::to_fixed_array_16(instrument_id),
             user_id: WalRecord::to_fixed_array_32(user_id),
             timestamp,
-            trade_id: 0,      // N/A for OrderAccepted
-            volume: 0.0,      // N/A
-            price: 0.0,       // N/A
+            trade_id: 0,        // N/A for OrderAccepted
+            volume: 0.0,        // N/A
+            price: 0.0,         // N/A
             reason: [0u8; 128], // N/A
         };
 
@@ -599,7 +634,10 @@ impl TradeGateway {
 
         log::info!(
             "Order accepted: exchange_order_id={}, instrument={}, user={}, order_id={}",
-            exchange_order_id, instrument_id, user_id, order_id
+            exchange_order_id,
+            instrument_id,
+            user_id,
+            order_id
         );
 
         Ok(exchange_order_id)
@@ -631,7 +669,11 @@ impl TradeGateway {
 
         log::warn!(
             "Order rejected: exchange_order_id={}, instrument={}, user={}, order_id={}, reason={}",
-            exchange_order_id, instrument_id, user_id, order_id, reason
+            exchange_order_id,
+            instrument_id,
+            user_id,
+            order_id,
+            reason
         );
 
         Ok(exchange_order_id)
@@ -643,12 +685,12 @@ impl TradeGateway {
     /// 账户端收到TRADE后自己计算 volume_left 判断状态
     pub fn handle_trade_new(
         &self,
-        exchange: &str,          // 交易所代码
+        exchange: &str, // 交易所代码
         instrument_id: &str,
-        exchange_order_id: i64,  // 订单的交易所订单号
+        exchange_order_id: i64, // 订单的交易所订单号
         user_id: &str,
         order_id: &str,
-        direction: &str,         // BUY/SELL (用于确定买卖方)
+        direction: &str, // BUY/SELL (用于确定买卖方)
         volume: f64,
         price: f64,
         opposite_order_id: Option<i64>, // 对手方订单号（如果可用）
@@ -702,7 +744,10 @@ impl TradeGateway {
 
         // 持久化 WAL record（WalManager 内部会创建 entry）
         account_wal_mgr.append(response_record).map_err(|e| {
-            ExchangeError::StorageError(format!("Failed to append ExchangeResponseRecord (Trade): {}", e))
+            ExchangeError::StorageError(format!(
+                "Failed to append ExchangeResponseRecord (Trade): {}",
+                e
+            ))
         })?;
 
         // 记录成交到 TradeRecorder（用于查询）
@@ -714,8 +759,8 @@ impl TradeGateway {
 
             recorder.record_trade(
                 instrument_id.to_string(),
-                user_id.to_string(),     // buy_account_id (如果是BUY方)
-                user_id.to_string(),     // sell_account_id (如果是SELL方，应该从对手方获取)
+                user_id.to_string(), // buy_account_id (如果是BUY方)
+                user_id.to_string(), // sell_account_id (如果是SELL方，应该从对手方获取)
                 order_id.to_string(),
                 format!("opposite_{}", opposite_order_id.unwrap_or(0)),
                 price,
@@ -728,15 +773,23 @@ impl TradeGateway {
         if let Some(mds) = &self.market_data_service {
             let turnover = price * volume;
             mds.update_trade_stats(instrument_id, volume as i64, turnover);
-            log::trace!("Updated snapshot stats: {} volume={}, turnover={:.2}",
-                instrument_id, volume, turnover);
+            log::trace!(
+                "Updated snapshot stats: {} volume={}, turnover={:.2}",
+                instrument_id,
+                volume,
+                turnover
+            );
         }
 
         // TODO: 推送回报给账户 (Phase 4)
 
         log::info!(
             "Trade executed: trade_id={}, exchange_order_id={}, instrument={}, volume={}, price={}",
-            trade_id, exchange_order_id, instrument_id, volume, price
+            trade_id,
+            exchange_order_id,
+            instrument_id,
+            volume,
+            price
         );
 
         Ok(trade_id)
@@ -765,7 +818,10 @@ impl TradeGateway {
 
         log::info!(
             "Cancel accepted: exchange_order_id={}, instrument={}, user={}, order_id={}",
-            exchange_order_id, instrument_id, user_id, order_id
+            exchange_order_id,
+            instrument_id,
+            user_id,
+            order_id
         );
 
         Ok(())
@@ -796,7 +852,11 @@ impl TradeGateway {
 
         log::warn!(
             "Cancel rejected: exchange_order_id={}, instrument={}, user={}, order_id={}, reason={}",
-            exchange_order_id, instrument_id, user_id, order_id, reason
+            exchange_order_id,
+            instrument_id,
+            user_id,
+            order_id,
+            reason
         );
 
         Ok(())
@@ -826,12 +886,19 @@ impl TradeGateway {
 
         // 检查成交前的持仓（详细）
         if let Some(pos) = acc.get_position(instrument_id) {
-            log::debug!("🔧   BEFORE receive_deal_sim: {} position details:", user_id);
+            log::debug!(
+                "🔧   BEFORE receive_deal_sim: {} position details:",
+                user_id
+            );
             log::debug!("🔧     volume_short_today={}, volume_short_his={}, volume_short_frozen_today={}, volume_short_frozen_his={}",
                 pos.volume_short_today, pos.volume_short_his, pos.volume_short_frozen_today, pos.volume_short_frozen_his);
             log::debug!("🔧     volume_short_unmut()={}", pos.volume_short_unmut());
         } else {
-            log::debug!("🔧   BEFORE receive_deal_sim: {} no position for {}", user_id, instrument_id);
+            log::debug!(
+                "🔧   BEFORE receive_deal_sim: {} no position for {}",
+                user_id,
+                instrument_id
+            );
         }
 
         // 生成时间戳字符串
@@ -839,43 +906,56 @@ impl TradeGateway {
 
         // 计算 towards (遵循 qars 的定义)
         let towards = match (direction, offset) {
-            ("BUY", "OPEN") => 2,      // 买开 = 2 (qars 标准)
-            ("SELL", "OPEN") => -2,    // 卖开 = -2
-            ("BUY", "CLOSE") => 3,     // 买平 (平空) = 3
-            ("SELL", "CLOSE") => -3,   // 卖平 (平多) = -3 ✅
+            ("BUY", "OPEN") => 2,    // 买开 = 2 (qars 标准)
+            ("SELL", "OPEN") => -2,  // 卖开 = -2
+            ("BUY", "CLOSE") => 3,   // 买平 (平空) = 3
+            ("SELL", "CLOSE") => -3, // 卖平 (平多) = -3 ✅
             ("BUY", "CLOSETODAY") => 4,
             ("SELL", "CLOSETODAY") => -4,
-            _ => return Err(ExchangeError::OrderError(
-                format!("Invalid direction/offset: {}/{}", direction, offset)
-            )),
+            _ => {
+                return Err(ExchangeError::OrderError(format!(
+                    "Invalid direction/offset: {}/{}",
+                    direction, offset
+                )))
+            }
         };
 
         // 处理成交 (释放冻结资金，更新持仓和余额)
         // 注意：send_order 已在订单提交时调用，此处不需要再次调用
         let trade_id = format!("T{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
 
-        log::debug!("🔧   Calling receive_deal_sim with qa_order_id={}", qa_order_id);
+        log::debug!(
+            "🔧   Calling receive_deal_sim with qa_order_id={}",
+            qa_order_id
+        );
         acc.receive_deal_sim(
             instrument_id.to_string(),
             volume,
             price,
             datetime.clone(),
-            qa_order_id.to_string(),    // ✅ 使用 qars 内部订单ID (关键修复！)
+            qa_order_id.to_string(), // ✅ 使用 qars 内部订单ID (关键修复！)
             trade_id.clone(),
-            qa_order_id.to_string(),    // realorder_id 与 qa_order_id 相同
+            qa_order_id.to_string(), // realorder_id 与 qa_order_id 相同
             towards,
         );
 
         // 检查成交后的持仓
-        let pos_after = acc.get_position(instrument_id)
+        let pos_after = acc
+            .get_position(instrument_id)
             .map(|p| (p.volume_long_unmut(), p.volume_short_unmut()));
-        log::debug!("🔧   AFTER receive_deal_sim: {} position={:?}", user_id, pos_after);
+        log::debug!(
+            "🔧   AFTER receive_deal_sim: {} position={:?}",
+            user_id,
+            pos_after
+        );
 
         // 注意：不要在这里调用 settle()！
         // settle() 是日终结算，会重新计算持仓盈亏，只能在日终时调用一次
 
         // Phase 4: 更新订单的 volume_left（用户自己根据 volume_left 判断订单状态）
-        let (status, volume_left, volume_orign) = if let Some(order) = acc.dailyorders.get_mut(qa_order_id) {
+        let (status, volume_left, volume_orign) = if let Some(order) =
+            acc.dailyorders.get_mut(qa_order_id)
+        {
             log::debug!("🔧   BEFORE order.trade(): order_id={}, volume_left={}, volume_orign={}, status={}",
                 qa_order_id, order.volume_left, order.volume_orign, order.status);
 
@@ -885,13 +965,20 @@ impl TradeGateway {
             // 2. if volume_left == 0.0 { status = "FINISHED" }
             order.trade(volume);
 
-            log::debug!("🔧   AFTER order.trade(): order_id={}, volume_left={}, status={}",
-                qa_order_id, order.volume_left, order.status);
+            log::debug!(
+                "🔧   AFTER order.trade(): order_id={}, volume_left={}, status={}",
+                qa_order_id,
+                order.volume_left,
+                order.status
+            );
 
             // 返回订单的当前状态
             (order.status.clone(), order.volume_left, order.volume_orign)
         } else {
-            log::warn!("⚠️  Order {} not found in dailyorders, cannot update volume_left", qa_order_id);
+            log::warn!(
+                "⚠️  Order {} not found in dailyorders, cannot update volume_left",
+                qa_order_id
+            );
             // 订单未找到时返回默认值（ALIVE 状态，假设全部未成交）
             ("ALIVE".to_string(), volume, volume)
         };
@@ -908,7 +995,10 @@ impl TradeGateway {
 
     /// 获取或创建 instrument 的 WAL 管理器
     /// 路径: {wal_root}/{instrument_id}/
-    fn get_or_create_instrument_wal(&self, instrument_id: &str) -> Result<Arc<WalManager>, ExchangeError> {
+    fn get_or_create_instrument_wal(
+        &self,
+        instrument_id: &str,
+    ) -> Result<Arc<WalManager>, ExchangeError> {
         if let Some(wal_mgr) = self.instrument_wal_managers.get(instrument_id) {
             return Ok(wal_mgr.value().clone());
         }
@@ -918,9 +1008,14 @@ impl TradeGateway {
         let wal_mgr = Arc::new(WalManager::new(&wal_dir));
 
         // 存储到映射表
-        self.instrument_wal_managers.insert(instrument_id.to_string(), wal_mgr.clone());
+        self.instrument_wal_managers
+            .insert(instrument_id.to_string(), wal_mgr.clone());
 
-        log::debug!("Created instrument WAL manager for {}: {}", instrument_id, wal_dir);
+        log::debug!(
+            "Created instrument WAL manager for {}: {}",
+            instrument_id,
+            wal_dir
+        );
 
         Ok(wal_mgr)
     }
@@ -937,7 +1032,8 @@ impl TradeGateway {
         let wal_mgr = Arc::new(WalManager::new(&wal_dir));
 
         // 存储到映射表
-        self.account_wal_managers.insert(user_id.to_string(), wal_mgr.clone());
+        self.account_wal_managers
+            .insert(user_id.to_string(), wal_mgr.clone());
 
         log::debug!("Created account WAL manager for {}: {}", user_id, wal_dir);
 
@@ -1016,8 +1112,9 @@ impl TradeGateway {
     /// 发送通知
     fn send_notification(&self, notification: Notification) -> Result<(), ExchangeError> {
         // 发送到全局通道
-        self.trade_sender.send(notification.clone())
-            .map_err(|e| ExchangeError::InternalError(format!("Failed to send notification: {}", e)))?;
+        self.trade_sender.send(notification.clone()).map_err(|e| {
+            ExchangeError::InternalError(format!("Failed to send notification: {}", e))
+        })?;
 
         // 发送到用户特定的订阅者
         let user_id = match &notification {
@@ -1106,7 +1203,7 @@ impl TradeGateway {
                             direction: order.direction.clone(),
                             offset: order.offset.clone(),
                             price: order.price,
-                            volume: order.volume,  // 委托量
+                            volume: order.volume, // 委托量
                             order_type: order.price_type.clone(),
                             frozen_margin: 0.0, // 交易所回报没有 frozen_margin，需账户管理器计算
                             timestamp: order.timestamp,
@@ -1118,8 +1215,8 @@ impl TradeGateway {
                             order_id: order.order_id.clone(),
                             exchange_order_id: order.exchange_order_id.clone(),
                             instrument_id: order.instrument_id.clone(),
-                            filled_volume: order.volume,  // 本次成交量
-                            average_price: order.price,   // 成交价格
+                            filled_volume: order.volume, // 本次成交量
+                            average_price: order.price,  // 成交价格
                             timestamp: order.timestamp,
                         }),
                     ),
@@ -1129,8 +1226,8 @@ impl TradeGateway {
                             order_id: order.order_id.clone(),
                             exchange_order_id: order.exchange_order_id.clone(),
                             instrument_id: order.instrument_id.clone(),
-                            filled_volume: order.volume,  // 本次成交量
-                            remaining_volume: 0.0,  // 交易所回报没有剩余量，需账户管理器计算
+                            filled_volume: order.volume, // 本次成交量
+                            remaining_volume: 0.0,       // 交易所回报没有剩余量，需账户管理器计算
                             average_price: order.price,
                             timestamp: order.timestamp,
                         }),
@@ -1190,7 +1287,9 @@ impl TradeGateway {
 
     /// 生成成交ID
     fn generate_trade_id(&self) -> String {
-        let seq = self.trade_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let seq = self
+            .trade_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let timestamp = Utc::now().timestamp_millis();
         format!("T{}{:010}", timestamp, seq)
     }
@@ -1199,7 +1298,7 @@ impl TradeGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::account_ext::{OpenAccountRequest, AccountType};
+    use crate::core::account_ext::{AccountType, OpenAccountRequest};
 
     fn create_test_gateway() -> (TradeGateway, Arc<AccountManager>, String) {
         let account_mgr = Arc::new(AccountManager::new());
@@ -1214,8 +1313,8 @@ mod tests {
         let account_id = account_mgr.open_account(req).unwrap();
 
         // 使用项目内测试目录存储WAL数据 (output/testexchange/)
-        let gateway = TradeGateway::new(account_mgr.clone())
-            .with_wal_root("./output/testexchange/wal");
+        let gateway =
+            TradeGateway::new(account_mgr.clone()).with_wal_root("./output/testexchange/wal");
 
         (gateway, account_mgr, account_id)
     }
@@ -1296,9 +1395,7 @@ mod tests {
         let peek_task = tokio::spawn({
             let snapshot_mgr = snapshot_mgr.clone();
             let user_id = user_id.to_string();
-            async move {
-                snapshot_mgr.peek(&user_id).await
-            }
+            async move { snapshot_mgr.peek(&user_id).await }
         });
 
         // 等待一小段时间确保 peek 任务开始等待
@@ -1309,10 +1406,7 @@ mod tests {
         gateway.push_account_update("test_user").unwrap();
 
         // 等待 peek 返回
-        let result = tokio::time::timeout(
-            tokio::time::Duration::from_secs(2),
-            peek_task
-        ).await;
+        let result = tokio::time::timeout(tokio::time::Duration::from_secs(2), peek_task).await;
 
         assert!(result.is_ok(), "peek() should return within timeout");
         let patches = result.unwrap().unwrap();
@@ -1323,8 +1417,10 @@ mod tests {
 
         // 验证 patch 包含账户数据
         let patch_str = serde_json::to_string(&patches[0]).unwrap();
-        assert!(patch_str.contains("accounts") || patch_str.contains("balance"),
-                "Patch should contain account data");
+        assert!(
+            patch_str.contains("accounts") || patch_str.contains("balance"),
+            "Patch should contain account data"
+        );
     }
 
     #[tokio::test]
@@ -1345,9 +1441,7 @@ mod tests {
         let peek_task = tokio::spawn({
             let snapshot_mgr = snapshot_mgr.clone();
             let user_id = user_id.to_string();
-            async move {
-                snapshot_mgr.peek(&user_id).await
-            }
+            async move { snapshot_mgr.peek(&user_id).await }
         });
 
         // 等待 peek 开始
@@ -1361,10 +1455,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // 等待 peek 返回
-        let result = tokio::time::timeout(
-            tokio::time::Duration::from_secs(2),
-            peek_task
-        ).await;
+        let result = tokio::time::timeout(tokio::time::Duration::from_secs(2), peek_task).await;
 
         assert!(result.is_ok(), "peek() should return within timeout");
         let patches = result.unwrap().unwrap();

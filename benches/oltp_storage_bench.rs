@@ -6,10 +6,10 @@
 //   cargo bench --bench oltp_storage_bench
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use std::thread;
+use std::time::{Duration, Instant};
 
-use qaexchange::storage::hybrid::oltp::{OltpHybridStorage, OltpHybridConfig};
+use qaexchange::storage::hybrid::oltp::{OltpHybridConfig, OltpHybridStorage};
 use qaexchange::storage::wal::record::WalRecord;
 
 // 配置
@@ -217,7 +217,10 @@ fn bench_flush_performance() {
         let stats = storage.stats();
         if stats.sstable_count > flush_count {
             flush_count = stats.sstable_count;
-            println!("  Flush #{}: {} entries → SSTable", flush_count, stats.sstable_entries);
+            println!(
+                "  Flush #{}: {} entries → SSTable",
+                flush_count, stats.sstable_entries
+            );
 
             if flush_count >= 5 {
                 break;
@@ -230,7 +233,10 @@ fn bench_flush_performance() {
     println!("  写入条目: {}", total_writes);
     println!("  触发 Flush: {} 次", flush_count);
     println!("  总耗时: {:?}", elapsed);
-    println!("  平均写入速度: {:.0} ops/s", total_writes as f64 / elapsed.as_secs_f64());
+    println!(
+        "  平均写入速度: {:.0} ops/s",
+        total_writes as f64 / elapsed.as_secs_f64()
+    );
 }
 
 /// 测试多品种并发写入
@@ -285,9 +291,14 @@ fn bench_concurrent_instruments() {
     println!("  品种数量: {}", CONCURRENT_INSTRUMENTS);
     println!("  总条目数: {}", total_entries);
     println!("  总耗时: {:?}", elapsed);
-    println!("  总吞吐量: {:.0} ops/s", total_entries as f64 / elapsed.as_secs_f64());
-    println!("  单品种吞吐量: {:.0} ops/s",
-             (total_entries / CONCURRENT_INSTRUMENTS) as f64 / elapsed.as_secs_f64());
+    println!(
+        "  总吞吐量: {:.0} ops/s",
+        total_entries as f64 / elapsed.as_secs_f64()
+    );
+    println!(
+        "  单品种吞吐量: {:.0} ops/s",
+        (total_entries / CONCURRENT_INSTRUMENTS) as f64 / elapsed.as_secs_f64()
+    );
 }
 
 /// 测试崩溃恢复性能
@@ -337,9 +348,15 @@ fn bench_recovery_performance() {
             let stats = storage.stats();
 
             println!("  恢复耗时: {:?}", elapsed);
-            println!("  恢复条目: {}", stats.memtable_entries + stats.sstable_entries as usize);
-            println!("  恢复速度: {:.0} entries/s",
-                     (stats.memtable_entries + stats.sstable_entries as usize) as f64 / elapsed.as_secs_f64());
+            println!(
+                "  恢复条目: {}",
+                stats.memtable_entries + stats.sstable_entries as usize
+            );
+            println!(
+                "  恢复速度: {:.0} entries/s",
+                (stats.memtable_entries + stats.sstable_entries as usize) as f64
+                    / elapsed.as_secs_f64()
+            );
         }
     }
 }

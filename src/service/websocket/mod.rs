@@ -7,27 +7,27 @@
 //! 1. **原有消息协议**: 向后兼容的 type-based 消息
 //! 2. **DIFF 协议**: 新增的 aid-based 差分推送协议
 
+pub mod diff_handler;
+pub mod diff_messages;
+pub mod handler;
 pub mod messages;
 pub mod session;
-pub mod handler;
-pub mod diff_messages;
-pub mod diff_handler;
 
-use actix_web::{web, HttpRequest, HttpResponse, Error};
-use actix_web_actors::ws;
-use std::sync::Arc;
-use std::collections::HashMap;
-use uuid::Uuid;
-use crossbeam::channel::Sender;
 use actix::Addr;
+use actix_web::{web, Error, HttpRequest, HttpResponse};
+use actix_web_actors::ws;
+use crossbeam::channel::Sender;
+use std::collections::HashMap;
+use std::sync::Arc;
+use uuid::Uuid;
 
-use self::session::{WsSession, WsSessionMessage};
-use self::handler::{WsMessageHandler, create_handler};
 use self::diff_handler::{DiffHandler, DiffWebsocketSession};
-use crate::exchange::{OrderRouter, AccountManager, TradeGateway};
-use crate::user::UserManager;
+use self::handler::{create_handler, WsMessageHandler};
+use self::session::{WsSession, WsSessionMessage};
+use crate::exchange::{AccountManager, OrderRouter, TradeGateway};
 use crate::market::MarketDataBroadcaster;
 use crate::protocol::diff::snapshot::SnapshotManager;
+use crate::user::UserManager;
 
 /// WebSocket 服务器
 pub struct WebSocketServer {
@@ -68,11 +68,11 @@ impl WebSocketServer {
         // 创建 DIFF 协议处理器（零拷贝架构）
         let snapshot_mgr = Arc::new(SnapshotManager::new());
         let diff_handler = Arc::new(
-            DiffHandler::new(snapshot_mgr, account_mgr)  // ✨ 传递 account_mgr
+            DiffHandler::new(snapshot_mgr, account_mgr) // ✨ 传递 account_mgr
                 .with_user_manager(user_manager.clone())
                 .with_order_router(order_router)
                 .with_market_broadcaster(market_broadcaster.clone())
-                .with_kline_actor(kline_actor)  // ✨ 传递 K线Actor
+                .with_kline_actor(kline_actor), // ✨ 传递 K线Actor
         );
 
         Self {
@@ -148,7 +148,6 @@ impl WebSocketServer {
 
         Ok(resp)
     }
-
 }
 
 /// WebSocket 路由处理函数
@@ -158,13 +157,12 @@ pub async fn ws_route(
     server: web::Data<Arc<WebSocketServer>>,
 ) -> Result<HttpResponse, Error> {
     // 可以从查询参数或 header 中获取 user_id
-    let user_id = req.uri().query()
-        .and_then(|q| {
-            q.split('&')
-                .find(|s| s.starts_with("user_id="))
-                .and_then(|s| s.strip_prefix("user_id="))
-                .map(|s| s.to_string())
-        });
+    let user_id = req.uri().query().and_then(|q| {
+        q.split('&')
+            .find(|s| s.starts_with("user_id="))
+            .and_then(|s| s.strip_prefix("user_id="))
+            .map(|s| s.to_string())
+    });
 
     server.handle_connection(req, stream, user_id).await
 }
@@ -184,13 +182,12 @@ pub async fn ws_diff_route(
     server: web::Data<Arc<WebSocketServer>>,
 ) -> Result<HttpResponse, Error> {
     // 从查询参数获取 user_id
-    let user_id = req.uri().query()
-        .and_then(|q| {
-            q.split('&')
-                .find(|s| s.starts_with("user_id="))
-                .and_then(|s| s.strip_prefix("user_id="))
-                .map(|s| s.to_string())
-        });
+    let user_id = req.uri().query().and_then(|q| {
+        q.split('&')
+            .find(|s| s.starts_with("user_id="))
+            .and_then(|s| s.strip_prefix("user_id="))
+            .map(|s| s.to_string())
+    });
 
     server.handle_diff_connection(req, stream, user_id).await
 }

@@ -6,11 +6,11 @@
 //! 1. 启动服务器: cargo run --bin qaexchange-server
 //! 2. 运行客户端: cargo run --example full_trading_demo
 
+use futures_util::{SinkExt, StreamExt};
 use reqwest;
 use serde_json::json;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
-use futures_util::{StreamExt, SinkExt};
 use std::time::Duration;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const HTTP_BASE_URL: &str = "http://127.0.0.1:8094";
 const WS_URL: &str = "ws://127.0.0.1:8095/ws?user_id=demo_user";
@@ -33,7 +33,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = reqwest::Client::new();
 
-    match client.get(&format!("{}/health", HTTP_BASE_URL)).send().await {
+    match client
+        .get(&format!("{}/health", HTTP_BASE_URL))
+        .send()
+        .await
+    {
         Ok(resp) => {
             if resp.status().is_success() {
                 println!("✅ Server is running at {}", HTTP_BASE_URL);
@@ -186,23 +190,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match msg {
                 Ok(Message::Text(text)) => {
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                        let msg_type = json.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
+                        let msg_type = json
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown");
 
                         match msg_type {
                             "auth_response" => {
-                                println!("✅ Auth response: {}", serde_json::to_string_pretty(&json).unwrap_or_default());
+                                println!(
+                                    "✅ Auth response: {}",
+                                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                                );
                             }
                             "order_response" => {
-                                println!("📝 Order response: {}", serde_json::to_string_pretty(&json).unwrap_or_default());
+                                println!(
+                                    "📝 Order response: {}",
+                                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                                );
                             }
                             "trade" => {
-                                println!("🤝 Trade notification: {}", serde_json::to_string_pretty(&json).unwrap_or_default());
+                                println!(
+                                    "🤝 Trade notification: {}",
+                                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                                );
                             }
                             "account_update" => {
-                                println!("💰 Account update: {}", serde_json::to_string_pretty(&json).unwrap_or_default());
+                                println!(
+                                    "💰 Account update: {}",
+                                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                                );
                             }
                             "order_status" => {
-                                println!("📊 Order status: {}", serde_json::to_string_pretty(&json).unwrap_or_default());
+                                println!(
+                                    "📊 Order status: {}",
+                                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                                );
                             }
                             "pong" => {
                                 println!("🏓 Pong received");
@@ -264,7 +286,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     println!("Querying account via WebSocket...");
-    write.send(Message::Text(query_account_msg.to_string())).await?;
+    write
+        .send(Message::Text(query_account_msg.to_string()))
+        .await?;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 

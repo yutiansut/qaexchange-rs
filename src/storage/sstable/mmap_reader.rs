@@ -9,14 +9,14 @@
 // - 读取延迟：P99 < 50μs（vs 传统 read() 的 100μs）
 // - 内存占用：零额外分配（直接访问映射区域）
 
-use super::types::SSTableMetadata;
 use super::bloom::BloomFilter;
+use super::types::SSTableMetadata;
 use crate::storage::memtable::types::{MemTableKey, MemTableValue};
 use crate::storage::wal::WalRecord;
-use std::path::Path;
 use memmap2::Mmap;
-use std::fs::File;
 use rkyv::Deserialize as RkyvDeserialize;
+use std::fs::File;
+use std::path::Path;
 
 /// SSTable 文件头（128 bytes）
 #[derive(Debug, Clone)]
@@ -65,8 +65,7 @@ impl MmapSSTableReader {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let file_path = path.as_ref().to_str().unwrap().to_string();
 
-        let file = File::open(&path)
-            .map_err(|e| format!("Open file failed: {}", e))?;
+        let file = File::open(&path).map_err(|e| format!("Open file failed: {}", e))?;
 
         // 创建内存映射
         let mmap = unsafe {
@@ -118,7 +117,7 @@ impl MmapSSTableReader {
         if let Some(ref bloom) = self.metadata.bloom_filter {
             bloom.contains(key_bytes)
         } else {
-            true  // 没有 Bloom Filter，保守返回 true
+            true // 没有 Bloom Filter，保守返回 true
         }
     }
 
@@ -136,14 +135,18 @@ impl MmapSSTableReader {
     /// - 零拷贝：直接读取映射区域，无需 read() 系统调用
     /// - 页缓存：OS 自动管理热数据
     /// - 高性能：P99 延迟 < 50μs
-    pub fn range_query(&self, start_ts: i64, end_ts: i64) -> Result<Vec<(i64, u64, WalRecord)>, String> {
+    pub fn range_query(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<(i64, u64, WalRecord)>, String> {
         // 快速过滤：时间范围检查
         if !self.should_scan(start_ts, end_ts) {
             return Ok(Vec::new());
         }
 
         let mut results = Vec::new();
-        let mut offset = 128usize;  // 跳过 Header
+        let mut offset = 128usize; // 跳过 Header
         let mut entries_read = 0u64;
 
         let data_end = self.header.metadata_offset as usize;
@@ -153,18 +156,20 @@ impl MmapSSTableReader {
             if offset + 4 > data_end {
                 break;
             }
-            let key_len = u32::from_le_bytes(self.mmap[offset..offset+4].try_into().unwrap()) as usize;
+            let key_len =
+                u32::from_le_bytes(self.mmap[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
 
             // 读取 key（复制到对齐缓冲区以满足 rkyv 对齐要求）
             if offset + key_len > data_end {
                 break;
             }
-            let key_bytes: Vec<u8> = self.mmap[offset..offset+key_len].to_vec();
+            let key_bytes: Vec<u8> = self.mmap[offset..offset + key_len].to_vec();
 
             let archived_key = rkyv::check_archived_root::<MemTableKey>(&key_bytes)
                 .map_err(|e| format!("Deserialize key failed: {}", e))?;
-            let key: MemTableKey = archived_key.deserialize(&mut rkyv::Infallible)
+            let key: MemTableKey = archived_key
+                .deserialize(&mut rkyv::Infallible)
                 .map_err(|e| format!("Deserialize key failed: {:?}", e))?;
 
             offset += key_len;
@@ -173,7 +178,8 @@ impl MmapSSTableReader {
             if offset + 4 > data_end {
                 break;
             }
-            let value_len = u32::from_le_bytes(self.mmap[offset..offset+4].try_into().unwrap()) as usize;
+            let value_len =
+                u32::from_le_bytes(self.mmap[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
 
             // 读取 value
@@ -183,11 +189,12 @@ impl MmapSSTableReader {
 
             // 时间范围过滤
             if key.timestamp >= start_ts && key.timestamp <= end_ts {
-                let value_bytes: Vec<u8> = self.mmap[offset..offset+value_len].to_vec();
+                let value_bytes: Vec<u8> = self.mmap[offset..offset + value_len].to_vec();
 
                 let archived_value = rkyv::check_archived_root::<MemTableValue>(&value_bytes)
                     .map_err(|e| format!("Deserialize value failed: {}", e))?;
-                let value: MemTableValue = archived_value.deserialize(&mut rkyv::Infallible)
+                let value: MemTableValue = archived_value
+                    .deserialize(&mut rkyv::Infallible)
                     .map_err(|e| format!("Deserialize value failed: {:?}", e))?;
 
                 results.push((key.timestamp, key.sequence, value.record));
@@ -210,12 +217,13 @@ impl MmapSSTableReader {
         // Bloom Filter 快速检查
         let key_bytes = target_key.to_bytes();
         if !self.might_contain(&key_bytes) {
-            return Ok(None);  // 一定不存在
+            return Ok(None); // 一定不存在
         }
 
         // 时间范围检查
-        if target_key.timestamp < self.header.min_timestamp ||
-           target_key.timestamp > self.header.max_timestamp {
+        if target_key.timestamp < self.header.min_timestamp
+            || target_key.timestamp > self.header.max_timestamp
+        {
             return Ok(None);
         }
 
@@ -228,17 +236,19 @@ impl MmapSSTableReader {
             if offset + 4 > data_end {
                 break;
             }
-            let key_len = u32::from_le_bytes(self.mmap[offset..offset+4].try_into().unwrap()) as usize;
+            let key_len =
+                u32::from_le_bytes(self.mmap[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
 
             if offset + key_len > data_end {
                 break;
             }
-            let key_bytes: Vec<u8> = self.mmap[offset..offset+key_len].to_vec();
+            let key_bytes: Vec<u8> = self.mmap[offset..offset + key_len].to_vec();
 
             let archived_key = rkyv::check_archived_root::<MemTableKey>(&key_bytes)
                 .map_err(|e| format!("Deserialize key failed: {}", e))?;
-            let key: MemTableKey = archived_key.deserialize(&mut rkyv::Infallible)
+            let key: MemTableKey = archived_key
+                .deserialize(&mut rkyv::Infallible)
                 .map_err(|e| format!("Deserialize key failed: {:?}", e))?;
 
             offset += key_len;
@@ -247,7 +257,8 @@ impl MmapSSTableReader {
             if offset + 4 > data_end {
                 break;
             }
-            let value_len = u32::from_le_bytes(self.mmap[offset..offset+4].try_into().unwrap()) as usize;
+            let value_len =
+                u32::from_le_bytes(self.mmap[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
 
             if offset + value_len > data_end {
@@ -256,11 +267,12 @@ impl MmapSSTableReader {
 
             // 检查是否匹配
             if key.timestamp == target_key.timestamp && key.sequence == target_key.sequence {
-                let value_bytes: Vec<u8> = self.mmap[offset..offset+value_len].to_vec();
+                let value_bytes: Vec<u8> = self.mmap[offset..offset + value_len].to_vec();
 
                 let archived_value = rkyv::check_archived_root::<MemTableValue>(&value_bytes)
                     .map_err(|e| format!("Deserialize value failed: {}", e))?;
-                let value: MemTableValue = archived_value.deserialize(&mut rkyv::Infallible)
+                let value: MemTableValue = archived_value
+                    .deserialize(&mut rkyv::Infallible)
                     .map_err(|e| format!("Deserialize value failed: {:?}", e))?;
 
                 return Ok(Some(value.record));
@@ -270,7 +282,7 @@ impl MmapSSTableReader {
             entries_read += 1;
         }
 
-        Ok(None)  // 未找到
+        Ok(None) // 未找到
     }
 
     /// 获取文件大小
@@ -322,7 +334,7 @@ mod tests {
 
             // 范围查询
             let results = reader.range_query(1000, 1500).unwrap();
-            assert_eq!(results.len(), 51);  // 1000, 1010, ..., 1500
+            assert_eq!(results.len(), 51); // 1000, 1010, ..., 1500
         }
     }
 
@@ -351,7 +363,9 @@ mod tests {
             assert!(result.is_some());
 
             match result.unwrap() {
-                WalRecord::OrderInsert { order_id, price, .. } => {
+                WalRecord::OrderInsert {
+                    order_id, price, ..
+                } => {
                     assert_eq!(order_id, 5);
                     assert_eq!(price, 4005.0);
                 }

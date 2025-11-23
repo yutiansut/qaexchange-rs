@@ -32,47 +32,47 @@ pub enum DiffClientMessage {
 
     /// 订阅行情
     SubscribeQuote {
-        ins_list: String,  // 逗号分隔的合约列表，如 "SHFE.cu1612,CFFEX.IF1701"
+        ins_list: String, // 逗号分隔的合约列表，如 "SHFE.cu1612,CFFEX.IF1701"
     },
 
     /// 下单
     InsertOrder {
-        user_id: String,                   // 用户身份（用于验证）
+        user_id: String, // 用户身份（用于验证）
         #[serde(default)]
         #[serde(skip_serializing_if = "Option::is_none")]
-        account_id: Option<String>,        // 交易账户（推荐明确传递）✨
+        account_id: Option<String>, // 交易账户（推荐明确传递）✨
         #[serde(default)]
         #[serde(skip_serializing_if = "Option::is_none")]
-        order_id: Option<String>,          // 订单ID（可选，未提供时服务端自动生成）
+        order_id: Option<String>, // 订单ID（可选，未提供时服务端自动生成）
         exchange_id: String,
         instrument_id: String,
-        direction: String,                 // BUY/SELL
-        offset: String,                    // OPEN/CLOSE
+        direction: String, // BUY/SELL
+        offset: String,    // OPEN/CLOSE
         volume: i64,
-        price_type: String,                // LIMIT/MARKET/ANY
+        price_type: String, // LIMIT/MARKET/ANY
         #[serde(skip_serializing_if = "Option::is_none")]
         limit_price: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        volume_condition: Option<String>,  // ANY/MIN/ALL
+        volume_condition: Option<String>, // ANY/MIN/ALL
         #[serde(skip_serializing_if = "Option::is_none")]
-        time_condition: Option<String>,    // IOC/GFS/GFD/GTD/GTC/GFA
+        time_condition: Option<String>, // IOC/GFS/GFD/GTD/GTC/GFA
     },
 
     /// 撤单
     CancelOrder {
-        user_id: String,                   // 用户身份（用于验证）
+        user_id: String, // 用户身份（用于验证）
         #[serde(default)]
         #[serde(skip_serializing_if = "Option::is_none")]
-        account_id: Option<String>,        // 交易账户（推荐明确传递）✨
+        account_id: Option<String>, // 交易账户（推荐明确传递）✨
         order_id: String,
     },
 
     /// 订阅图表数据
     SetChart {
         chart_id: String,
-        ins_list: String,        // 空表示删除，多个合约逗号分隔
-        duration: i64,           // 周期(ns)，tick=0, 日线=86400000000000
-        view_width: i32,         // 图表宽度
+        ins_list: String, // 空表示删除，多个合约逗号分隔
+        duration: i64,    // 周期(ns)，tick=0, 日线=86400000000000
+        view_width: i32,  // 图表宽度
     },
 }
 
@@ -82,7 +82,7 @@ pub enum DiffClientMessage {
 pub enum DiffServerMessage {
     /// 业务信息截面更新（rtn_data）
     RtnData {
-        data: Vec<Value>,  // JSON Merge Patch 数组
+        data: Vec<Value>, // JSON Merge Patch 数组
     },
 }
 

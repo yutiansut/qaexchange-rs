@@ -47,13 +47,15 @@ pub struct SettlementResult {
 pub struct AccountSettlement {
     pub user_id: String,
     pub date: String,
-    pub close_profit: f64,      // 平仓盈亏
-    pub position_profit: f64,   // 持仓盈亏
-    pub commission: f64,        // 手续费
-    pub pre_balance: f64,       // 结算前权益
-    pub balance: f64,           // 结算后权益
-    pub risk_ratio: f64,        // 风险度
-    pub force_close: bool,      // 是否强平
+    pub close_profit: f64,    // 平仓盈亏
+    pub position_profit: f64, // 持仓盈亏
+    pub commission: f64,      // 手续费
+    pub pre_balance: f64,     // 结算前权益
+    pub balance: f64,         // 结算后权益
+    pub risk_ratio: f64,      // 风险度
+    pub force_close: bool,    // 是否强平
+    pub margin: f64,
+    pub available: f64,
 }
 
 /// 强平订单结果
@@ -90,6 +92,9 @@ pub struct SettlementEngine {
     /// 结算历史 (date -> SettlementResult)
     settlement_history: Arc<DashMap<String, SettlementResult>>,
 
+    /// 账户结算历史 (account_id -> Vec<AccountSettlement>)
+    account_history: Arc<DashMap<String, Vec<AccountSettlement>>>,
+
     /// 订单路由引用（强平下单）
     order_router: RwLock<Option<Weak<OrderRouter>>>,
 
@@ -108,6 +113,7 @@ impl SettlementEngine {
             settlement_prices: Arc::new(DashMap::new()),
             force_close_threshold: 1.0, // 风险度 >= 100% 强平
             settlement_history: Arc::new(DashMap::new()),
+            account_history: Arc::new(DashMap::new()),
             order_router: RwLock::new(None),
             market_data_service: RwLock::new(None),
             risk_monitor: RwLock::new(None),
@@ -140,7 +146,10 @@ impl SettlementEngine {
         for (instrument_id, price) in prices {
             self.settlement_prices.insert(instrument_id, price);
         }
-        log::info!("Settlement prices set: {} instruments", self.settlement_prices.len());
+        log::info!(
+            "Settlement prices set: {} instruments",
+            self.settlement_prices.len()
+        );
     }
 
     /// 执行日终结算
@@ -192,16 +201,25 @@ impl SettlementEngine {
         };
 
         // 保存结算结果
-        self.settlement_history.insert(settlement_date, result.clone());
+        self.settlement_history
+            .insert(settlement_date, result.clone());
 
-        log::info!("Daily settlement completed: settled={}, failed={}, force_closed={}",
-            settled_accounts, failed_accounts, result.force_closed_accounts.len());
+        log::info!(
+            "Daily settlement completed: settled={}, failed={}, force_closed={}",
+            settled_accounts,
+            failed_accounts,
+            result.force_closed_accounts.len()
+        );
 
         Ok(result)
     }
 
     /// 结算单个账户
-    fn settle_account(&self, user_id: &str, date: &str) -> Result<AccountSettlement, ExchangeError> {
+    fn settle_account(
+        &self,
+        user_id: &str,
+        date: &str,
+    ) -> Result<AccountSettlement, ExchangeError> {
         let mut account = self.account_mgr.get_account(user_id)?;
         let mut acc = account.write();
 
@@ -215,14 +233,16 @@ impl SettlementEngine {
                 // 多头盈亏
                 let long_volume = pos.volume_long_today + pos.volume_long_his;
                 if long_volume > 0.0 {
-                    let long_profit = (settlement_price.value() - pos.open_price_long) * long_volume;
+                    let long_profit =
+                        (settlement_price.value() - pos.open_price_long) * long_volume;
                     position_profit += long_profit;
                 }
 
                 // 空头盈亏
                 let short_volume = pos.volume_short_today + pos.volume_short_his;
                 if short_volume > 0.0 {
-                    let short_profit = (pos.open_price_short - settlement_price.value()) * short_volume;
+                    let short_profit =
+                        (pos.open_price_short - settlement_price.value()) * short_volume;
                     position_profit += short_profit;
                 }
             }
@@ -237,7 +257,7 @@ impl SettlementEngine {
         // 4. 更新账户权益
         acc.accounts.balance = pre_balance + position_profit + close_profit - commission;
         acc.money = acc.accounts.balance - acc.accounts.margin;
-        acc.accounts.available = acc.money;  // 同步更新 QIFI 协议字段
+        acc.accounts.available = acc.money; // 同步更新 QIFI 协议字段
 
         // 5. 计算风险度
         let risk_ratio = if acc.accounts.balance > 0.0 {
@@ -251,7 +271,11 @@ impl SettlementEngine {
         let mut force_close = false;
         if risk_ratio >= self.force_close_threshold {
             force_close = true;
-            log::warn!("Force closing account {}: risk_ratio={:.2}%", user_id, risk_ratio * 100.0);
+            log::warn!(
+                "Force closing account {}: risk_ratio={:.2}%",
+                user_id,
+                risk_ratio * 100.0
+            );
 
             // 执行强平逻辑：清空所有持仓
             // 注意：实际生产环境应该通过 OrderRouter 提交市价单平仓
@@ -259,7 +283,9 @@ impl SettlementEngine {
             drop(acc); // 释放写锁
             drop(account); // 释放账户引用
 
-            if let Err(e) = self.force_liquidate_account(user_id, Some("Settlement risk threshold".to_string())) {
+            if let Err(e) =
+                self.force_liquidate_account(user_id, Some("Settlement risk threshold".to_string()))
+            {
                 log::error!("Failed to force close account {}: {}", user_id, e);
             } else {
                 log::info!("Successfully force closed account {}", user_id);
@@ -282,9 +308,24 @@ impl SettlementEngine {
             force_close,
         };
 
-        log::debug!("Account {} settled: balance={:.2}, profit={:.2}, risk={:.2}%",
-            user_id, settlement.balance, settlement.position_profit + settlement.close_profit,
-            settlement.risk_ratio * 100.0);
+        self.account_history
+            .entry(user_id.to_string())
+            .and_modify(|entries| {
+                entries.push(settlement.clone());
+                if entries.len() > 180 {
+                    let drop = entries.len().saturating_sub(180);
+                    entries.drain(0..drop);
+                }
+            })
+            .or_insert_with(|| vec![settlement.clone()]);
+
+        log::debug!(
+            "Account {} settled: balance={:.2}, profit={:.2}, risk={:.2}%",
+            user_id,
+            settlement.balance,
+            settlement.position_profit + settlement.close_profit,
+            settlement.risk_ratio * 100.0
+        );
 
         Ok(settlement)
     }
@@ -300,7 +341,11 @@ impl SettlementEngine {
             .read()
             .as_ref()
             .and_then(|weak| weak.upgrade())
-            .ok_or_else(|| ExchangeError::InternalError("OrderRouter not configured for SettlementEngine".to_string()))?;
+            .ok_or_else(|| {
+                ExchangeError::InternalError(
+                    "OrderRouter not configured for SettlementEngine".to_string(),
+                )
+            })?;
 
         let account = self.account_mgr.get_account(account_id)?;
         let mut acc = account.write();
@@ -316,7 +361,11 @@ impl SettlementEngine {
                     direction: "SELL".to_string(),
                     offset: "CLOSE".to_string(),
                     volume: long_volume,
-                    reference_price: if pos.open_price_long > 0.0 { pos.open_price_long } else { 1.0 },
+                    reference_price: if pos.open_price_long > 0.0 {
+                        pos.open_price_long
+                    } else {
+                        1.0
+                    },
                 });
             }
 
@@ -327,13 +376,20 @@ impl SettlementEngine {
                     direction: "BUY".to_string(),
                     offset: "CLOSE".to_string(),
                     volume: short_volume,
-                    reference_price: if pos.open_price_short > 0.0 { pos.open_price_short } else { 1.0 },
+                    reference_price: if pos.open_price_short > 0.0 {
+                        pos.open_price_short
+                    } else {
+                        1.0
+                    },
                 });
             }
         }
 
         if plans.is_empty() {
-            log::info!("Force liquidation skipped: account {} has no positions", account_id);
+            log::info!(
+                "Force liquidation skipped: account {} has no positions",
+                account_id
+            );
             return Ok(ForceLiquidationResult {
                 account_id: account_id.to_string(),
                 orders: Vec::new(),
@@ -344,7 +400,11 @@ impl SettlementEngine {
 
         let mut orders = Vec::with_capacity(plans.len());
         for plan in plans.into_iter() {
-            let price = self.calculate_force_price(&plan.instrument_id, &plan.direction, plan.reference_price);
+            let price = self.calculate_force_price(
+                &plan.instrument_id,
+                &plan.direction,
+                plan.reference_price,
+            );
             let submit_req = SubmitOrderRequest {
                 account_id: account_id.to_string(),
                 instrument_id: plan.instrument_id.clone(),
@@ -386,7 +446,7 @@ impl SettlementEngine {
             .get_account(account_id)
             .ok()
             .and_then(|acc| {
-                let acc = acc.write();
+                let mut acc = acc.write();
                 Some(acc.get_balance())
             })
             .unwrap_or(balance_before);
@@ -452,19 +512,22 @@ struct ForcePlan {
 }
 
 impl SettlementEngine {
-    fn calculate_force_price(&self, instrument_id: &str, direction: &str, reference_price: f64) -> f64 {
+    fn calculate_force_price(
+        &self,
+        instrument_id: &str,
+        direction: &str,
+        reference_price: f64,
+    ) -> f64 {
         let fallback = reference_price.max(0.01);
         let market_price = self
             .market_data_service
             .read()
             .as_ref()
             .and_then(|svc| svc.get_tick_data(instrument_id).ok())
-            .and_then(|tick| {
-                match direction {
-                    "SELL" => tick.bid_price.or(Some(tick.last_price)),
-                    "BUY" => tick.ask_price.or(Some(tick.last_price)),
-                    _ => Some(tick.last_price),
-                }
+            .and_then(|tick| match direction {
+                "SELL" => tick.bid_price.or(Some(tick.last_price)),
+                "BUY" => tick.ask_price.or(Some(tick.last_price)),
+                _ => Some(tick.last_price),
             })
             .filter(|price| *price > 0.0)
             .unwrap_or(fallback);
@@ -482,7 +545,7 @@ impl SettlementEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::account_ext::{OpenAccountRequest, AccountType};
+    use crate::core::account_ext::{AccountType, OpenAccountRequest};
 
     fn create_test_settlement_engine() -> (SettlementEngine, Arc<AccountManager>) {
         let account_mgr = Arc::new(AccountManager::new());

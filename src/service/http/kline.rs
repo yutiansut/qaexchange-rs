@@ -4,12 +4,12 @@
 //!
 //! @yutiansut @quantaxis
 
+use actix::Addr;
 use actix_web::{web, HttpResponse, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use actix::Addr;
 
-use crate::market::{kline, KLineActor, GetKLines};
+use crate::market::{kline, GetKLines, KLineActor};
 
 /// K线查询参数
 #[derive(Debug, Deserialize)]
@@ -79,11 +79,14 @@ pub async fn get_kline_data(
     };
 
     // 异步查询K线数据（通过KLineActor）
-    let klines = match kline_actor.send(GetKLines {
-        instrument_id: instrument_id.clone(),
-        period,
-        count,
-    }).await {
+    let klines = match kline_actor
+        .send(GetKLines {
+            instrument_id: instrument_id.clone(),
+            period,
+            count,
+        })
+        .await
+    {
         Ok(klines) => klines,
         Err(e) => {
             log::error!("Failed to query K-line data: {}", e);

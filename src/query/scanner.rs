@@ -1,8 +1,8 @@
 // SSTable 扫描器 - 统一 OLTP 和 OLAP 数据读取
 
 use crate::storage::sstable::{ParquetSSTable, RkyvSSTable};
-use arrow2::chunk::Chunk;
 use arrow2::array::Array;
+use arrow2::chunk::Chunk;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -61,8 +61,8 @@ impl SSTableScanner {
             return Err(format!("Directory not found: {:?}", dir_path));
         }
 
-        let entries = std::fs::read_dir(dir_path)
-            .map_err(|e| format!("Read directory failed: {}", e))?;
+        let entries =
+            std::fs::read_dir(dir_path).map_err(|e| format!("Read directory failed: {}", e))?;
 
         for entry in entries {
             let entry = entry.map_err(|e| format!("Read entry failed: {}", e))?;
@@ -99,7 +99,11 @@ impl SSTableScanner {
     /// 范围查询（扫描所有 SSTable）
     ///
     /// 返回合并后的 Chunk 列表
-    pub fn range_query(&self, start_ts: i64, end_ts: i64) -> Result<Vec<Chunk<Box<dyn Array>>>, String> {
+    pub fn range_query(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<Chunk<Box<dyn Array>>>, String> {
         let mut all_chunks = Vec::new();
 
         for entry in &self.sstables {
@@ -159,9 +163,9 @@ impl Default for SSTableScanner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sstable::olap_parquet::ParquetSSTableWriter;
     use crate::storage::memtable::olap::{create_olap_schema, OlapMemTable};
     use crate::storage::memtable::types::MemTableKey;
+    use crate::storage::sstable::olap_parquet::ParquetSSTableWriter;
     use crate::storage::wal::WalRecord;
 
     fn create_test_records(count: usize, start_ts: i64) -> Vec<(MemTableKey, WalRecord)> {
@@ -198,11 +202,8 @@ mod tests {
             let records = create_test_records(100, 1000 + i * 100);
             let memtable = OlapMemTable::from_records(records);
 
-            let mut writer = ParquetSSTableWriter::create(
-                &file_path,
-                Arc::new(create_olap_schema()),
-            )
-            .unwrap();
+            let mut writer =
+                ParquetSSTableWriter::create(&file_path, Arc::new(create_olap_schema())).unwrap();
 
             writer.write_chunk(memtable.chunk()).unwrap();
             writer.finish().unwrap();
@@ -224,11 +225,8 @@ mod tests {
         let records = create_test_records(100, 1000);
         let memtable = OlapMemTable::from_records(records);
 
-        let mut writer = ParquetSSTableWriter::create(
-            &file_path,
-            Arc::new(create_olap_schema()),
-        )
-        .unwrap();
+        let mut writer =
+            ParquetSSTableWriter::create(&file_path, Arc::new(create_olap_schema())).unwrap();
 
         writer.write_chunk(memtable.chunk()).unwrap();
         writer.finish().unwrap();

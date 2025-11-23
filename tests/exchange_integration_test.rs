@@ -6,12 +6,12 @@
 // 3. 验证数据一致性
 // 4. 性能统计
 
-use qaexchange::storage::wal::record::WalRecord;
-use qaexchange::storage::hybrid::oltp::{OltpHybridStorage, OltpHybridConfig};
 use qaexchange::storage::conversion::{ConversionManager, SchedulerConfig, WorkerConfig};
-use std::sync::Arc;
-use std::time::{Instant, Duration};
+use qaexchange::storage::hybrid::oltp::{OltpHybridConfig, OltpHybridStorage};
+use qaexchange::storage::wal::record::WalRecord;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// 订单生成器配置
 struct OrderGeneratorConfig {
@@ -57,11 +57,7 @@ struct PerformanceStats {
 }
 
 /// 生成模拟订单
-fn generate_order(
-    instrument_id: &str,
-    order_id: u64,
-    timestamp: i64,
-) -> WalRecord {
+fn generate_order(instrument_id: &str, order_id: u64, timestamp: i64) -> WalRecord {
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
@@ -127,7 +123,7 @@ fn test_full_storage_pipeline() {
         // 创建 OLTP HybridStorage
         let storage_config = OltpHybridConfig {
             base_path: base_path.to_str().unwrap().to_string(),
-            memtable_size_bytes: 1 * 1024 * 1024,  // 1 MB threshold for auto-flush
+            memtable_size_bytes: 1 * 1024 * 1024, // 1 MB threshold for auto-flush
             estimated_entry_size: 256,
         };
 
@@ -204,8 +200,10 @@ fn test_full_storage_pipeline() {
     log::info!("  ✓ 写入完成");
     log::info!("    - 订单数: {}", orders_written);
     log::info!("    - 耗时: {:.2}s", write_duration.as_secs_f64());
-    log::info!("    - 吞吐量: {:.0} 订单/秒",
-        orders_written as f64 / write_duration.as_secs_f64());
+    log::info!(
+        "    - 吞吐量: {:.0} 订单/秒",
+        orders_written as f64 / write_duration.as_secs_f64()
+    );
 
     // ========================================
     // Phase 3: 检查存储状态（MemTable → SSTable 自动 flush）
@@ -217,8 +215,12 @@ fn test_full_storage_pipeline() {
     for (instrument, storage) in &storages {
         let stats = storage.stats();
         total_sstables += stats.sstable_count;
-        log::info!("  ✓ 品种 {}: MemTable={} 条, SSTable={} 个",
-            instrument, stats.memtable_entries, stats.sstable_count);
+        log::info!(
+            "  ✓ 品种 {}: MemTable={} 条, SSTable={} 个",
+            instrument,
+            stats.memtable_entries,
+            stats.sstable_count
+        );
     }
 
     log::info!("  ✓ 总共生成 {} 个 SSTable", total_sstables);
@@ -296,7 +298,10 @@ fn test_full_storage_pipeline() {
     #[cfg(not(debug_assertions))]
     {
         // Release 模式: 高性能预期
-        assert!(stats.throughput > 10000.0, "Release: 吞吐量应该 > 10K 订单/秒");
+        assert!(
+            stats.throughput > 10000.0,
+            "Release: 吞吐量应该 > 10K 订单/秒"
+        );
         assert!(stats.p99_latency_us < 1000.0, "Release: P99 延迟应该 < 1ms");
     }
 
@@ -304,9 +309,15 @@ fn test_full_storage_pipeline() {
     {
         // Debug 模式: 宽松预期 (性能约为 release 的 1/10)
         assert!(stats.throughput > 500.0, "Debug: 吞吐量应该 > 500 订单/秒");
-        assert!(stats.p99_latency_us < 100000.0, "Debug: P99 延迟应该 < 100ms");
-        log::warn!("⚠️  Debug 模式性能: {:.0} 订单/秒, P99={:.2}ms",
-            stats.throughput, stats.p99_latency_us / 1000.0);
+        assert!(
+            stats.p99_latency_us < 100000.0,
+            "Debug: P99 延迟应该 < 100ms"
+        );
+        log::warn!(
+            "⚠️  Debug 模式性能: {:.0} 订单/秒, P99={:.2}ms",
+            stats.throughput,
+            stats.p99_latency_us / 1000.0
+        );
         log::warn!("💡 使用 --release 模式进行实际性能验证");
     }
 
@@ -340,7 +351,7 @@ fn test_oltp_to_olap_conversion() {
     // 创建 OLTP HybridStorage，使用小的 memtable 以触发自动 flush
     let storage_config = OltpHybridConfig {
         base_path: base_path.to_str().unwrap().to_string(),
-        memtable_size_bytes: 500 * 1024,  // 500 KB，容易触发 flush
+        memtable_size_bytes: 500 * 1024, // 500 KB，容易触发 flush
         estimated_entry_size: 256,
     };
 
@@ -387,7 +398,8 @@ fn test_oltp_to_olap_conversion() {
         metadata_path,
         scheduler_config,
         worker_config,
-    ).unwrap();
+    )
+    .unwrap();
 
     log::info!("  ✓ 转换系统已配置");
 
@@ -414,7 +426,9 @@ fn test_oltp_to_olap_conversion() {
     log::info!("  发现 {} 个 OLTP SSTable", sstables.len());
 
     if !sstables.is_empty() {
-        conversion_manager.trigger_conversion(instrument, sstables).unwrap();
+        conversion_manager
+            .trigger_conversion(instrument, sstables)
+            .unwrap();
         log::info!("  ✓ 转换任务已提交");
 
         // 启动转换系统
@@ -429,8 +443,13 @@ fn test_oltp_to_olap_conversion() {
             attempts += 1;
 
             let stats = conversion_manager.get_stats();
-            log::info!("  转换状态: Success={}, Pending={}, Converting={}, Failed={}",
-                stats.success, stats.pending, stats.converting, stats.failed);
+            log::info!(
+                "  转换状态: Success={}, Pending={}, Converting={}, Failed={}",
+                stats.success,
+                stats.pending,
+                stats.converting,
+                stats.failed
+            );
 
             if stats.success > 0 {
                 log::info!("  ✓ 转换完成");
@@ -473,7 +492,11 @@ fn test_oltp_to_olap_conversion() {
 
         log::info!("  Parquet 文件: {:?}", parquet_path.file_name().unwrap());
         log::info!("    - 记录数: {}", metadata.entry_count);
-        log::info!("    - 时间范围: [{}, {}]", metadata.min_timestamp, metadata.max_timestamp);
+        log::info!(
+            "    - 时间范围: [{}, {}]",
+            metadata.min_timestamp,
+            metadata.max_timestamp
+        );
         log::info!("    - 文件大小: {} bytes", metadata.file_size);
 
         // 验证记录数

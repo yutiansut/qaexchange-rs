@@ -9,7 +9,7 @@
 //
 // 运行: cargo bench --bench storage_bench
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::time::Duration;
 
 // TODO: 这些模块将在 Phase 1-4 实现
@@ -190,7 +190,7 @@ fn benchmark_distribution(c: &mut Criterion) {
 
 fn benchmark_recovery(c: &mut Criterion) {
     let mut group = c.benchmark_group("recovery");
-    group.sample_size(10);  // 恢复测试样本较少
+    group.sample_size(10); // 恢复测试样本较少
     group.measurement_time(Duration::from_secs(30));
 
     // TODO: Phase 5 实现后启用
@@ -256,8 +256,8 @@ fn benchmark_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("serialization");
 
     // rkyv vs serde 对比
-    use serde::{Serialize, Deserialize};
-    use rkyv::{Archive, Serialize as RkyvSerialize, Deserialize as RkyvDeserialize};
+    use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+    use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
     #[archive(check_bytes)]
@@ -266,7 +266,7 @@ fn benchmark_serialization(c: &mut Criterion) {
         price: f64,
         volume: f64,
         timestamp: i64,
-        data: [u8; 32],  // serde 支持 [u8; 32]
+        data: [u8; 32], // serde 支持 [u8; 32]
     }
 
     let msg = TestMessage {
@@ -307,7 +307,8 @@ fn benchmark_serialization(c: &mut Criterion) {
 
     group.bench_function("rkyv_deserialize_owned", |b| {
         b.iter(|| {
-            let archived = rkyv::check_archived_root::<TestMessage>(black_box(&rkyv_bytes)).unwrap();
+            let archived =
+                rkyv::check_archived_root::<TestMessage>(black_box(&rkyv_bytes)).unwrap();
             let _: TestMessage = archived.deserialize(&mut rkyv::Infallible).unwrap();
         })
     });

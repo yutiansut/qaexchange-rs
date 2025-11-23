@@ -1,7 +1,7 @@
 // MemTable 数据类型定义
 
 use crate::storage::wal::WalRecord;
-use rkyv::{Archive, Serialize as RkyvSerialize, Deserialize as RkyvDeserialize};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 /// MemTable Key：组合键用于排序和查询
 ///
@@ -12,26 +12,37 @@ use rkyv::{Archive, Serialize as RkyvSerialize, Deserialize as RkyvDeserialize};
 /// 性能：
 /// - 16 bytes (i64 + u64)
 /// - 实现 Ord 用于 SkipMap 排序
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Archive, RkyvSerialize, RkyvDeserialize,
+)]
 #[archive(check_bytes)]
 pub struct MemTableKey {
-    pub timestamp: i64,  // 纳秒时间戳
-    pub sequence: u64,   // WAL 序列号
+    pub timestamp: i64, // 纳秒时间戳
+    pub sequence: u64,  // WAL 序列号
 }
 
 impl MemTableKey {
     pub fn new(timestamp: i64, sequence: u64) -> Self {
-        Self { timestamp, sequence }
+        Self {
+            timestamp,
+            sequence,
+        }
     }
 
     /// 创建范围查询的起始键（指定时间戳，sequence = 0）
     pub fn from_timestamp(timestamp: i64) -> Self {
-        Self { timestamp, sequence: 0 }
+        Self {
+            timestamp,
+            sequence: 0,
+        }
     }
 
     /// 创建范围查询的结束键（指定时间戳，sequence = u64::MAX）
     pub fn to_timestamp(timestamp: i64) -> Self {
-        Self { timestamp, sequence: u64::MAX }
+        Self {
+            timestamp,
+            sequence: u64::MAX,
+        }
     }
 
     /// 序列化为字节数组（用于 Compaction 比较）

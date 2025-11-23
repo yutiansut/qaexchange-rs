@@ -3,13 +3,12 @@
 //! 测试通知系统的端到端功能
 
 use qaexchange::notification::{
-    NotificationBroker, NotificationGateway,
-    Notification, NotificationType, NotificationPayload,
-    AccountUpdateNotify, OrderAcceptedNotify, TradeExecutedNotify,
+    AccountUpdateNotify, Notification, NotificationBroker, NotificationGateway,
+    NotificationPayload, NotificationType, OrderAcceptedNotify, TradeExecutedNotify,
 };
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 /// 测试端到端通知流程
 #[tokio::test]
@@ -57,13 +56,10 @@ async fn test_end_to_end_notification_flow() {
     broker.publish(notification).unwrap();
 
     // 6. 验证接收
-    let received = tokio::time::timeout(
-        Duration::from_secs(1),
-        session_rx.recv()
-    )
-    .await
-    .expect("Timeout waiting for message")
-    .expect("No message received");
+    let received = tokio::time::timeout(Duration::from_secs(1), session_rx.recv())
+        .await
+        .expect("Timeout waiting for message")
+        .expect("No message received");
 
     assert!(received.contains("account_update"));
     assert!(received.contains("user_01"));
@@ -105,12 +101,14 @@ async fn test_multi_user_notification_isolation() {
         timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
     });
 
-    broker.publish(Notification::new(
-        NotificationType::AccountUpdate,
-        Arc::from("user_01"),
-        payload1,
-        "Test",
-    )).unwrap();
+    broker
+        .publish(Notification::new(
+            NotificationType::AccountUpdate,
+            Arc::from("user_01"),
+            payload1,
+            "Test",
+        ))
+        .unwrap();
 
     // user_01 应该收到
     let msg1 = tokio::time::timeout(Duration::from_millis(200), s1_rx.recv())
@@ -122,7 +120,10 @@ async fn test_multi_user_notification_isolation() {
 
     // user_02 不应该收到
     let msg2 = tokio::time::timeout(Duration::from_millis(200), s2_rx.recv()).await;
-    assert!(msg2.is_err(), "user_02 should not receive user_01's message");
+    assert!(
+        msg2.is_err(),
+        "user_02 should not receive user_01's message"
+    );
 }
 
 /// 测试不同优先级消息
@@ -160,7 +161,7 @@ async fn test_message_priority() {
         NotificationType::AccountUpdate,
         Arc::from("user_01"),
         p0_payload,
-        0,  // P0 最高优先级
+        0, // P0 最高优先级
         "Test",
     );
 
@@ -207,12 +208,14 @@ async fn test_batch_notification() {
             timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
         });
 
-        broker.publish(Notification::new(
-            NotificationType::AccountUpdate,
-            Arc::from("user_01"),
-            payload,
-            "Test",
-        )).unwrap();
+        broker
+            .publish(Notification::new(
+                NotificationType::AccountUpdate,
+                Arc::from("user_01"),
+                payload,
+                "Test",
+            ))
+            .unwrap();
     }
 
     // 等待批量推送
@@ -220,10 +223,9 @@ async fn test_batch_notification() {
 
     // 接收所有消息
     let mut count = 0;
-    while let Ok(Some(_json)) = tokio::time::timeout(
-        Duration::from_millis(50),
-        session_rx.recv()
-    ).await {
+    while let Ok(Some(_json)) =
+        tokio::time::timeout(Duration::from_millis(50), session_rx.recv()).await
+    {
         count += 1;
     }
 

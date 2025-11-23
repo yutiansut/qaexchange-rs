@@ -1,8 +1,8 @@
 //! 协议层 - 重导出 qars 协议 + IPC 消息 + DIFF 协议
 
+pub use qars::qaprotocol::mifi;
 pub use qars::qaprotocol::qifi;
 pub use qars::qaprotocol::tifi;
-pub use qars::qaprotocol::mifi;
 
 /// IPC 进程间通信消息协议
 pub mod ipc_messages;

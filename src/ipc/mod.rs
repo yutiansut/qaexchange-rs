@@ -9,8 +9,8 @@
 //!
 //! 注意：当前版本使用条件编译，如果iceoryx2不可用则fallback到crossbeam
 
-pub mod types;
 pub mod manager;
+pub mod types;
 
 #[cfg(feature = "iceoryx2")]
 pub mod publisher;
@@ -22,8 +22,8 @@ pub use publisher::IceoryxPublisher;
 #[cfg(feature = "iceoryx2")]
 pub use subscriber::IceoryxSubscriber;
 
-pub use types::{IpcNotification, IpcMarketData};
 pub use manager::IceoryxManager;
+pub use types::{IpcMarketData, IpcNotification};
 
 /// iceoryx2 服务配置
 #[derive(Debug, Clone)]

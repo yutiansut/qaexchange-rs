@@ -24,17 +24,20 @@
 //! let handler = DiffHandler::new(snapshot_mgr, account_mgr);
 //! ```
 
-use actix::{Actor, ActorContext, AsyncContext, StreamHandler, Handler as ActixHandler, Message as ActixMessage, Addr, Context, WrapFuture};
+use actix::{
+    Actor, ActorContext, Addr, AsyncContext, Context, Handler as ActixHandler,
+    Message as ActixMessage, StreamHandler, WrapFuture,
+};
 use actix_web_actors::ws;
+use log;
 use std::sync::Arc;
 use std::time::Duration;
-use log;
 
 use super::diff_messages::{DiffClientMessage, DiffServerMessage};
+use crate::exchange::{AccountManager, OrderRouter};
+use crate::market::{kline_actor::KLineActor, MarketDataBroadcaster};
 use crate::protocol::diff::snapshot::SnapshotManager;
 use crate::user::UserManager;
-use crate::exchange::{OrderRouter, AccountManager};
-use crate::market::{MarketDataBroadcaster, kline_actor::KLineActor};
 
 /// DIFF 协议消息处理器
 pub struct DiffHandler {
@@ -83,7 +86,10 @@ impl DiffHandler {
     }
 
     /// 设置市场数据广播器
-    pub fn with_market_broadcaster(mut self, market_broadcaster: Arc<MarketDataBroadcaster>) -> Self {
+    pub fn with_market_broadcaster(
+        mut self,
+        market_broadcaster: Arc<MarketDataBroadcaster>,
+    ) -> Self {
         self.market_broadcaster = Some(market_broadcaster);
         self
     }
@@ -112,19 +118,24 @@ impl DiffHandler {
                 self.handle_peek_message(user_id, ctx_addr).await;
             }
 
-            DiffClientMessage::ReqLogin { bid, user_name, password } => {
+            DiffClientMessage::ReqLogin {
+                bid,
+                user_name,
+                password,
+            } => {
                 log::info!("DIFF login request: user_name={}, bid={:?}", user_name, bid);
                 self.handle_login(user_name, password, ctx_addr).await;
             }
 
             DiffClientMessage::SubscribeQuote { ins_list } => {
                 log::info!("DIFF subscribe quote: ins_list={}", ins_list);
-                self.handle_subscribe_quote(user_id, ins_list, ctx_addr).await;
+                self.handle_subscribe_quote(user_id, ins_list, ctx_addr)
+                    .await;
             }
 
             DiffClientMessage::InsertOrder {
                 user_id: order_user_id,
-                account_id,  // ✨ 新增字段
+                account_id, // ✨ 新增字段
                 order_id,
                 exchange_id,
                 instrument_id,
@@ -136,11 +147,16 @@ impl DiffHandler {
                 volume_condition,
                 time_condition,
             } => {
-                log::info!("DIFF insert order: user_id={}, account_id={:?}, order_id={:?}", order_user_id, account_id, order_id);
+                log::info!(
+                    "DIFF insert order: user_id={}, account_id={:?}, order_id={:?}",
+                    order_user_id,
+                    account_id,
+                    order_id
+                );
                 self.handle_insert_order(
                     user_id,
                     order_user_id,
-                    account_id,  // ✨ 传递 account_id
+                    account_id, // ✨ 传递 account_id
                     order_id,
                     exchange_id,
                     instrument_id,
@@ -150,20 +166,40 @@ impl DiffHandler {
                     price_type,
                     limit_price,
                     ctx_addr,
-                ).await;
+                )
+                .await;
             }
 
-            DiffClientMessage::CancelOrder { user_id: cancel_user_id, account_id, order_id } => {
-                log::info!("DIFF cancel order: user_id={}, account_id={:?}, order_id={}", cancel_user_id, account_id, order_id);
-                self.handle_cancel_order(user_id, cancel_user_id, account_id, order_id, ctx_addr).await;  // ✨ 传递 account_id
+            DiffClientMessage::CancelOrder {
+                user_id: cancel_user_id,
+                account_id,
+                order_id,
+            } => {
+                log::info!(
+                    "DIFF cancel order: user_id={}, account_id={:?}, order_id={}",
+                    cancel_user_id,
+                    account_id,
+                    order_id
+                );
+                self.handle_cancel_order(user_id, cancel_user_id, account_id, order_id, ctx_addr)
+                    .await; // ✨ 传递 account_id
             }
 
-            DiffClientMessage::SetChart { chart_id, ins_list, duration, view_width } => {
+            DiffClientMessage::SetChart {
+                chart_id,
+                ins_list,
+                duration,
+                view_width,
+            } => {
                 log::info!(
                     "DIFF set chart: chart_id={}, ins_list={}, duration={}, view_width={}",
-                    chart_id, ins_list, duration, view_width
+                    chart_id,
+                    ins_list,
+                    duration,
+                    view_width
                 );
-                self.handle_set_chart(user_id, chart_id, ins_list, duration, view_width, ctx_addr).await;
+                self.handle_set_chart(user_id, chart_id, ins_list, duration, view_width, ctx_addr)
+                    .await;
             }
         }
     }
@@ -187,7 +223,10 @@ impl DiffHandler {
                 // username 是 UUID 格式，可能是 user_id，尝试 token 认证
                 match user_mgr.verify_token(&password) {
                     Ok(verified_user_id) => {
-                        log::info!("Token verification successful, verified_user_id: {}", verified_user_id);
+                        log::info!(
+                            "Token verification successful, verified_user_id: {}",
+                            verified_user_id
+                        );
 
                         // Token 验证成功，检查 user_id 匹配
                         if verified_user_id == username {
@@ -214,7 +253,11 @@ impl DiffHandler {
                                 }
                             }
                         } else {
-                            log::warn!("Token auth failed: user_id mismatch (expected: {}, got: {})", username, verified_user_id);
+                            log::warn!(
+                                "Token auth failed: user_id mismatch (expected: {}, got: {})",
+                                username,
+                                verified_user_id
+                            );
                             Ok(crate::user::UserLoginResponse {
                                 success: false,
                                 user_id: None,
@@ -225,7 +268,10 @@ impl DiffHandler {
                         }
                     }
                     Err(e) => {
-                        log::warn!("Token verification failed: {}, falling back to password auth", e);
+                        log::warn!(
+                            "Token verification failed: {}, falling back to password auth",
+                            e
+                        );
                         // Token 验证失败，尝试常规密码认证（向后兼容）
                         user_mgr.login(crate::user::UserLoginRequest {
                             username: username.clone(),
@@ -234,7 +280,10 @@ impl DiffHandler {
                     }
                 }
             } else {
-                log::info!("Standard password authentication for username: {}", username);
+                log::info!(
+                    "Standard password authentication for username: {}",
+                    username
+                );
                 // 常规密码认证
                 user_mgr.login(crate::user::UserLoginRequest {
                     username: username.clone(),
@@ -270,7 +319,11 @@ impl DiffHandler {
 
                         // ✅ 通过 SnapshotManager 推送（触发 peek_message）
                         self.snapshot_mgr.push_patch(&user_id, notify_patch).await;
-                        log::info!("DIFF login successful: user={}, user_id={}", username, user_id);
+                        log::info!(
+                            "DIFF login successful: user={}, user_id={}",
+                            username,
+                            user_id
+                        );
                     } else {
                         // 登录失败（也通过 SnapshotManager 推送，确保客户端能收到）
                         let notify_patch = serde_json::json!({
@@ -285,8 +338,14 @@ impl DiffHandler {
                         });
 
                         // 使用 "anonymous" 作为临时 user_id 推送失败消息
-                        self.snapshot_mgr.push_patch("anonymous", notify_patch).await;
-                        log::warn!("DIFF login failed for user: {}, reason: {}", username, login_resp.message);
+                        self.snapshot_mgr
+                            .push_patch("anonymous", notify_patch)
+                            .await;
+                        log::warn!(
+                            "DIFF login failed for user: {}, reason: {}",
+                            username,
+                            login_resp.message
+                        );
                     }
                 }
                 Err(e) => {
@@ -303,7 +362,9 @@ impl DiffHandler {
                     });
 
                     // 使用 "anonymous" 作为临时 user_id 推送错误消息
-                    self.snapshot_mgr.push_patch("anonymous", notify_patch).await;
+                    self.snapshot_mgr
+                        .push_patch("anonymous", notify_patch)
+                        .await;
                     log::error!("DIFF login error for user {}: {}", username, e);
                 }
             }
@@ -321,7 +382,9 @@ impl DiffHandler {
             });
 
             // 使用 "anonymous" 作为临时 user_id 推送错误消息
-            self.snapshot_mgr.push_patch("anonymous", notify_patch).await;
+            self.snapshot_mgr
+                .push_patch("anonymous", notify_patch)
+                .await;
             log::error!("DIFF login failed: UserManager not available");
         }
     }
@@ -389,11 +452,7 @@ impl DiffHandler {
         // ✅ 通过 SnapshotManager 推送订阅确认（触发 peek_message 返回）
         self.snapshot_mgr.push_patch(user_id, notify_patch).await;
 
-        log::info!(
-            "User {} subscribed to quotes: {:?}",
-            user_id,
-            instruments
-        );
+        log::info!("User {} subscribed to quotes: {:?}", user_id, instruments);
 
         // ✅ 从 MarketDataBroadcaster 订阅并启动推送任务
         if let Some(ref broadcaster) = self.market_broadcaster {
@@ -404,7 +463,7 @@ impl DiffHandler {
                     "orderbook".to_string(),
                     "tick".to_string(),
                     "last_price".to_string(),
-                    "kline".to_string(),  // ✨ 新增：订阅K线完成事件
+                    "kline".to_string(), // ✨ 新增：订阅K线完成事件
                 ],
             );
 
@@ -413,7 +472,10 @@ impl DiffHandler {
             let user_id_clone = user_id.to_string();
 
             tokio::spawn(async move {
-                log::info!("Started market data streaming task for user: {}", user_id_clone);
+                log::info!(
+                    "Started market data streaming task for user: {}",
+                    user_id_clone
+                );
 
                 loop {
                     // ✅ 使用 spawn_blocking 避免阻塞 Tokio 执行器
@@ -427,7 +489,10 @@ impl DiffHandler {
                             }
                         }
                         Ok(Err(_)) => {
-                            log::warn!("Market data channel disconnected for user: {}", user_id_clone);
+                            log::warn!(
+                                "Market data channel disconnected for user: {}",
+                                user_id_clone
+                            );
                             break;
                         }
                         Err(e) => {
@@ -437,7 +502,10 @@ impl DiffHandler {
                     }
                 }
 
-                log::info!("Market data streaming task ended for user: {}", user_id_clone);
+                log::info!(
+                    "Market data streaming task ended for user: {}",
+                    user_id_clone
+                );
             });
         } else {
             log::warn!("MarketDataBroadcaster not available, skipping live market data");
@@ -449,8 +517,8 @@ impl DiffHandler {
         &self,
         session_user_id: &str,
         order_user_id: String,
-        client_account_id: Option<String>,  // ✨ 新增参数
-        order_id: Option<String>,            // ✅ 修改为 Option<String>
+        client_account_id: Option<String>, // ✨ 新增参数
+        order_id: Option<String>,          // ✅ 修改为 Option<String>
         exchange_id: String,
         instrument_id: String,
         direction: String,
@@ -485,7 +553,11 @@ impl DiffHandler {
             };
 
             ctx_addr.do_send(SendDiffMessage { message: rtn_data });
-            log::warn!("DIFF insert order failed: user mismatch (session={}, order={})", session_user_id, order_user_id);
+            log::warn!(
+                "DIFF insert order failed: user mismatch (session={}, order={})",
+                session_user_id,
+                order_user_id
+            );
             return;
         }
 
@@ -500,7 +572,10 @@ impl DiffHandler {
             // 服务层：验证账户所有权并获取 account_id
             let account_id = if let Some(ref acc_id) = client_account_id {
                 // ✅ 客户端明确传递了 account_id，验证所有权
-                if let Err(e) = self.account_mgr.verify_account_ownership(acc_id, &order_user_id) {
+                if let Err(e) = self
+                    .account_mgr
+                    .verify_account_ownership(acc_id, &order_user_id)
+                {
                     let notify_patch = serde_json::json!({
                         "notify": {
                             "order_error": {
@@ -517,7 +592,11 @@ impl DiffHandler {
                     };
 
                     ctx_addr.do_send(SendDiffMessage { message: rtn_data });
-                    log::warn!("DIFF insert order failed: account verification failed for user {}: {}", order_user_id, e);
+                    log::warn!(
+                        "DIFF insert order failed: account verification failed for user {}: {}",
+                        order_user_id,
+                        e
+                    );
                     return;
                 }
                 acc_id.clone()
@@ -529,9 +608,12 @@ impl DiffHandler {
                     match user_mgr.get_user_accounts(&order_user_id) {
                         Ok(accounts) if !accounts.is_empty() => accounts[0].clone(),
                         Ok(_) => {
-                            log::warn!("DIFF insert order failed: no accounts found for user {}", order_user_id);
+                            log::warn!(
+                                "DIFF insert order failed: no accounts found for user {}",
+                                order_user_id
+                            );
                             return;
-                        },
+                        }
                         Err(e) => {
                             log::warn!("DIFF insert order failed: user lookup error: {}", e);
                             return;
@@ -633,7 +715,7 @@ impl DiffHandler {
         &self,
         session_user_id: &str,
         cancel_user_id: String,
-        client_account_id: Option<String>,  // ✨ 新增参数
+        client_account_id: Option<String>, // ✨ 新增参数
         order_id: String,
         ctx_addr: Addr<DiffWebsocketSession>,
     ) {
@@ -663,7 +745,10 @@ impl DiffHandler {
             // 服务层：验证账户所有权并获取 account_id
             let account_id = if let Some(ref acc_id) = client_account_id {
                 // ✅ 客户端明确传递了 account_id，验证所有权
-                if let Err(e) = self.account_mgr.verify_account_ownership(acc_id, &cancel_user_id) {
+                if let Err(e) = self
+                    .account_mgr
+                    .verify_account_ownership(acc_id, &cancel_user_id)
+                {
                     let notify_patch = serde_json::json!({
                         "notify": {
                             "cancel_error": {
@@ -680,7 +765,11 @@ impl DiffHandler {
                     };
 
                     ctx_addr.do_send(SendDiffMessage { message: rtn_data });
-                    log::warn!("DIFF cancel order failed: account verification failed for user {}: {}", cancel_user_id, e);
+                    log::warn!(
+                        "DIFF cancel order failed: account verification failed for user {}: {}",
+                        cancel_user_id,
+                        e
+                    );
                     return;
                 }
                 acc_id.clone()
@@ -692,9 +781,12 @@ impl DiffHandler {
                     match user_mgr.get_user_accounts(&cancel_user_id) {
                         Ok(accounts) if !accounts.is_empty() => accounts[0].clone(),
                         Ok(_) => {
-                            log::warn!("DIFF cancel order failed: no accounts found for user {}", cancel_user_id);
+                            log::warn!(
+                                "DIFF cancel order failed: no accounts found for user {}",
+                                cancel_user_id
+                            );
                             return;
-                        },
+                        }
                         Err(e) => {
                             log::warn!("DIFF cancel order failed: user lookup error: {}", e);
                             return;
@@ -707,7 +799,7 @@ impl DiffHandler {
             };
 
             let req = crate::exchange::order_router::CancelOrderRequest {
-                account_id,  // 交易层只关心 account_id
+                account_id, // 交易层只关心 account_id
                 order_id: order_id.clone(),
             };
 
@@ -751,7 +843,11 @@ impl DiffHandler {
                     };
 
                     ctx_addr.do_send(SendDiffMessage { message: rtn_data });
-                    log::warn!("DIFF cancel order failed: order_id={}, error={}", order_id, e);
+                    log::warn!(
+                        "DIFF cancel order failed: order_id={}, error={}",
+                        order_id,
+                        e
+                    );
                 }
             }
         } else {
@@ -850,11 +946,13 @@ impl DiffHandler {
 
             tokio::spawn(async move {
                 // 查询历史K线
-                let klines = kline_actor_clone.send(crate::market::GetKLines {
-                    instrument_id: instrument_id.clone(),
-                    period,
-                    count,
-                }).await;
+                let klines = kline_actor_clone
+                    .send(crate::market::GetKLines {
+                        instrument_id: instrument_id.clone(),
+                        period,
+                        count,
+                    })
+                    .await;
 
                 match klines {
                     Ok(klines) => {
@@ -864,10 +962,10 @@ impl DiffHandler {
 
                         for kline in klines.iter() {
                             // K线ID使用时间戳除以周期得到序列号
-                            let kline_id = (kline.timestamp * 1_000_000) / duration;  // 毫秒转纳秒后除以周期
+                            let kline_id = (kline.timestamp * 1_000_000) / duration; // 毫秒转纳秒后除以周期
 
                             // DIFF协议要求datetime为UnixNano（纳秒）
-                            let datetime_ns = kline.timestamp * 1_000_000;  // 毫秒转纳秒
+                            let datetime_ns = kline.timestamp * 1_000_000; // 毫秒转纳秒
 
                             kline_data.insert(
                                 kline_id.to_string(),
@@ -880,7 +978,7 @@ impl DiffHandler {
                                     "volume": kline.volume,
                                     "open_oi": kline.open_oi,
                                     "close_oi": kline.close_oi,
-                                })
+                                }),
                             );
                             last_kline_id = kline_id;
                         }
@@ -908,7 +1006,11 @@ impl DiffHandler {
                         snapshot_mgr.push_patch(&user_id_str, kline_patch).await;
                         log::info!(
                             "📊 [DIFF] User {} set chart {}: instrument={}, period={:?}, bars={}",
-                            user_id_str, chart_id_clone, instrument_id, period, klines.len()
+                            user_id_str,
+                            chart_id_clone,
+                            instrument_id,
+                            period,
+                            klines.len()
                         );
 
                         // 订阅实时K线更新（通过MarketDataBroadcaster的kline频道）
@@ -928,7 +1030,11 @@ impl DiffHandler {
                         });
 
                         snapshot_mgr.push_patch(&user_id_str, error_patch).await;
-                        log::error!("Failed to fetch K-line data for chart {}: {}", chart_id_clone, e);
+                        log::error!(
+                            "Failed to fetch K-line data for chart {}: {}",
+                            chart_id_clone,
+                            e
+                        );
                     }
                 }
             });
@@ -951,11 +1057,18 @@ impl DiffHandler {
     }
 
     /// 将 MarketDataEvent 转换为 DIFF 格式的 JSON patch
-    fn convert_market_event_to_diff(event: &crate::market::MarketDataEvent) -> Option<serde_json::Value> {
+    fn convert_market_event_to_diff(
+        event: &crate::market::MarketDataEvent,
+    ) -> Option<serde_json::Value> {
         use crate::market::MarketDataEvent;
 
         match event {
-            MarketDataEvent::OrderBookSnapshot { instrument_id, bids, asks, timestamp } => {
+            MarketDataEvent::OrderBookSnapshot {
+                instrument_id,
+                bids,
+                asks,
+                timestamp,
+            } => {
                 // 转换为 DIFF quotes 格式
                 Some(serde_json::json!({
                     "quotes": {
@@ -971,32 +1084,44 @@ impl DiffHandler {
                 }))
             }
 
-            MarketDataEvent::LastPrice { instrument_id, price, timestamp } => {
-                Some(serde_json::json!({
-                    "quotes": {
-                        instrument_id: {
-                            "instrument_id": instrument_id,
-                            "last_price": price,
-                            "datetime": timestamp,
-                        }
+            MarketDataEvent::LastPrice {
+                instrument_id,
+                price,
+                timestamp,
+            } => Some(serde_json::json!({
+                "quotes": {
+                    instrument_id: {
+                        "instrument_id": instrument_id,
+                        "last_price": price,
+                        "datetime": timestamp,
                     }
-                }))
-            }
+                }
+            })),
 
-            MarketDataEvent::Tick { instrument_id, price, volume, direction, timestamp } => {
-                Some(serde_json::json!({
-                    "quotes": {
-                        instrument_id: {
-                            "instrument_id": instrument_id,
-                            "last_price": price,
-                            "volume": volume,
-                            "datetime": timestamp,
-                        }
+            MarketDataEvent::Tick {
+                instrument_id,
+                price,
+                volume,
+                direction,
+                timestamp,
+            } => Some(serde_json::json!({
+                "quotes": {
+                    instrument_id: {
+                        "instrument_id": instrument_id,
+                        "last_price": price,
+                        "volume": volume,
+                        "datetime": timestamp,
                     }
-                }))
-            }
+                }
+            })),
 
-            MarketDataEvent::OrderBookUpdate { instrument_id, side, price, volume, timestamp } => {
+            MarketDataEvent::OrderBookUpdate {
+                instrument_id,
+                side,
+                price,
+                volume,
+                timestamp,
+            } => {
                 // 增量更新转换为完整字段更新
                 if side == "bid" {
                     Some(serde_json::json!({
@@ -1023,17 +1148,22 @@ impl DiffHandler {
                 }
             }
 
-            MarketDataEvent::KLineFinished { instrument_id, period, kline, timestamp } => {
+            MarketDataEvent::KLineFinished {
+                instrument_id,
+                period,
+                kline,
+                timestamp,
+            } => {
                 // 转换为 DIFF klines 格式（增量推送新K线）
                 let duration_ns = crate::market::kline::KLinePeriod::from_int(*period)
                     .map(|p| p.to_duration_ns())
                     .unwrap_or(0);
 
                 // K线ID使用时间戳除以周期得到序列号
-                let kline_id = (kline.timestamp * 1_000_000) / duration_ns;  // 毫秒转纳秒后除以周期
+                let kline_id = (kline.timestamp * 1_000_000) / duration_ns; // 毫秒转纳秒后除以周期
 
                 // DIFF协议要求datetime为UnixNano（纳秒）
-                let datetime_ns = kline.timestamp * 1_000_000;  // 毫秒转纳秒
+                let datetime_ns = kline.timestamp * 1_000_000; // 毫秒转纳秒
 
                 Some(serde_json::json!({
                     "klines": {
@@ -1177,7 +1307,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for DiffWebsocketSess
                             // 异步处理 DIFF 消息
                             ctx.spawn(
                                 async move {
-                                    handler.handle_diff_message(&user_id, diff_msg, ctx_addr).await;
+                                    handler
+                                        .handle_diff_message(&user_id, diff_msg, ctx_addr)
+                                        .await;
                                 }
                                 .into_actor(self),
                             );
@@ -1185,18 +1317,23 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for DiffWebsocketSess
                             // 未认证，只允许 ReqLogin 消息
                             if matches!(diff_msg, DiffClientMessage::ReqLogin { .. }) {
                                 let handler = self.diff_handler.clone();
-                                let user_id = "anonymous".to_string();  // 临时用户ID
+                                let user_id = "anonymous".to_string(); // 临时用户ID
                                 let ctx_addr = ctx.address();
 
                                 ctx.spawn(
                                     async move {
-                                        handler.handle_diff_message(&user_id, diff_msg, ctx_addr).await;
+                                        handler
+                                            .handle_diff_message(&user_id, diff_msg, ctx_addr)
+                                            .await;
                                     }
                                     .into_actor(self),
                                 );
                             } else {
-                                log::warn!("Unauthenticated DIFF message from session {}, rejecting: {:?}",
-                                           self.session_id, diff_msg);
+                                log::warn!(
+                                    "Unauthenticated DIFF message from session {}, rejecting: {:?}",
+                                    self.session_id,
+                                    diff_msg
+                                );
                             }
                         }
                     }
@@ -1266,7 +1403,11 @@ impl ActixHandler<SetUserId> for DiffWebsocketSession {
 
     fn handle(&mut self, msg: SetUserId, _ctx: &mut Self::Context) {
         self.user_id = Some(msg.user_id.clone());
-        log::info!("Session {} authenticated as user {}", self.session_id, msg.user_id);
+        log::info!(
+            "Session {} authenticated as user {}",
+            self.session_id,
+            msg.user_id
+        );
     }
 }
 

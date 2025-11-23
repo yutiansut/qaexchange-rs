@@ -11,7 +11,7 @@
 // - 范围查询（高效时间范围扫描）
 // - 内存限制（自动触发 flush）
 
-use super::types::{MemTableKey, MemTableValue, MemTableEntry};
+use super::types::{MemTableEntry, MemTableKey, MemTableValue};
 use crate::storage::wal::WalRecord;
 use crossbeam_skiplist::SkipMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,8 +30,8 @@ pub struct OltpMemTableConfig {
 impl Default for OltpMemTableConfig {
     fn default() -> Self {
         Self {
-            max_size_bytes: 64 * 1024 * 1024,  // 64 MB
-            estimated_entry_size: 256,          // 256 bytes/entry
+            max_size_bytes: 64 * 1024 * 1024, // 64 MB
+            estimated_entry_size: 256,        // 256 bytes/entry
         }
     }
 }
@@ -84,10 +84,9 @@ impl OltpMemTable {
         self.data.insert(entry.key, entry.value);
 
         // 更新内存使用（近似估算）
-        let prev_size = self.size_bytes.fetch_add(
-            self.config.estimated_entry_size,
-            Ordering::Relaxed
-        );
+        let prev_size = self
+            .size_bytes
+            .fetch_add(self.config.estimated_entry_size, Ordering::Relaxed);
 
         prev_size
     }
@@ -137,7 +136,9 @@ impl OltpMemTable {
     /// - P99 < 5μs
     pub fn get(&self, timestamp: i64, sequence: u64) -> Option<WalRecord> {
         let key = MemTableKey::new(timestamp, sequence);
-        self.data.get(&key).map(|entry| entry.value().record.clone())
+        self.data
+            .get(&key)
+            .map(|entry| entry.value().record.clone())
     }
 
     /// 获取所有记录（用于 flush 到 SSTable）
@@ -232,7 +233,7 @@ mod tests {
 
         // 范围查询：1000 ~ 1500
         let results = memtable.range_query(1000, 1500);
-        assert_eq!(results.len(), 6);  // 1000, 1100, 1200, 1300, 1400, 1500
+        assert_eq!(results.len(), 6); // 1000, 1100, 1200, 1300, 1400, 1500
 
         // 验证顺序
         for (i, (key, _)) in results.iter().enumerate() {
@@ -326,15 +327,17 @@ mod tests {
         let memtable = Arc::new(OltpMemTable::with_default());
 
         // 4 个线程并发插入
-        let handles: Vec<_> = (0..4).map(|thread_id| {
-            let mt = memtable.clone();
-            thread::spawn(move || {
-                for i in 0..1000 {
-                    let seq = thread_id * 1000 + i;
-                    mt.insert(seq, create_order_record(seq, 1000 + seq as i64));
-                }
+        let handles: Vec<_> = (0..4)
+            .map(|thread_id| {
+                let mt = memtable.clone();
+                thread::spawn(move || {
+                    for i in 0..1000 {
+                        let seq = thread_id * 1000 + i;
+                        mt.insert(seq, create_order_record(seq, 1000 + seq as i64));
+                    }
+                })
             })
-        }).collect();
+            .collect();
 
         for handle in handles {
             handle.join().unwrap();

@@ -1,10 +1,10 @@
 //! Compaction 调度器 - 后台线程管理
 
-use super::{CompactionConfig, SSTableInfo, LeveledCompaction};
-use std::sync::Arc;
+use super::{CompactionConfig, LeveledCompaction, SSTableInfo};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::time::{interval, Duration};
 
 /// Compaction 调度器
@@ -64,7 +64,10 @@ impl CompactionScheduler {
         tokio::spawn(async move {
             let mut ticker = interval(check_interval);
 
-            log::info!("Compaction scheduler started (interval: {:?})", check_interval);
+            log::info!(
+                "Compaction scheduler started (interval: {:?})",
+                check_interval
+            );
 
             loop {
                 ticker.tick().await;
@@ -98,12 +101,17 @@ impl CompactionScheduler {
 
                                 // 删除文件
                                 if let Err(e) = std::fs::remove_file(obsolete_path) {
-                                    log::warn!("Failed to delete obsolete SSTable {}: {}", obsolete_path, e);
+                                    log::warn!(
+                                        "Failed to delete obsolete SSTable {}: {}",
+                                        obsolete_path,
+                                        e
+                                    );
                                 }
                             }
 
                             // 添加新的 SSTable
-                            levels.entry(result.new_sstable.level)
+                            levels
+                                .entry(result.new_sstable.level)
                                 .or_insert_with(Vec::new)
                                 .push(result.new_sstable);
 
@@ -152,7 +160,8 @@ impl CompactionScheduler {
             }
 
             // 添加新的 SSTable
-            levels.entry(result.new_sstable.level)
+            levels
+                .entry(result.new_sstable.level)
                 .or_insert_with(Vec::new)
                 .push(result.new_sstable);
 

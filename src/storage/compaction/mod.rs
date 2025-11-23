@@ -11,7 +11,7 @@
 pub mod leveled;
 pub mod scheduler;
 
-pub use leveled::{LeveledCompaction, CompactionTask, CompactionResult};
+pub use leveled::{CompactionResult, CompactionTask, LeveledCompaction};
 pub use scheduler::CompactionScheduler;
 
 /// Compaction 配置
@@ -37,7 +37,7 @@ impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
             level0_max_files: 4,
-            level1_max_bytes: 10 * 1024 * 1024,  // 10 MB
+            level1_max_bytes: 10 * 1024 * 1024, // 10 MB
             level_size_multiplier: 10,
             max_levels: 7,
             compaction_threads: 2,

@@ -2,17 +2,19 @@
 //!
 //! 负责账户的开户、销户、查询等管理功能
 
-use crate::core::{QA_Account, Account, QIFI};
-use crate::core::account_ext::{OpenAccountRequest, AccountType};
-use crate::ExchangeError;
+use crate::core::account_ext::{AccountType, OpenAccountRequest};
+use crate::core::{Account, QA_Account, QIFI};
+use crate::notification::message::{
+    AccountOpenNotify, Notification, NotificationPayload, NotificationType,
+};
 use crate::notification::NotificationBroker;
-use crate::notification::message::{Notification, NotificationType, NotificationPayload, AccountOpenNotify};
 use crate::user::UserManager;
-use dashmap::DashMap;
-use std::sync::Arc;
-use parking_lot::RwLock;
+use crate::ExchangeError;
 use chrono::Local;
+use dashmap::DashMap;
+use parking_lot::RwLock;
 use std::path::Path;
+use std::sync::Arc;
 
 /// 账户元数据
 #[derive(Debug, Clone)]
@@ -108,9 +110,10 @@ impl AccountManager {
 
         // 检查账户是否已存在
         if self.accounts.contains_key(&account_id) {
-            return Err(ExchangeError::AccountError(
-                format!("Account already exists: {}", account_id)
-            ));
+            return Err(ExchangeError::AccountError(format!(
+                "Account already exists: {}",
+                account_id
+            )));
         }
 
         // 创建账户 (复用 QA_Account)
@@ -118,16 +121,17 @@ impl AccountManager {
         // user_cookie 使用 account_name，对应 QIFI 的 investor_name
         // environment 设置为 "real" 以启用完整的订单管理功能
         let account = QA_Account::new(
-            &account_id,        // account_cookie (账户唯一标识)
-            &req.user_id,       // portfolio_cookie (用户ID - 建立User关联)
-            &req.account_name,  // user_cookie (账户名称 -> QIFI investor_name)
-            req.init_cash,      // init_cash
-            false,              // auto_reload
-            "real",             // environment (必须是 "real" 才能使用 dailyorders)
+            &account_id,       // account_cookie (账户唯一标识)
+            &req.user_id,      // portfolio_cookie (用户ID - 建立User关联)
+            &req.account_name, // user_cookie (账户名称 -> QIFI investor_name)
+            req.init_cash,     // init_cash
+            false,             // auto_reload
+            "real",            // environment (必须是 "real" 才能使用 dailyorders)
         );
 
         // 存储账户
-        self.accounts.insert(account_id.clone(), Arc::new(RwLock::new(account)));
+        self.accounts
+            .insert(account_id.clone(), Arc::new(RwLock::new(account)));
 
         // 存储元数据
         let metadata = AccountMetadata {
@@ -146,7 +150,10 @@ impl AccountManager {
 
         log::info!(
             "Account opened: {} for user {} (type: {:?}, name: {})",
-            account_id, req.user_id, req.account_type, req.account_name
+            account_id,
+            req.user_id,
+            req.account_type,
+            req.account_name
         );
 
         // 绑定账户到用户（如果设置了UserManager）
@@ -193,13 +200,13 @@ impl AccountManager {
             // 检查账户是否可以销户
             if !acc.hold.is_empty() {
                 return Err(ExchangeError::AccountError(
-                    "Cannot close account with open positions".to_string()
+                    "Cannot close account with open positions".to_string(),
                 ));
             }
 
             if acc.money > 0.0 {
                 return Err(ExchangeError::AccountError(
-                    "Cannot close account with remaining balance".to_string()
+                    "Cannot close account with remaining balance".to_string(),
                 ));
             }
 
@@ -222,9 +229,10 @@ impl AccountManager {
             log::info!("Account closed: {}", account_id);
             Ok(())
         } else {
-            Err(ExchangeError::AccountError(
-                format!("Account not found: {}", account_id)
-            ))
+            Err(ExchangeError::AccountError(format!(
+                "Account not found: {}",
+                account_id
+            )))
         }
     }
 
@@ -233,9 +241,9 @@ impl AccountManager {
         self.accounts
             .get(account_id)
             .map(|r| r.value().clone())
-            .ok_or_else(|| ExchangeError::AccountError(
-                format!("Account not found: {}", account_id)
-            ))
+            .ok_or_else(|| {
+                ExchangeError::AccountError(format!("Account not found: {}", account_id))
+            })
     }
 
     /// 查询用户的所有账户
@@ -255,17 +263,20 @@ impl AccountManager {
     ///
     /// 这是一个便捷方法，用于兼容旧代码（当用户只有一个账户时）
     /// 如果用户有多个账户，返回第一个账户
-    pub fn get_default_account(&self, user_id: &str) -> Result<Arc<RwLock<QA_Account>>, ExchangeError> {
+    pub fn get_default_account(
+        &self,
+        user_id: &str,
+    ) -> Result<Arc<RwLock<QA_Account>>, ExchangeError> {
         self.user_accounts
             .get(user_id)
             .and_then(|account_ids| {
-                account_ids.first().and_then(|id| {
-                    self.accounts.get(id).map(|r| r.value().clone())
-                })
+                account_ids
+                    .first()
+                    .and_then(|id| self.accounts.get(id).map(|r| r.value().clone()))
             })
-            .ok_or_else(|| ExchangeError::AccountError(
-                format!("No account found for user: {}", user_id)
-            ))
+            .ok_or_else(|| {
+                ExchangeError::AccountError(format!("No account found for user: {}", user_id))
+            })
     }
 
     /// 查询用户的账户数量
@@ -296,22 +307,19 @@ impl AccountManager {
     pub fn verify_account_ownership(
         &self,
         account_id: &str,
-        user_id: &str
+        user_id: &str,
     ) -> Result<(), ExchangeError> {
         // 1. 检查账户是否存在
-        let metadata = self.metadata.get(account_id)
-            .ok_or_else(|| ExchangeError::AccountError(
-                format!("Account not found: {}", account_id)
-            ))?;
+        let metadata = self.metadata.get(account_id).ok_or_else(|| {
+            ExchangeError::AccountError(format!("Account not found: {}", account_id))
+        })?;
 
         // 2. 检查账户所有权
         if metadata.user_id != user_id {
-            return Err(ExchangeError::PermissionDenied(
-                format!(
-                    "Account {} does not belong to user {} (owner: {})",
-                    account_id, user_id, metadata.user_id
-                )
-            ));
+            return Err(ExchangeError::PermissionDenied(format!(
+                "Account {} does not belong to user {} (owner: {})",
+                account_id, user_id, metadata.user_id
+            )));
         }
 
         Ok(())
@@ -340,7 +348,10 @@ impl AccountManager {
     }
 
     /// 获取 MOM 资金切片（轻量级实时资金快照）
-    pub fn get_mom_slice(&self, account_id: &str) -> Result<crate::qars::qaaccount::account::QAMOMSlice, ExchangeError> {
+    pub fn get_mom_slice(
+        &self,
+        account_id: &str,
+    ) -> Result<crate::qars::qaaccount::account::QAMOMSlice, ExchangeError> {
         let account = self.get_account(account_id)?;
         let mut acc = account.write();
         Ok(acc.get_mom_slice())
@@ -356,19 +367,29 @@ impl AccountManager {
         self.accounts.len()
     }
 
-
     /// 同步所有账户时间
     pub fn sync_time(&self) {
         let current_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         for account in self.accounts.iter() {
-            account.value().write().change_datetime(current_time.clone());
+            account
+                .value()
+                .write()
+                .change_datetime(current_time.clone());
         }
     }
 
     /// 获取账户元数据
-    pub fn get_account_metadata(&self, account_id: &str) -> Option<(String, String, AccountType, i64)> {
+    pub fn get_account_metadata(
+        &self,
+        account_id: &str,
+    ) -> Option<(String, String, AccountType, i64)> {
         self.metadata.get(account_id).map(|m| {
-            (m.user_id.clone(), m.account_name.clone(), m.account_type, m.created_at)
+            (
+                m.user_id.clone(),
+                m.account_name.clone(),
+                m.account_type,
+                m.created_at,
+            )
         })
     }
 
@@ -400,8 +421,9 @@ impl AccountManager {
             let qifi = acc.get_qifi_slice();
 
             // 序列化为JSON
-            let json = serde_json::to_string_pretty(&qifi)
-                .map_err(|e| ExchangeError::SerializationError(format!("QIFI serialization failed: {}", e)))?;
+            let json = serde_json::to_string_pretty(&qifi).map_err(|e| {
+                ExchangeError::SerializationError(format!("QIFI serialization failed: {}", e))
+            })?;
 
             // 写入文件（使用账户ID作为文件名）
             let file_path = format!("{}/{}.json", snapshot_dir, account_id);
@@ -411,7 +433,11 @@ impl AccountManager {
             saved_count += 1;
         }
 
-        log::info!("Saved {} account snapshots to {}", saved_count, snapshot_dir);
+        log::info!(
+            "Saved {} account snapshots to {}",
+            saved_count,
+            snapshot_dir
+        );
         Ok(saved_count)
     }
 
@@ -420,7 +446,10 @@ impl AccountManager {
         let snapshot_path = Path::new(snapshot_dir);
 
         if !snapshot_path.exists() {
-            log::info!("No snapshot directory found at {}, skipping recovery", snapshot_dir);
+            log::info!(
+                "No snapshot directory found at {}, skipping recovery",
+                snapshot_dir
+            );
             return Ok(0);
         }
 
@@ -444,13 +473,22 @@ impl AccountManager {
 
             // 容错处理：将 JSON 中的 null 替换为 0.0（兼容旧版快照）
             // 这是临时解决方案，防止因为旧快照中的 null 值导致启动失败
-            let sanitized_json = json.replace(": null,", ": 0.0,").replace(": null\n", ": 0.0\n");
+            let sanitized_json = json
+                .replace(": null,", ": 0.0,")
+                .replace(": null\n", ": 0.0\n");
 
-            let qifi: QIFI = serde_json::from_str(&sanitized_json)
-                .map_err(|e| {
-                    log::error!("Failed to deserialize snapshot file: {:?}, error: {}", path, e);
-                    ExchangeError::SerializationError(format!("QIFI deserialization failed for {:?}: {}", path.file_name(), e))
-                })?;
+            let qifi: QIFI = serde_json::from_str(&sanitized_json).map_err(|e| {
+                log::error!(
+                    "Failed to deserialize snapshot file: {:?}, error: {}",
+                    path,
+                    e
+                );
+                ExchangeError::SerializationError(format!(
+                    "QIFI deserialization failed for {:?}: {}",
+                    path.file_name(),
+                    e
+                ))
+            })?;
 
             // 恢复账户
             match self.restore_account_from_qifi(qifi) {
@@ -459,13 +497,21 @@ impl AccountManager {
                     restored_count += 1;
                 }
                 Err(e) => {
-                    log::warn!("Failed to restore account from {:?}: {}, skipping", path.file_name(), e);
+                    log::warn!(
+                        "Failed to restore account from {:?}: {}, skipping",
+                        path.file_name(),
+                        e
+                    );
                     // 继续处理其他文件，不中断恢复流程
                 }
             }
         }
 
-        log::info!("Restored {} accounts from snapshots in {}", restored_count, snapshot_dir);
+        log::info!(
+            "Restored {} accounts from snapshots in {}",
+            restored_count,
+            snapshot_dir
+        );
         Ok(restored_count)
     }
 
@@ -477,7 +523,10 @@ impl AccountManager {
 
         // 检查账户是否已存在
         if self.accounts.contains_key(&account_id) {
-            log::warn!("Account {} already exists, skipping restoration", account_id);
+            log::warn!(
+                "Account {} already exists, skipping restoration",
+                account_id
+            );
             return Ok(());
         }
 
@@ -485,13 +534,18 @@ impl AccountManager {
         let account = QA_Account::new_from_qifi(qifi);
 
         // 存储账户
-        self.accounts.insert(account_id.clone(), Arc::new(RwLock::new(account)));
+        self.accounts
+            .insert(account_id.clone(), Arc::new(RwLock::new(account)));
 
         // 恢复元数据（从QIFI恢复）
         // 注意：account_type 和 created_at 在使用 update_metadata_for_recovery() 后会被正确恢复
         let metadata = AccountMetadata {
             user_id: user_id.clone(),
-            account_name: if account_name.is_empty() { account_id.clone() } else { account_name }, // 从 QIFI investor_name 恢复
+            account_name: if account_name.is_empty() {
+                account_id.clone()
+            } else {
+                account_name
+            }, // 从 QIFI investor_name 恢复
             account_type: AccountType::Individual, // 默认值，恢复时会被 update_metadata_for_recovery() 覆盖
             created_at: chrono::Utc::now().timestamp(), // 默认值，恢复时会被 update_metadata_for_recovery() 覆盖
         };
@@ -510,7 +564,11 @@ impl AccountManager {
             }
         }
 
-        log::info!("Restored account {} (user: {}) from QIFI snapshot", account_id, user_id);
+        log::info!(
+            "Restored account {} (user: {}) from QIFI snapshot",
+            account_id,
+            user_id
+        );
         Ok(())
     }
 
@@ -572,15 +630,18 @@ impl AccountManager {
         account_type: AccountType,
         created_at: i64,
     ) -> Result<(), ExchangeError> {
-        let mut metadata = self.metadata.get_mut(account_id)
-            .ok_or_else(|| ExchangeError::AccountError(format!("Account not found: {}", account_id)))?;
+        let mut metadata = self.metadata.get_mut(account_id).ok_or_else(|| {
+            ExchangeError::AccountError(format!("Account not found: {}", account_id))
+        })?;
 
         metadata.account_type = account_type;
         metadata.created_at = created_at;
 
         log::debug!(
             "Updated metadata for account {} during recovery: account_type={:?}, created_at={}",
-            account_id, account_type, created_at
+            account_id,
+            account_type,
+            created_at
         );
 
         Ok(())
@@ -719,9 +780,15 @@ mod tests {
 
         match result {
             Err(ExchangeError::PermissionDenied(msg)) => {
-                assert!(msg.contains("does not belong to"), "Error message should indicate ownership mismatch");
-                assert!(msg.contains("user_bob"), "Error message should mention the requesting user");
-            },
+                assert!(
+                    msg.contains("does not belong to"),
+                    "Error message should indicate ownership mismatch"
+                );
+                assert!(
+                    msg.contains("user_bob"),
+                    "Error message should mention the requesting user"
+                );
+            }
             _ => panic!("Expected PermissionDenied error"),
         }
 
@@ -731,8 +798,11 @@ mod tests {
 
         match result {
             Err(ExchangeError::AccountError(msg)) => {
-                assert!(msg.contains("not found"), "Error message should indicate account not found");
-            },
+                assert!(
+                    msg.contains("not found"),
+                    "Error message should indicate account not found"
+                );
+            }
             _ => panic!("Expected AccountError for nonexistent account"),
         }
     }

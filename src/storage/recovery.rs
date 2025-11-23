@@ -22,10 +22,10 @@
 //! 4. 返回恢复的账户列表
 //! ```
 
+use crate::core::account_ext::{AccountType, OpenAccountRequest};
+use crate::exchange::account_mgr::AccountManager;
 use crate::storage::wal::manager::WalManager;
 use crate::storage::wal::record::WalRecord;
-use crate::exchange::account_mgr::AccountManager;
-use crate::core::account_ext::{OpenAccountRequest, AccountType};
 use crate::ExchangeError;
 use std::collections::HashMap;
 use std::path::Path;
@@ -58,7 +58,10 @@ impl RecoveryManager {
         let wal_path = Path::new(&account_wal_dir);
 
         if !wal_path.exists() {
-            log::info!("No WAL directory found at {}, skipping WAL recovery", account_wal_dir);
+            log::info!(
+                "No WAL directory found at {}, skipping WAL recovery",
+                account_wal_dir
+            );
             return Ok(0);
         }
 
@@ -70,17 +73,23 @@ impl RecoveryManager {
         // 使用WalManager的replay方法重放所有WAL记录
         let wal_manager = WalManager::new(&account_wal_dir);
 
-        wal_manager.replay(|entry| {
-            if let Err(e) = self.apply_record(entry.sequence, entry.record, &mut account_states) {
-                log::error!("Failed to apply WAL record {}: {}", entry.sequence, e);
-            }
-            Ok(())
-        }).map_err(|e| ExchangeError::StorageError(format!("WAL replay failed: {}", e)))?;
+        wal_manager
+            .replay(|entry| {
+                if let Err(e) = self.apply_record(entry.sequence, entry.record, &mut account_states)
+                {
+                    log::error!("Failed to apply WAL record {}: {}", entry.sequence, e);
+                }
+                Ok(())
+            })
+            .map_err(|e| ExchangeError::StorageError(format!("WAL replay failed: {}", e)))?;
 
         // 从账户状态恢复到AccountManager
         let recovered_count = self.restore_accounts(account_mgr, account_states)?;
 
-        log::info!("✅ WAL recovery completed: {} accounts recovered", recovered_count);
+        log::info!(
+            "✅ WAL recovery completed: {} accounts recovered",
+            recovered_count
+        );
         Ok(recovered_count)
     }
 
@@ -92,10 +101,23 @@ impl RecoveryManager {
         account_states: &mut HashMap<String, AccountState>,
     ) -> Result<(), ExchangeError> {
         match record {
-            WalRecord::AccountOpen { account_id, user_id, account_name, init_cash, account_type, timestamp } => {
-                let account_id_str = String::from_utf8_lossy(&account_id).trim_end_matches('\0').to_string();
-                let user_id_str = String::from_utf8_lossy(&user_id).trim_end_matches('\0').to_string();
-                let account_name_str = String::from_utf8_lossy(&account_name).trim_end_matches('\0').to_string();
+            WalRecord::AccountOpen {
+                account_id,
+                user_id,
+                account_name,
+                init_cash,
+                account_type,
+                timestamp,
+            } => {
+                let account_id_str = String::from_utf8_lossy(&account_id)
+                    .trim_end_matches('\0')
+                    .to_string();
+                let user_id_str = String::from_utf8_lossy(&user_id)
+                    .trim_end_matches('\0')
+                    .to_string();
+                let account_name_str = String::from_utf8_lossy(&account_name)
+                    .trim_end_matches('\0')
+                    .to_string();
 
                 log::debug!(
                     "Replaying AccountOpen: account_id={}, user_id={}, name={}, init_cash={}, sequence={}",
@@ -114,20 +136,29 @@ impl RecoveryManager {
                         account_name: account_name_str,
                         init_cash,
                         account_type: Self::u8_to_account_type(account_type),
-                        created_at: timestamp,  // 从WAL恢复创建时间
+                        created_at: timestamp, // 从WAL恢复创建时间
                         balance: init_cash,
                         available: init_cash,
                         frozen: 0.0,
-                        deposit: 0.0,   // 初始入金为0
-                        withdraw: 0.0,  // 初始出金为0
+                        deposit: 0.0,  // 初始入金为0
+                        withdraw: 0.0, // 初始出金为0
                         margin: 0.0,
                         last_sequence: sequence,
                     },
                 );
             }
 
-            WalRecord::AccountUpdate { user_id, balance, available, frozen, margin, timestamp } => {
-                let user_id_str = String::from_utf8_lossy(&user_id).trim_end_matches('\0').to_string();
+            WalRecord::AccountUpdate {
+                user_id,
+                balance,
+                available,
+                frozen,
+                margin,
+                timestamp,
+            } => {
+                let user_id_str = String::from_utf8_lossy(&user_id)
+                    .trim_end_matches('\0')
+                    .to_string();
 
                 log::debug!(
                     "Replaying AccountUpdate: user_id={}, balance={}, sequence={}",
@@ -164,7 +195,10 @@ impl RecoveryManager {
             }
 
             // 行情记录（恢复时跳过，行情数据无需恢复到内存）
-            WalRecord::TickData { .. } | WalRecord::OrderBookSnapshot { .. } | WalRecord::OrderBookDelta { .. } | WalRecord::KLineFinished { .. } => {
+            WalRecord::TickData { .. }
+            | WalRecord::OrderBookSnapshot { .. }
+            | WalRecord::OrderBookDelta { .. }
+            | WalRecord::KLineFinished { .. } => {
                 // 行情数据和K线数据不需要恢复到账户状态，仅存档用于历史查询
             }
 
@@ -174,7 +208,9 @@ impl RecoveryManager {
             }
 
             // 交易所内部记录（恢复时跳过，仅用于审计和查询）Phase 5
-            WalRecord::ExchangeOrderRecord { .. } | WalRecord::ExchangeTradeRecord { .. } | WalRecord::ExchangeResponseRecord { .. } => {
+            WalRecord::ExchangeOrderRecord { .. }
+            | WalRecord::ExchangeTradeRecord { .. }
+            | WalRecord::ExchangeResponseRecord { .. } => {
                 // 交易所内部记录不需要恢复到账户状态，仅存档用于历史查询和审计
             }
         }
@@ -203,8 +239,12 @@ impl RecoveryManager {
             // 开户
             match account_mgr.open_account(open_req) {
                 Ok(_) => {
-                    log::debug!("Restored account: {} (user={}, balance={})",
-                        account_id, state.user_id, state.balance);
+                    log::debug!(
+                        "Restored account: {} (user={}, balance={})",
+                        account_id,
+                        state.user_id,
+                        state.balance
+                    );
 
                     // 更新账户余额到恢复时的状态
                     if let Err(e) = account_mgr.update_balance_for_recovery(
@@ -224,7 +264,11 @@ impl RecoveryManager {
                         state.account_type,
                         state.created_at,
                     ) {
-                        log::error!("Failed to update metadata for account {}: {}", account_id, e);
+                        log::error!(
+                            "Failed to update metadata for account {}: {}",
+                            account_id,
+                            e
+                        );
                         continue;
                     }
 
@@ -246,7 +290,10 @@ impl RecoveryManager {
             0 => AccountType::Individual,
             1 => AccountType::Institutional,
             _ => {
-                log::warn!("Unknown account_type value: {}, defaulting to Individual", value);
+                log::warn!(
+                    "Unknown account_type value: {}, defaulting to Individual",
+                    value
+                );
                 AccountType::Individual
             }
         }
@@ -261,12 +308,12 @@ struct AccountState {
     account_name: String,
     init_cash: f64,
     account_type: AccountType,
-    created_at: i64,  // 添加创建时间字段
+    created_at: i64, // 添加创建时间字段
     balance: f64,
     available: f64,
     frozen: f64,
-    deposit: f64,   // 累计入金
-    withdraw: f64,  // 累计出金
+    deposit: f64,  // 累计入金
+    withdraw: f64, // 累计出金
     margin: f64,
     last_sequence: u64,
 }

@@ -3,11 +3,11 @@
 //! 提供用户注册、登录、账户绑定等功能
 //! 用户(User) 1对多 账户(QA_Account) 的关系管理
 
-pub mod user_manager;
 pub mod recovery;
+pub mod user_manager;
 
-use serde::{Serialize, Deserialize};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// 用户实体
@@ -158,8 +158,8 @@ pub struct AccountBindRequest {
 }
 
 // 重新导出
-pub use user_manager::UserManager;
 pub use recovery::{UserRecovery, UserRecoveryStats};
+pub use user_manager::UserManager;
 
 #[cfg(test)]
 mod tests {

@@ -7,14 +7,11 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     /// 认证
-    Auth {
-        user_id: String,
-        token: String,
-    },
+    Auth { user_id: String, token: String },
 
     /// 订阅行情
     Subscribe {
-        channels: Vec<String>,  // ["trade", "orderbook", "ticker"]
+        channels: Vec<String>,    // ["trade", "orderbook", "ticker"]
         instruments: Vec<String>, // ["IX2301", "IF2301"]
     },
 
@@ -28,10 +25,10 @@ pub enum ClientMessage {
     SubmitOrder {
         #[serde(default)]
         #[serde(skip_serializing_if = "Option::is_none")]
-        account_id: Option<String>,  // 交易账户（推荐明确传递）✨
+        account_id: Option<String>, // 交易账户（推荐明确传递）✨
         instrument_id: String,
-        direction: String,  // BUY/SELL
-        offset: String,     // OPEN/CLOSE
+        direction: String, // BUY/SELL
+        offset: String,    // OPEN/CLOSE
         volume: f64,
         price: f64,
         order_type: String, // LIMIT/MARKET
@@ -41,22 +38,18 @@ pub enum ClientMessage {
     CancelOrder {
         #[serde(default)]
         #[serde(skip_serializing_if = "Option::is_none")]
-        account_id: Option<String>,  // 交易账户（推荐明确传递）✨
+        account_id: Option<String>, // 交易账户（推荐明确传递）✨
         order_id: String,
     },
 
     /// 查询订单
-    QueryOrder {
-        order_id: String,
-    },
+    QueryOrder { order_id: String },
 
     /// 查询账户
     QueryAccount,
 
     /// 查询持仓
-    QueryPosition {
-        instrument_id: Option<String>,
-    },
+    QueryPosition { instrument_id: Option<String> },
 
     /// Ping（心跳）
     Ping,
@@ -110,8 +103,8 @@ pub enum ServerMessage {
         direction: String,
         offset: String,
         price_type: String,
-        volume: f64,  // 本次成交量或委托量
-        price: f64,   // 价格
+        volume: f64, // 本次成交量或委托量
+        price: f64,  // 价格
         status: String,
         timestamp: i64,
     },
@@ -150,10 +143,7 @@ pub enum ServerMessage {
     },
 
     /// 错误消息
-    Error {
-        code: u32,
-        message: String,
-    },
+    Error { code: u32, message: String },
 
     /// Pong（心跳响应）
     Pong,

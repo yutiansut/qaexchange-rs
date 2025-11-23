@@ -2,12 +2,12 @@
 //!
 //! 从WAL恢复用户注册和账户绑定数据
 
-use std::sync::Arc;
-use std::collections::HashMap;
-use crate::storage::wal::record::WalRecord;
 use crate::storage::hybrid::OltpHybridStorage;
+use crate::storage::wal::record::WalRecord;
 use crate::user::{User, UserManager, UserStatus};
 use crate::ExchangeError;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub type Result<T> = std::result::Result<T, ExchangeError>;
 
@@ -30,7 +30,10 @@ pub struct UserRecovery {
 impl UserRecovery {
     /// 创建恢复器
     pub fn new(storage: Arc<OltpHybridStorage>, user_manager: Arc<UserManager>) -> Self {
-        Self { storage, user_manager }
+        Self {
+            storage,
+            user_manager,
+        }
     }
 
     /// 从WAL恢复用户数据
@@ -42,17 +45,30 @@ impl UserRecovery {
         let mut bindings: Vec<(String, String)> = Vec::new(); // (user_id, account_id)
 
         // 从WAL读取记录
-        let records = self.storage.range_query(start_ts, end_ts)
+        let records = self
+            .storage
+            .range_query(start_ts, end_ts)
             .map_err(|e| ExchangeError::StorageError(format!("Failed to query WAL: {}", e)))?;
 
-        log::info!("Recovering user data from {} records (ts range: {} - {})",
-                   records.len(), start_ts, end_ts);
+        log::info!(
+            "Recovering user data from {} records (ts range: {} - {})",
+            records.len(),
+            start_ts,
+            end_ts
+        );
 
         for (_timestamp, _sequence, record) in records {
             stats.total_records += 1;
 
             match record {
-                WalRecord::UserRegister { user_id, username, password_hash, phone, email, created_at } => {
+                WalRecord::UserRegister {
+                    user_id,
+                    username,
+                    password_hash,
+                    phone,
+                    email,
+                    created_at,
+                } => {
                     stats.user_register_records += 1;
 
                     let user_id_str = WalRecord::from_fixed_array(&user_id);
@@ -76,14 +92,21 @@ impl UserRecovery {
                     }
 
                     // 保留最新的用户记录（按时间戳）
-                    users_map.entry(user_id_str).and_modify(|existing| {
-                        if user.created_at > existing.created_at {
-                            *existing = user.clone();
-                        }
-                    }).or_insert(user);
+                    users_map
+                        .entry(user_id_str)
+                        .and_modify(|existing| {
+                            if user.created_at > existing.created_at {
+                                *existing = user.clone();
+                            }
+                        })
+                        .or_insert(user);
                 }
 
-                WalRecord::AccountBind { user_id, account_id, .. } => {
+                WalRecord::AccountBind {
+                    user_id,
+                    account_id,
+                    ..
+                } => {
                     stats.account_bind_records += 1;
 
                     let user_id_str = WalRecord::from_fixed_array(&user_id);
@@ -101,15 +124,24 @@ impl UserRecovery {
         // 恢复用户到 UserManager
         for (user_id, user) in users_map {
             // 直接插入到 UserManager（绕过注册逻辑）
-            self.user_manager.users.insert(user_id.clone(), Arc::new(parking_lot::RwLock::new(user.clone())));
+            self.user_manager.users.insert(
+                user_id.clone(),
+                Arc::new(parking_lot::RwLock::new(user.clone())),
+            );
 
             // 更新索引
-            self.user_manager.username_index.insert(user.username.clone(), user_id.clone());
+            self.user_manager
+                .username_index
+                .insert(user.username.clone(), user_id.clone());
             if let Some(ref phone) = user.phone {
-                self.user_manager.phone_index.insert(phone.clone(), user_id.clone());
+                self.user_manager
+                    .phone_index
+                    .insert(phone.clone(), user_id.clone());
             }
             if let Some(ref email) = user.email {
-                self.user_manager.email_index.insert(email.clone(), user_id.clone());
+                self.user_manager
+                    .email_index
+                    .insert(email.clone(), user_id.clone());
             }
 
             stats.users_recovered += 1;
@@ -127,8 +159,12 @@ impl UserRecovery {
 
         stats.recovery_time_ms = start_time.elapsed().as_millis();
 
-        log::info!("User data recovery completed: {} users, {} bindings in {}ms",
-                   stats.users_recovered, stats.account_bind_records, stats.recovery_time_ms);
+        log::info!(
+            "User data recovery completed: {} users, {} bindings in {}ms",
+            stats.users_recovered,
+            stats.account_bind_records,
+            stats.recovery_time_ms
+        );
 
         Ok(stats)
     }
@@ -153,9 +189,9 @@ impl UserRecovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::hybrid::oltp::OltpHybridConfig;
     use crate::user::UserRegisterRequest;
     use tempfile::tempdir;
-    use crate::storage::hybrid::oltp::OltpHybridConfig;
 
     #[tokio::test]
     async fn test_user_recovery() {
@@ -200,9 +236,15 @@ mod tests {
         let user2 = user_manager.register(req2).unwrap();
 
         // 绑定账户
-        user_manager.bind_account(&user1.user_id, "account1".to_string()).unwrap();
-        user_manager.bind_account(&user1.user_id, "account2".to_string()).unwrap();
-        user_manager.bind_account(&user2.user_id, "account3".to_string()).unwrap();
+        user_manager
+            .bind_account(&user1.user_id, "account1".to_string())
+            .unwrap();
+        user_manager
+            .bind_account(&user1.user_id, "account2".to_string())
+            .unwrap();
+        user_manager
+            .bind_account(&user2.user_id, "account3".to_string())
+            .unwrap();
 
         // 等待WAL刷盘
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;

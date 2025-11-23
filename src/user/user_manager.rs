@@ -2,11 +2,11 @@
 //!
 //! 负责用户的注册、登录、查询、账户绑定等管理功能
 
-use super::{User, UserRegisterRequest, UserLoginRequest, UserLoginResponse, UserStatus};
+use super::{User, UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserStatus};
 use crate::ExchangeError;
 use dashmap::DashMap;
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 pub type Result<T> = std::result::Result<T, ExchangeError>;
 
@@ -49,26 +49,29 @@ impl UserManager {
     pub fn register(&self, req: UserRegisterRequest) -> Result<User> {
         // 检查用户名是否已存在
         if self.username_index.contains_key(&req.username) {
-            return Err(ExchangeError::UserError(
-                format!("Username already exists: {}", req.username)
-            ));
+            return Err(ExchangeError::UserError(format!(
+                "Username already exists: {}",
+                req.username
+            )));
         }
 
         // 检查手机号是否已存在
         if let Some(ref phone) = req.phone {
             if self.phone_index.contains_key(phone) {
-                return Err(ExchangeError::UserError(
-                    format!("Phone already registered: {}", phone)
-                ));
+                return Err(ExchangeError::UserError(format!(
+                    "Phone already registered: {}",
+                    phone
+                )));
             }
         }
 
         // 检查邮箱是否已存在
         if let Some(ref email) = req.email {
             if self.email_index.contains_key(email) {
-                return Err(ExchangeError::UserError(
-                    format!("Email already registered: {}", email)
-                ));
+                return Err(ExchangeError::UserError(format!(
+                    "Email already registered: {}",
+                    email
+                )));
             }
         }
 
@@ -86,7 +89,8 @@ impl UserManager {
         let user_id = user.user_id.clone();
 
         // 存储用户
-        self.users.insert(user_id.clone(), Arc::new(RwLock::new(user.clone())));
+        self.users
+            .insert(user_id.clone(), Arc::new(RwLock::new(user.clone())));
 
         // 更新索引
         self.username_index.insert(req.username, user_id.clone());
@@ -105,8 +109,16 @@ impl UserManager {
                 user_id: WalRecord::to_fixed_array_40(&user.user_id),
                 username: WalRecord::to_fixed_array_32(&user.username),
                 password_hash: WalRecord::to_fixed_array_64(&user.password_hash),
-                phone: user.phone.as_ref().map(|s| WalRecord::to_fixed_array_16(s)).unwrap_or([0u8; 16]),
-                email: user.email.as_ref().map(|s| WalRecord::to_fixed_array_32(s)).unwrap_or([0u8; 32]),
+                phone: user
+                    .phone
+                    .as_ref()
+                    .map(|s| WalRecord::to_fixed_array_16(s))
+                    .unwrap_or([0u8; 16]),
+                email: user
+                    .email
+                    .as_ref()
+                    .map(|s| WalRecord::to_fixed_array_32(s))
+                    .unwrap_or([0u8; 32]),
                 created_at: user.created_at,
             };
 
@@ -129,7 +141,9 @@ impl UserManager {
         if let Some(user_arc) = self.users.get(&claims.sub) {
             let user = user_arc.read();
             if !user.is_active() {
-                return Err(ExchangeError::AuthError("User is frozen or deleted".to_string()));
+                return Err(ExchangeError::AuthError(
+                    "User is frozen or deleted".to_string(),
+                ));
             }
             Ok(claims.sub)
         } else {
@@ -140,16 +154,16 @@ impl UserManager {
     /// 用户登录
     pub fn login(&self, req: UserLoginRequest) -> Result<UserLoginResponse> {
         // 查找用户
-        let user_id = self.username_index.get(&req.username)
-            .ok_or_else(|| ExchangeError::UserError(
-                format!("User not found: {}", req.username)
-            ))?
+        let user_id = self
+            .username_index
+            .get(&req.username)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", req.username)))?
             .clone();
 
-        let user_arc = self.users.get(&user_id)
-            .ok_or_else(|| ExchangeError::UserError(
-                format!("User not found: {}", req.username)
-            ))?;
+        let user_arc = self
+            .users
+            .get(&user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", req.username)))?;
 
         let user = user_arc.read();
 
@@ -176,8 +190,10 @@ impl UserManager {
         }
 
         // 生成JWT token
-        let token = crate::utils::jwt::generate_token(&user.user_id, &user.username)
-            .map_err(|e| ExchangeError::InternalError(format!("Failed to generate JWT token: {}", e)))?;
+        let token =
+            crate::utils::jwt::generate_token(&user.user_id, &user.username).map_err(|e| {
+                ExchangeError::InternalError(format!("Failed to generate JWT token: {}", e))
+            })?;
 
         Ok(UserLoginResponse {
             success: true,
@@ -190,10 +206,10 @@ impl UserManager {
 
     /// 获取用户
     pub fn get_user(&self, user_id: &str) -> Result<User> {
-        let user_arc = self.users.get(user_id)
-            .ok_or_else(|| ExchangeError::UserError(
-                format!("User not found: {}", user_id)
-            ))?;
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
 
         let user = user_arc.read().clone();
         Ok(user)
@@ -201,10 +217,10 @@ impl UserManager {
 
     /// 通过用户名获取用户
     pub fn get_user_by_username(&self, username: &str) -> Result<User> {
-        let user_id = self.username_index.get(username)
-            .ok_or_else(|| ExchangeError::UserError(
-                format!("User not found: {}", username)
-            ))?
+        let user_id = self
+            .username_index
+            .get(username)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", username)))?
             .clone();
 
         self.get_user(&user_id)
@@ -212,10 +228,10 @@ impl UserManager {
 
     /// 获取用户的账户列表
     pub fn get_user_accounts(&self, user_id: &str) -> Result<Vec<String>> {
-        let user_arc = self.users.get(user_id)
-            .ok_or_else(|| ExchangeError::UserError(
-                format!("User not found: {}", user_id)
-            ))?;
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
 
         let account_ids = user_arc.read().account_ids.clone();
         Ok(account_ids)
@@ -223,10 +239,10 @@ impl UserManager {
 
     /// 绑定账户到用户
     pub fn bind_account(&self, user_id: &str, account_id: String) -> Result<()> {
-        let user_arc = self.users.get(user_id)
-            .ok_or_else(|| ExchangeError::UserError(
-                format!("User not found: {}", user_id)
-            ))?;
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
 
         let mut user = user_arc.write();
         user.add_account(account_id.clone());
@@ -253,10 +269,10 @@ impl UserManager {
 
     /// 解绑账户
     pub fn unbind_account(&self, user_id: &str, account_id: &str) -> Result<()> {
-        let user_arc = self.users.get(user_id)
-            .ok_or_else(|| ExchangeError::UserError(
-                format!("User not found: {}", user_id)
-            ))?;
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
 
         let mut user = user_arc.write();
         user.remove_account(account_id);
@@ -268,10 +284,10 @@ impl UserManager {
 
     /// 冻结用户
     pub fn freeze_user(&self, user_id: &str) -> Result<()> {
-        let user_arc = self.users.get(user_id)
-            .ok_or_else(|| ExchangeError::UserError(
-                format!("User not found: {}", user_id)
-            ))?;
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
 
         user_arc.write().freeze();
 
@@ -282,10 +298,10 @@ impl UserManager {
 
     /// 解冻用户
     pub fn unfreeze_user(&self, user_id: &str) -> Result<()> {
-        let user_arc = self.users.get(user_id)
-            .ok_or_else(|| ExchangeError::UserError(
-                format!("User not found: {}", user_id)
-            ))?;
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
 
         user_arc.write().unfreeze();
 
@@ -296,7 +312,8 @@ impl UserManager {
 
     /// 列出所有用户
     pub fn list_users(&self) -> Vec<User> {
-        self.users.iter()
+        self.users
+            .iter()
             .map(|entry| entry.value().read().clone())
             .collect()
     }
@@ -398,8 +415,10 @@ mod tests {
         let user = mgr.register(req).unwrap();
 
         // 绑定账户
-        mgr.bind_account(&user.user_id, "account1".to_string()).unwrap();
-        mgr.bind_account(&user.user_id, "account2".to_string()).unwrap();
+        mgr.bind_account(&user.user_id, "account1".to_string())
+            .unwrap();
+        mgr.bind_account(&user.user_id, "account2".to_string())
+            .unwrap();
 
         let accounts = mgr.get_user_accounts(&user.user_id).unwrap();
         assert_eq!(accounts.len(), 2);
@@ -437,7 +456,10 @@ mod tests {
 
         let result = mgr.register(req2);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Phone already registered"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Phone already registered"));
     }
 
     #[test]
@@ -467,7 +489,10 @@ mod tests {
 
         let result = mgr.register(req2);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Email already registered"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Email already registered"));
     }
 
     #[test]

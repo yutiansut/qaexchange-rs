@@ -16,7 +16,7 @@
 // - 性能提升：ID 生成 AtomicU64::fetch_add (~5ns) vs UUID (~100ns) = 20x faster
 // - 行情数据使用固定数组避免动态分配
 
-use rkyv::{Archive, Serialize as RkyvSerialize, Deserialize as RkyvDeserialize};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 /// WAL 记录类型（仅使用 rkyv 序列化，不需要 serde）
 #[derive(Debug, Clone, Archive, RkyvSerialize, RkyvDeserialize)]
@@ -24,31 +24,31 @@ use rkyv::{Archive, Serialize as RkyvSerialize, Deserialize as RkyvDeserialize};
 pub enum WalRecord {
     /// 账户开户
     AccountOpen {
-        account_id: [u8; 64],        // 账户ID (Phase 10: 新增)
-        user_id: [u8; 32],           // 用户ID (所有者)
-        account_name: [u8; 64],      // 账户名称 (Phase 10: 修正语义)
-        init_cash: f64,              // 初始资金
-        account_type: u8,            // 0=个人, 1=机构
-        timestamp: i64,              // 纳秒时间戳
+        account_id: [u8; 64],   // 账户ID (Phase 10: 新增)
+        user_id: [u8; 32],      // 用户ID (所有者)
+        account_name: [u8; 64], // 账户名称 (Phase 10: 修正语义)
+        init_cash: f64,         // 初始资金
+        account_type: u8,       // 0=个人, 1=机构
+        timestamp: i64,         // 纳秒时间戳
     },
 
     /// 订单写入
     OrderInsert {
-        order_id: u64,               // 品种内递增 ID (8 bytes)
-        user_id: [u8; 32],           // 用户ID
-        instrument_id: [u8; 16],     // 合约ID（已隐含在 Per-Instrument WAL 中，但保留用于跨品种查询）
-        direction: u8,               // 0=BUY, 1=SELL
-        offset: u8,                  // 0=OPEN, 1=CLOSE
+        order_id: u64,           // 品种内递增 ID (8 bytes)
+        user_id: [u8; 32],       // 用户ID
+        instrument_id: [u8; 16], // 合约ID（已隐含在 Per-Instrument WAL 中，但保留用于跨品种查询）
+        direction: u8,           // 0=BUY, 1=SELL
+        offset: u8,              // 0=OPEN, 1=CLOSE
         price: f64,
         volume: f64,
-        timestamp: i64,              // 纳秒时间戳
+        timestamp: i64, // 纳秒时间戳
     },
 
     /// 成交回报
     TradeExecuted {
-        trade_id: u64,               // 品种内递增 trade ID
-        order_id: u64,               // 品种内 order ID
-        exchange_order_id: u64,      // 交易所 order ID (如果是模拟盘则等于 order_id)
+        trade_id: u64,          // 品种内递增 trade ID
+        order_id: u64,          // 品种内 order ID
+        exchange_order_id: u64, // 交易所 order ID (如果是模拟盘则等于 order_id)
         price: f64,
         volume: f64,
         timestamp: i64,
@@ -65,54 +65,51 @@ pub enum WalRecord {
     },
 
     /// Checkpoint（标记可以安全截断的位置）
-    Checkpoint {
-        sequence: u64,
-        timestamp: i64,
-    },
+    Checkpoint { sequence: u64, timestamp: i64 },
 
     /// Tick 行情数据
     TickData {
-        instrument_id: [u8; 16],     // 合约ID（定长）
-        last_price: f64,             // 最新价
-        bid_price: f64,              // 买一价（0.0 表示无）
-        ask_price: f64,              // 卖一价（0.0 表示无）
-        volume: i64,                 // 成交量
-        timestamp: i64,              // 纳秒时间戳
+        instrument_id: [u8; 16], // 合约ID（定长）
+        last_price: f64,         // 最新价
+        bid_price: f64,          // 买一价（0.0 表示无）
+        ask_price: f64,          // 卖一价（0.0 表示无）
+        volume: i64,             // 成交量
+        timestamp: i64,          // 纳秒时间戳
     },
 
     /// 订单簿快照（Level2，10档）
     OrderBookSnapshot {
-        instrument_id: [u8; 16],     // 合约ID
-        bids: [(f64, i64); 10],      // 买盘10档 (价格, 数量)，固定数组避免动态分配
-        asks: [(f64, i64); 10],      // 卖盘10档 (价格, 数量)
-        last_price: f64,             // 最新价
-        timestamp: i64,              // 纳秒时间戳
+        instrument_id: [u8; 16], // 合约ID
+        bids: [(f64, i64); 10],  // 买盘10档 (价格, 数量)，固定数组避免动态分配
+        asks: [(f64, i64); 10],  // 卖盘10档 (价格, 数量)
+        last_price: f64,         // 最新价
+        timestamp: i64,          // 纳秒时间戳
     },
 
     /// 订单簿增量更新（Level1）
     OrderBookDelta {
-        instrument_id: [u8; 16],     // 合约ID
-        side: u8,                    // 0=bid, 1=ask
-        price: f64,                  // 价格
-        volume: i64,                 // 数量（0 表示删除该价格档位）
-        timestamp: i64,              // 纳秒时间戳
+        instrument_id: [u8; 16], // 合约ID
+        side: u8,                // 0=bid, 1=ask
+        price: f64,              // 价格
+        volume: i64,             // 数量（0 表示删除该价格档位）
+        timestamp: i64,          // 纳秒时间戳
     },
 
     /// 用户注册
     UserRegister {
-        user_id: [u8; 40],           // 用户ID (UUID, 36 chars + padding)
-        username: [u8; 32],          // 用户名
-        password_hash: [u8; 64],     // 密码哈希 (bcrypt, 60字符)
-        phone: [u8; 16],             // 手机号（可选）
-        email: [u8; 32],             // 邮箱（可选）
-        created_at: i64,             // 创建时间戳
+        user_id: [u8; 40],       // 用户ID (UUID, 36 chars + padding)
+        username: [u8; 32],      // 用户名
+        password_hash: [u8; 64], // 密码哈希 (bcrypt, 60字符)
+        phone: [u8; 16],         // 手机号（可选）
+        email: [u8; 32],         // 邮箱（可选）
+        created_at: i64,         // 创建时间戳
     },
 
     /// 账户绑定到用户
     AccountBind {
-        user_id: [u8; 40],           // 用户ID (UUID, 36 chars + padding)
-        account_id: [u8; 40],        // 账户ID (UUID, 36 chars + padding)
-        timestamp: i64,              // 绑定时间戳
+        user_id: [u8; 40],    // 用户ID (UUID, 36 chars + padding)
+        account_id: [u8; 40], // 账户ID (UUID, 36 chars + padding)
+        timestamp: i64,       // 绑定时间戳
     },
 
     /// 交易所内部逐笔委托记录 (Phase 5)
@@ -148,16 +145,16 @@ pub enum WalRecord {
     /// 存储路径: __ACCOUNT__/{user_id}/
     /// 包含5种回报类型: OrderAccepted, OrderRejected, Trade, CancelAccepted, CancelRejected
     ExchangeResponseRecord {
-        response_type: u8,           // 0=OrderAccepted, 1=OrderRejected, 2=Trade, 3=CancelAccepted, 4=CancelRejected
-        exchange_order_id: i64,      // 交易所订单号
-        instrument: [u8; 16],        // 合约代码
-        user_id: [u8; 32],           // 用户ID
-        timestamp: i64,              // 纳秒时间戳
+        response_type: u8, // 0=OrderAccepted, 1=OrderRejected, 2=Trade, 3=CancelAccepted, 4=CancelRejected
+        exchange_order_id: i64, // 交易所订单号
+        instrument: [u8; 16], // 合约代码
+        user_id: [u8; 32], // 用户ID
+        timestamp: i64,    // 纳秒时间戳
         // 可选字段 (根据response_type使用)
-        trade_id: i64,               // 仅Trade类型使用
-        volume: f64,                 // Trade类型: 成交量
-        price: f64,                  // Trade类型: 成交价格
-        reason: [u8; 128],           // Rejected类型: 拒绝原因
+        trade_id: i64,     // 仅Trade类型使用
+        volume: f64,       // Trade类型: 成交量
+        price: f64,        // Trade类型: 成交价格
+        reason: [u8; 128], // Rejected类型: 拒绝原因
     },
 
     /// K线数据（完成的K线）
@@ -165,18 +162,18 @@ pub enum WalRecord {
     /// 用于K线数据的持久化和恢复
     /// @yutiansut @quantaxis
     KLineFinished {
-        instrument_id: [u8; 16],     // 合约ID
-        period: i32,                 // 周期（HQChart格式: 0=Day, 3=3s, 4=1min, 5=5min, 6=15min, 7=30min, 8=60min）
-        kline_timestamp: i64,        // K线起始时间戳（毫秒）
-        open: f64,                   // 开盘价
-        high: f64,                   // 最高价
-        low: f64,                    // 最低价
-        close: f64,                  // 收盘价
-        volume: i64,                 // 成交量
-        amount: f64,                 // 成交额
-        open_oi: i64,                // 起始持仓量
-        close_oi: i64,               // 结束持仓量
-        timestamp: i64,              // 记录写入时间戳（纳秒）
+        instrument_id: [u8; 16], // 合约ID
+        period: i32, // 周期（HQChart格式: 0=Day, 3=3s, 4=1min, 5=5min, 6=15min, 7=30min, 8=60min）
+        kline_timestamp: i64, // K线起始时间戳（毫秒）
+        open: f64,   // 开盘价
+        high: f64,   // 最高价
+        low: f64,    // 最低价
+        close: f64,  // 收盘价
+        volume: i64, // 成交量
+        amount: f64, // 成交额
+        open_oi: i64, // 起始持仓量
+        close_oi: i64, // 结束持仓量
+        timestamp: i64, // 记录写入时间戳（纳秒）
     },
 }
 
@@ -238,10 +235,10 @@ impl WalRecord {
 #[derive(Debug, Clone, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct WalEntry {
-    pub sequence: u64,           // 递增序列号
-    pub crc32: u32,              // 数据校验和
-    pub timestamp: i64,          // 纳秒时间戳
-    pub record: WalRecord,       // 实际数据
+    pub sequence: u64,     // 递增序列号
+    pub crc32: u32,        // 数据校验和
+    pub timestamp: i64,    // 纳秒时间戳
+    pub record: WalRecord, // 实际数据
 }
 
 impl WalEntry {
@@ -251,7 +248,7 @@ impl WalEntry {
 
         Self {
             sequence,
-            crc32: 0,  // 稍后计算
+            crc32: 0, // 稍后计算
             timestamp,
             record,
         }
@@ -347,12 +344,12 @@ mod tests {
             trade_id: 1,
             order_id: 2,
             exchange_order_id: 3,
-            price: 999.0,  // Changed price
+            price: 999.0, // Changed price
             volume: 10.0,
             timestamp: 12345,
         };
         let mut bad_entry = WalEntry::new(1, bad_record).with_crc32();
-        bad_entry.crc32 = entry.crc32;  // Use wrong CRC32
+        bad_entry.crc32 = entry.crc32; // Use wrong CRC32
         assert!(!bad_entry.verify_crc32());
     }
 

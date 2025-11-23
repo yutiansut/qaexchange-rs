@@ -4,17 +4,17 @@
 //! 遵循解耦原则：业务逻辑与网络层分离
 
 pub mod broadcaster;
-pub mod snapshot_broadcaster;
-pub mod snapshot_generator;
 pub mod cache;
-pub mod recovery;
 pub mod kline;
 pub mod kline_actor;
+pub mod recovery;
+pub mod snapshot_broadcaster;
+pub mod snapshot_generator;
 
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::matching::engine::ExchangeMatchingEngine;
 use crate::utils::config::InstrumentConfig;
@@ -27,8 +27,8 @@ pub type Result<T> = std::result::Result<T, ExchangeError>;
 pub struct OrderBookSnapshot {
     pub instrument_id: String,
     pub timestamp: i64,
-    pub bids: Vec<PriceLevel>,  // 买盘（降序）
-    pub asks: Vec<PriceLevel>,  // 卖盘（升序）
+    pub bids: Vec<PriceLevel>, // 买盘（降序）
+    pub asks: Vec<PriceLevel>, // 卖盘（升序）
     pub last_price: Option<f64>,
 }
 
@@ -47,7 +47,7 @@ pub struct RecentTrade {
     pub price: f64,
     pub volume: i64,
     pub timestamp: i64,
-    pub direction: String,  // "BUY" or "SELL"
+    pub direction: String, // "BUY" or "SELL"
 }
 
 /// 合约信息
@@ -122,11 +122,7 @@ impl MarketDataService {
     }
 
     /// 设置快照生成器（每秒级别市场快照）
-    pub fn with_snapshot_generator(
-        mut self,
-        instruments: Vec<String>,
-        interval_ms: u64,
-    ) -> Self {
+    pub fn with_snapshot_generator(mut self, instruments: Vec<String>, interval_ms: u64) -> Self {
         let config = snapshot_generator::SnapshotGeneratorConfig {
             interval_ms,
             enable_persistence: false, // WAL持久化后续实现
@@ -139,7 +135,10 @@ impl MarketDataService {
         ));
 
         self.snapshot_generator = Some(generator);
-        log::info!("✅ Market data service: snapshot generator configured (interval: {}ms)", interval_ms);
+        log::info!(
+            "✅ Market data service: snapshot generator configured (interval: {}ms)",
+            interval_ms
+        );
         self
     }
 
@@ -156,7 +155,9 @@ impl MarketDataService {
     }
 
     /// 订阅市场快照
-    pub fn subscribe_snapshots(&self) -> Option<crossbeam::channel::Receiver<snapshot_generator::MarketSnapshot>> {
+    pub fn subscribe_snapshots(
+        &self,
+    ) -> Option<crossbeam::channel::Receiver<snapshot_generator::MarketSnapshot>> {
         self.snapshot_generator.as_ref().map(|g| g.subscribe())
     }
 
@@ -185,8 +186,12 @@ impl MarketDataService {
             let recovery = recovery::MarketDataRecovery::new(storage.clone(), self.cache.clone());
             match recovery.recover_recent_minutes(minutes) {
                 Ok(stats) if stats.tick_records > 0 || stats.orderbook_records > 0 => {
-                    log::info!("✅ [Market Data Recovery] Recovered {} ticks, {} orderbooks in {}ms",
-                        stats.tick_records, stats.orderbook_records, stats.recovery_time_ms);
+                    log::info!(
+                        "✅ [Market Data Recovery] Recovered {} ticks, {} orderbooks in {}ms",
+                        stats.tick_records,
+                        stats.orderbook_records,
+                        stats.recovery_time_ms
+                    );
                 }
                 Ok(_) => {
                     log::debug!("[Market Data Recovery] No recent market data found in WAL");
@@ -203,12 +208,16 @@ impl MarketDataService {
     /// 设置合约配置
     pub fn set_instrument_configs(&mut self, configs: Vec<InstrumentConfig>) {
         for config in configs {
-            self.instrument_configs.insert(config.instrument_id.clone(), config);
+            self.instrument_configs
+                .insert(config.instrument_id.clone(), config);
         }
     }
 
     /// 创建带自定义缓存 TTL 的服务
-    pub fn new_with_cache_ttl(matching_engine: Arc<ExchangeMatchingEngine>, cache_ttl_ms: u64) -> Self {
+    pub fn new_with_cache_ttl(
+        matching_engine: Arc<ExchangeMatchingEngine>,
+        cache_ttl_ms: u64,
+    ) -> Self {
         Self {
             matching_engine,
             cache: Arc::new(cache::MarketDataCache::new(cache_ttl_ms)),
@@ -241,8 +250,16 @@ impl MarketDataService {
     }
 
     /// 获取订单簿快照（买卖五档）
-    pub fn get_orderbook_snapshot(&self, instrument_id: &str, depth: usize) -> Result<OrderBookSnapshot> {
-        log::debug!("📊 [MarketData] get_orderbook_snapshot for {} (depth={})", instrument_id, depth);
+    pub fn get_orderbook_snapshot(
+        &self,
+        instrument_id: &str,
+        depth: usize,
+    ) -> Result<OrderBookSnapshot> {
+        log::debug!(
+            "📊 [MarketData] get_orderbook_snapshot for {} (depth={})",
+            instrument_id,
+            depth
+        );
 
         // L1 缓存查询
         if let Some(snapshot) = self.cache.get_orderbook(instrument_id) {
@@ -253,13 +270,21 @@ impl MarketDataService {
 
         // L2 缓存查询：从 WAL 恢复最近的快照
         if let Some(ref storage) = self.storage {
-            log::debug!("🔍 [L2 Storage] Querying WAL for orderbook {}", instrument_id);
+            log::debug!(
+                "🔍 [L2 Storage] Querying WAL for orderbook {}",
+                instrument_id
+            );
             match self.load_orderbook_from_storage(instrument_id) {
                 Ok(snapshot) => {
-                    log::info!("✅ [L2 Storage] Found orderbook {} in WAL: {} bids, {} asks",
-                        instrument_id, snapshot.bids.len(), snapshot.asks.len());
+                    log::info!(
+                        "✅ [L2 Storage] Found orderbook {} in WAL: {} bids, {} asks",
+                        instrument_id,
+                        snapshot.bids.len(),
+                        snapshot.asks.len()
+                    );
                     // 更新缓存
-                    self.cache.update_orderbook(instrument_id.to_string(), snapshot.clone());
+                    self.cache
+                        .update_orderbook(instrument_id.to_string(), snapshot.clone());
                     return Ok(snapshot);
                 }
                 Err(e) => {
@@ -271,12 +296,16 @@ impl MarketDataService {
         }
 
         // L3 缓存未命中，从 Orderbook 实时计算
-        log::debug!("🔍 [L3 Realtime] Computing orderbook from matching engine for {}", instrument_id);
+        log::debug!(
+            "🔍 [L3 Realtime] Computing orderbook from matching engine for {}",
+            instrument_id
+        );
         let engine = &self.matching_engine;
 
         // 获取指定合约的订单簿
-        let orderbook = engine.get_orderbook(instrument_id)
-            .ok_or_else(|| ExchangeError::MatchingError(format!("Instrument not found: {}", instrument_id)))?;
+        let orderbook = engine.get_orderbook(instrument_id).ok_or_else(|| {
+            ExchangeError::MatchingError(format!("Instrument not found: {}", instrument_id))
+        })?;
 
         let ob = orderbook.read();
 
@@ -284,11 +313,13 @@ impl MarketDataService {
         let bids = if let Some(bid_orders) = ob.bid_queue.get_sorted_orders() {
             use std::collections::HashMap;
             let mut price_map: HashMap<String, f64> = HashMap::new();
-            for order in bid_orders.iter().take(depth * 10) {  // 获取足够的订单以聚合
+            for order in bid_orders.iter().take(depth * 10) {
+                // 获取足够的订单以聚合
                 *price_map.entry(order.price.to_string()).or_insert(0.0) += order.volume;
             }
 
-            let mut levels: Vec<PriceLevel> = price_map.into_iter()
+            let mut levels: Vec<PriceLevel> = price_map
+                .into_iter()
                 .filter_map(|(price_str, volume)| {
                     price_str.parse::<f64>().ok().map(|price| PriceLevel {
                         price,
@@ -311,7 +342,8 @@ impl MarketDataService {
                 *price_map.entry(order.price.to_string()).or_insert(0.0) += order.volume;
             }
 
-            let mut levels: Vec<PriceLevel> = price_map.into_iter()
+            let mut levels: Vec<PriceLevel> = price_map
+                .into_iter()
                 .filter_map(|(price_str, volume)| {
                     price_str.parse::<f64>().ok().map(|price| PriceLevel {
                         price,
@@ -338,7 +370,8 @@ impl MarketDataService {
         };
 
         // 更新 L1 缓存
-        self.cache.update_orderbook(instrument_id.to_string(), snapshot.clone());
+        self.cache
+            .update_orderbook(instrument_id.to_string(), snapshot.clone());
 
         Ok(snapshot)
     }
@@ -353,11 +386,12 @@ impl MarketDataService {
             let last_price = engine.get_last_price(&instrument_id);
 
             // 从配置读取合约信息，如果配置不存在则使用默认值
-            let (name, multiplier, tick_size) = if let Some(config) = self.instrument_configs.get(&instrument_id) {
-                (config.name.clone(), config.multiplier, config.tick_size)
-            } else {
-                (format!("{} 期货", instrument_id), 300.0, 0.2)
-            };
+            let (name, multiplier, tick_size) =
+                if let Some(config) = self.instrument_configs.get(&instrument_id) {
+                    (config.name.clone(), config.multiplier, config.tick_size)
+                } else {
+                    (format!("{} 期货", instrument_id), 300.0, 0.2)
+                };
 
             result.push(InstrumentInfo {
                 instrument_id: instrument_id.clone(),
@@ -388,9 +422,14 @@ impl MarketDataService {
             log::debug!("🔍 [L2 Storage] Querying WAL for tick {}", instrument_id);
             match self.load_tick_from_storage(instrument_id) {
                 Ok(tick) => {
-                    log::info!("✅ [L2 Storage] Found tick {} in WAL: price={}", instrument_id, tick.last_price);
+                    log::info!(
+                        "✅ [L2 Storage] Found tick {} in WAL: price={}",
+                        instrument_id,
+                        tick.last_price
+                    );
                     // 更新缓存
-                    self.cache.update_tick(instrument_id.to_string(), tick.clone());
+                    self.cache
+                        .update_tick(instrument_id.to_string(), tick.clone());
                     return Ok(tick);
                 }
                 Err(e) => {
@@ -402,12 +441,16 @@ impl MarketDataService {
         }
 
         // L3 缓存未命中，从 Orderbook 实时计算
-        log::debug!("🔍 [L3 Realtime] Computing tick from orderbook for {}", instrument_id);
+        log::debug!(
+            "🔍 [L3 Realtime] Computing tick from orderbook for {}",
+            instrument_id
+        );
         let engine = &self.matching_engine;
 
         // 检查合约是否存在
-        let orderbook = engine.get_orderbook(instrument_id)
-            .ok_or_else(|| ExchangeError::MatchingError(format!("Instrument not found: {}", instrument_id)))?;
+        let orderbook = engine.get_orderbook(instrument_id).ok_or_else(|| {
+            ExchangeError::MatchingError(format!("Instrument not found: {}", instrument_id))
+        })?;
 
         let ob = orderbook.read();
 
@@ -415,10 +458,14 @@ impl MarketDataService {
         let last_price = ob.lastprice;
 
         // 获取最优买卖价（从排序订单中获取第一个）
-        let bid_price = ob.bid_queue.get_sorted_orders()
+        let bid_price = ob
+            .bid_queue
+            .get_sorted_orders()
             .and_then(|orders| orders.first().map(|o| o.price));
 
-        let ask_price = ob.ask_queue.get_sorted_orders()
+        let ask_price = ob
+            .ask_queue
+            .get_sorted_orders()
             .and_then(|orders| orders.first().map(|o| o.price));
 
         // TODO: 从成交记录获取成交量
@@ -434,7 +481,8 @@ impl MarketDataService {
         };
 
         // 更新 L1 缓存
-        self.cache.update_tick(instrument_id.to_string(), tick.clone());
+        self.cache
+            .update_tick(instrument_id.to_string(), tick.clone());
 
         Ok(tick)
     }
@@ -471,12 +519,20 @@ impl MarketDataService {
             let end_ts = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
             let start_ts = end_ts - (3600 * 1_000_000_000); // 1小时
 
-            log::debug!("📂 [Storage] range_query for tick: {} - {} (1 hour)", start_ts, end_ts);
+            log::debug!(
+                "📂 [Storage] range_query for tick: {} - {} (1 hour)",
+                start_ts,
+                end_ts
+            );
 
-            let records = storage.range_query(start_ts, end_ts)
+            let records = storage
+                .range_query(start_ts, end_ts)
                 .map_err(|e| ExchangeError::InternalError(format!("Failed to query WAL: {}", e)))?;
 
-            log::debug!("📂 [Storage] Found {} total records in range", records.len());
+            log::debug!(
+                "📂 [Storage] Found {} total records in range",
+                records.len()
+            );
 
             // 从后往前找最新的TickData
             let mut tick_count = 0;
@@ -488,27 +544,49 @@ impl MarketDataService {
                     ask_price,
                     volume,
                     timestamp,
-                } = record {
+                } = record
+                {
                     tick_count += 1;
-                    let inst_str = crate::storage::wal::record::WalRecord::from_fixed_array(inst_id);
+                    let inst_str =
+                        crate::storage::wal::record::WalRecord::from_fixed_array(inst_id);
                     if inst_str == instrument_id {
-                        log::debug!("✅ [Storage] Found TickData #{} for {}: price={}", tick_count, inst_str, last_price);
+                        log::debug!(
+                            "✅ [Storage] Found TickData #{} for {}: price={}",
+                            tick_count,
+                            inst_str,
+                            last_price
+                        );
                         return Ok(TickData {
                             instrument_id: inst_str,
                             timestamp: timestamp / 1_000_000, // 纳秒转毫秒
                             last_price: *last_price,
-                            bid_price: if *bid_price > 0.0 { Some(*bid_price) } else { None },
-                            ask_price: if *ask_price > 0.0 { Some(*ask_price) } else { None },
+                            bid_price: if *bid_price > 0.0 {
+                                Some(*bid_price)
+                            } else {
+                                None
+                            },
+                            ask_price: if *ask_price > 0.0 {
+                                Some(*ask_price)
+                            } else {
+                                None
+                            },
                             volume: *volume,
                         });
                     }
                 }
             }
 
-            log::debug!("❌ [Storage] No TickData found for {} (scanned {} tick records)", instrument_id, tick_count);
+            log::debug!(
+                "❌ [Storage] No TickData found for {} (scanned {} tick records)",
+                instrument_id,
+                tick_count
+            );
         }
 
-        Err(ExchangeError::StorageError(format!("No tick data found for {}", instrument_id)))
+        Err(ExchangeError::StorageError(format!(
+            "No tick data found for {}",
+            instrument_id
+        )))
     }
 
     /// 从storage加载最近的OrderBookSnapshot（私有方法）
@@ -518,7 +596,8 @@ impl MarketDataService {
             let end_ts = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
             let start_ts = end_ts - (3600 * 1_000_000_000); // 1小时
 
-            let records = storage.range_query(start_ts, end_ts)
+            let records = storage
+                .range_query(start_ts, end_ts)
                 .map_err(|e| ExchangeError::InternalError(format!("Failed to query WAL: {}", e)))?;
 
             // 从后往前找最新的OrderBookSnapshot
@@ -529,23 +608,27 @@ impl MarketDataService {
                     asks,
                     last_price,
                     timestamp,
-                } = record {
-                    let inst_str = crate::storage::wal::record::WalRecord::from_fixed_array(inst_id);
+                } = record
+                {
+                    let inst_str =
+                        crate::storage::wal::record::WalRecord::from_fixed_array(inst_id);
                     if inst_str == instrument_id {
                         // 转换固定数组为Vec
-                        let bids_vec: Vec<PriceLevel> = bids.iter()
+                        let bids_vec: Vec<PriceLevel> = bids
+                            .iter()
                             .filter(|(price, _)| *price > 0.0)
                             .map(|(price, volume)| PriceLevel {
                                 price: *price,
-                                volume: *volume
+                                volume: *volume,
                             })
                             .collect();
 
-                        let asks_vec: Vec<PriceLevel> = asks.iter()
+                        let asks_vec: Vec<PriceLevel> = asks
+                            .iter()
                             .filter(|(price, _)| *price > 0.0)
                             .map(|(price, volume)| PriceLevel {
                                 price: *price,
-                                volume: *volume
+                                volume: *volume,
                             })
                             .collect();
 
@@ -554,14 +637,21 @@ impl MarketDataService {
                             timestamp: timestamp / 1_000_000, // 纳秒转毫秒
                             bids: bids_vec,
                             asks: asks_vec,
-                            last_price: if *last_price > 0.0 { Some(*last_price) } else { None },
+                            last_price: if *last_price > 0.0 {
+                                Some(*last_price)
+                            } else {
+                                None
+                            },
                         });
                     }
                 }
             }
         }
 
-        Err(ExchangeError::StorageError(format!("No orderbook snapshot found for {}", instrument_id)))
+        Err(ExchangeError::StorageError(format!(
+            "No orderbook snapshot found for {}",
+            instrument_id
+        )))
     }
 
     /// 获取所有市场的订单统计（管理员功能）
@@ -577,8 +667,16 @@ impl MarketDataService {
             if let Some(orderbook) = engine.get_orderbook(&instrument_id) {
                 let ob = orderbook.read();
 
-                let bid_count = ob.bid_queue.get_sorted_orders().map(|v| v.len()).unwrap_or(0);
-                let ask_count = ob.ask_queue.get_sorted_orders().map(|v| v.len()).unwrap_or(0);
+                let bid_count = ob
+                    .bid_queue
+                    .get_sorted_orders()
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                let ask_count = ob
+                    .ask_queue
+                    .get_sorted_orders()
+                    .map(|v| v.len())
+                    .unwrap_or(0);
 
                 total_bids += bid_count;
                 total_asks += ask_count;
@@ -598,7 +696,9 @@ impl MarketDataService {
         let timestamp_ms = chrono::Utc::now().timestamp_millis();
 
         // 更新K线
-        let finished_klines = self.kline_manager.on_tick(instrument_id, price, volume, timestamp_ms);
+        let finished_klines =
+            self.kline_manager
+                .on_tick(instrument_id, price, volume, timestamp_ms);
 
         // 记录完成的K线（可以发送到WebSocket订阅者）
         for (period, kline) in finished_klines {
@@ -639,8 +739,8 @@ impl MarketDataService {
 
 // 重新导出
 pub use broadcaster::{MarketDataBroadcaster, MarketDataEvent};
+pub use cache::{CacheStatsSnapshot, MarketDataCache};
+pub use kline_actor::{GetCurrentKLine, GetKLines, KLineActor};
+pub use recovery::{MarketDataRecovery, RecoveredMarketData, RecoveryStats};
 pub use snapshot_broadcaster::SnapshotBroadcastService;
 pub use snapshot_generator::{MarketSnapshot, MarketSnapshotGenerator, SnapshotGeneratorConfig};
-pub use cache::{MarketDataCache, CacheStatsSnapshot};
-pub use recovery::{MarketDataRecovery, RecoveredMarketData, RecoveryStats};
-pub use kline_actor::{KLineActor, GetKLines, GetCurrentKLine};

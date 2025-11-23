@@ -10,15 +10,15 @@
 // - 读取延迟：P99 < 10μs (MemTable) / < 100μs (SSTable)
 // - 吞吐量：> 100K writes/s (单品种)
 
-use crate::storage::wal::{WalManager, WalRecord};
-use crate::storage::memtable::oltp::OltpMemTable;
-use crate::storage::sstable::oltp_rkyv::{RkyvSSTable, RkyvSSTableWriter};
-use crate::storage::memtable::types::MemTableValue;
-use crate::storage::compaction::{CompactionScheduler, CompactionConfig, SSTableInfo};
 use crate::storage::checkpoint::CheckpointManager;
-use std::sync::Arc;
+use crate::storage::compaction::{CompactionConfig, CompactionScheduler, SSTableInfo};
+use crate::storage::memtable::oltp::OltpMemTable;
+use crate::storage::memtable::types::MemTableValue;
+use crate::storage::sstable::oltp_rkyv::{RkyvSSTable, RkyvSSTableWriter};
+use crate::storage::wal::{WalManager, WalRecord};
 use parking_lot::RwLock;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// OLTP 混合存储配置
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ impl Default for OltpHybridConfig {
     fn default() -> Self {
         Self {
             base_path: "/home/quantaxis/qaexchange-rs/output//qaexchange/storage".to_string(),
-            memtable_size_bytes: 64 * 1024 * 1024,  // 64 MB
+            memtable_size_bytes: 64 * 1024 * 1024, // 64 MB
             estimated_entry_size: 256,
         }
     }
@@ -103,7 +103,10 @@ impl OltpHybridStorage {
 
         // 创建 Compaction 调度器
         let compaction_config = CompactionConfig::default();
-        let compaction_scheduler = Arc::new(CompactionScheduler::new(base_path.clone(), compaction_config));
+        let compaction_scheduler = Arc::new(CompactionScheduler::new(
+            base_path.clone(),
+            compaction_config,
+        ));
 
         // 启动后台 compaction 线程
         compaction_scheduler.start();
@@ -132,10 +135,15 @@ impl OltpHybridStorage {
             memtable.insert(entry.sequence, entry.record);
             replayed_count += 1;
             Ok(())
-        }).map_err(|e| format!("WAL replay failed: {}", e))?;
+        })
+        .map_err(|e| format!("WAL replay failed: {}", e))?;
 
         if replayed_count > 0 {
-            log::info!("[{}] ✅ Replayed {} records from WAL to MemTable", instrument_id, replayed_count);
+            log::info!(
+                "[{}] ✅ Replayed {} records from WAL to MemTable",
+                instrument_id,
+                replayed_count
+            );
         }
 
         Ok(storage)
@@ -155,7 +163,7 @@ impl OltpHybridStorage {
 
         // 3. 检查是否需要 flush
         if memtable.should_flush() {
-            drop(memtable);  // 释放读锁
+            drop(memtable); // 释放读锁
             self.try_flush()?;
         }
 
@@ -176,7 +184,9 @@ impl OltpHybridStorage {
         let sequences = self.wal.append_batch(records.clone())?;
 
         // 2. 批量写入 MemTable
-        let entries: Vec<_> = sequences.iter().zip(records.iter())
+        let entries: Vec<_> = sequences
+            .iter()
+            .zip(records.iter())
             .map(|(&seq, record)| (seq, record.clone()))
             .collect();
 
@@ -202,7 +212,11 @@ impl OltpHybridStorage {
     /// 1. 查询 MemTable（最新数据）
     /// 2. 查询所有相关的 SSTable（按时间过滤）
     /// 3. 合并结果（去重、排序）
-    pub fn range_query(&self, start_ts: i64, end_ts: i64) -> Result<Vec<(i64, u64, WalRecord)>, String> {
+    pub fn range_query(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<(i64, u64, WalRecord)>, String> {
         let mut results = Vec::new();
 
         // 1. 查询 MemTable
@@ -302,7 +316,7 @@ impl OltpHybridStorage {
             file_size,
             min_key: metadata.min_key.clone(),
             max_key: metadata.max_key.clone(),
-            level: 0,  // MemTable flush 的结果都是 Level 0
+            level: 0, // MemTable flush 的结果都是 Level 0
             entry_count: metadata.entry_count,
             min_timestamp: metadata.min_timestamp,
             max_timestamp: metadata.max_timestamp,
@@ -342,16 +356,14 @@ impl OltpHybridStorage {
                 let metadata = sstable.metadata();
 
                 // 注册到 Compaction Scheduler
-                let file_size = std::fs::metadata(&path)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
                 let sstable_info = SSTableInfo {
                     file_path: path.to_string_lossy().to_string(),
                     file_size,
                     min_key: metadata.min_key.clone(),
                     max_key: metadata.max_key.clone(),
-                    level: 0,  // 初始都是 Level 0，compaction 会自动调整
+                    level: 0, // 初始都是 Level 0，compaction 会自动调整
                     entry_count: metadata.entry_count,
                     min_timestamp: metadata.min_timestamp,
                     max_timestamp: metadata.max_timestamp,
@@ -396,12 +408,12 @@ impl OltpHybridStorage {
             memtable_entries: memtable.len(),
             memtable_size_bytes: memtable.size_bytes(),
             sstable_count: sstables.len(),
-            sstable_entries: sstables.iter()
-                .map(|s| s.metadata().entry_count)
-                .sum(),
-            min_timestamp: memtable.min_timestamp()
+            sstable_entries: sstables.iter().map(|s| s.metadata().entry_count).sum(),
+            min_timestamp: memtable
+                .min_timestamp()
                 .or_else(|| sstables.first().map(|s| s.metadata().min_timestamp)),
-            max_timestamp: memtable.max_timestamp()
+            max_timestamp: memtable
+                .max_timestamp()
                 .or_else(|| sstables.last().map(|s| s.metadata().max_timestamp)),
         }
     }
@@ -429,10 +441,7 @@ impl OltpHybridStorage {
             .collect();
 
         // 统计信息
-        let total_entries: u64 = sstables
-            .iter()
-            .map(|sst| sst.metadata().entry_count)
-            .sum();
+        let total_entries: u64 = sstables.iter().map(|sst| sst.metadata().entry_count).sum();
 
         let min_timestamp = sstables
             .first()
@@ -484,7 +493,10 @@ impl OltpHybridStorage {
         let checkpoint = match self.checkpoint_manager.load_latest_checkpoint()? {
             Some(ckpt) => ckpt,
             None => {
-                log::info!("[{}] No checkpoint found, skipping checkpoint recovery", self.instrument_id);
+                log::info!(
+                    "[{}] No checkpoint found, skipping checkpoint recovery",
+                    self.instrument_id
+                );
                 return Ok(());
             }
         };
@@ -569,7 +581,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_and_read() {
-
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = OltpHybridConfig {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),
@@ -597,11 +608,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_flush() {
-
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = OltpHybridConfig {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),
-            memtable_size_bytes: 1000,  // 很小，容易触发 flush
+            memtable_size_bytes: 1000, // 很小，容易触发 flush
             estimated_entry_size: 100,
         };
 
@@ -621,7 +631,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_write() {
-
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = OltpHybridConfig {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),
@@ -646,7 +655,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_recovery() {
-
         let tmp_dir = tempfile::tempdir().unwrap();
         let base_path = tmp_dir.path().to_str().unwrap().to_string();
 
@@ -658,7 +666,9 @@ mod tests {
             };
             let storage = OltpHybridStorage::create("IF2501", config).unwrap();
             for i in 0..100 {
-                storage.write(create_order_record(i, 1000 + i as i64)).unwrap();
+                storage
+                    .write(create_order_record(i, 1000 + i as i64))
+                    .unwrap();
             }
             // storage 析构，确保 WAL 文件正确关闭
         }
@@ -683,11 +693,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_performance_write() {
-
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = OltpHybridConfig {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),
-            memtable_size_bytes: 100 * 1024 * 1024,  // 100 MB，避免 flush
+            memtable_size_bytes: 100 * 1024 * 1024, // 100 MB，避免 flush
             ..Default::default()
         };
 

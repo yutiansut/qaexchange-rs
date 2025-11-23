@@ -7,13 +7,13 @@
 //! - 持仓量
 //! - 最高价、最低价、开盘价
 
+use crate::matching::engine::ExchangeMatchingEngine;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use std::collections::HashMap;
-use parking_lot::RwLock;
-use serde::{Serialize, Deserialize};
-use crossbeam::channel::{Sender, Receiver, unbounded};
-use crate::matching::engine::ExchangeMatchingEngine;
 
 /// 市场快照（每秒级别）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,16 +110,26 @@ impl Default for MarketSnapshot {
             last_price: 0.0,
             change_percent: 0.0,
             change_amount: 0.0,
-            bid_price1: 0.0, bid_volume1: 0,
-            bid_price2: 0.0, bid_volume2: 0,
-            bid_price3: 0.0, bid_volume3: 0,
-            bid_price4: 0.0, bid_volume4: 0,
-            bid_price5: 0.0, bid_volume5: 0,
-            ask_price1: 0.0, ask_volume1: 0,
-            ask_price2: 0.0, ask_volume2: 0,
-            ask_price3: 0.0, ask_volume3: 0,
-            ask_price4: 0.0, ask_volume4: 0,
-            ask_price5: 0.0, ask_volume5: 0,
+            bid_price1: 0.0,
+            bid_volume1: 0,
+            bid_price2: 0.0,
+            bid_volume2: 0,
+            bid_price3: 0.0,
+            bid_volume3: 0,
+            bid_price4: 0.0,
+            bid_volume4: 0,
+            bid_price5: 0.0,
+            bid_volume5: 0,
+            ask_price1: 0.0,
+            ask_volume1: 0,
+            ask_price2: 0.0,
+            ask_volume2: 0,
+            ask_price3: 0.0,
+            ask_volume3: 0,
+            ask_price4: 0.0,
+            ask_volume4: 0,
+            ask_price5: 0.0,
+            ask_volume5: 0,
             open: 0.0,
             high: 0.0,
             low: 0.0,
@@ -149,7 +159,7 @@ pub struct SnapshotGeneratorConfig {
 impl Default for SnapshotGeneratorConfig {
     fn default() -> Self {
         Self {
-            interval_ms: 1000,  // 默认1秒
+            interval_ms: 1000, // 默认1秒
             enable_persistence: true,
             instruments: Vec::new(),
         }
@@ -221,8 +231,11 @@ impl MarketSnapshotGenerator {
         let instruments = self.config.instruments.clone();
 
         std::thread::spawn(move || {
-            log::info!("Market snapshot generator started (interval: {}ms, instruments: {})",
-                self.config.interval_ms, instruments.len());
+            log::info!(
+                "Market snapshot generator started (interval: {}ms, instruments: {})",
+                self.config.interval_ms,
+                instruments.len()
+            );
 
             loop {
                 std::thread::sleep(interval);
@@ -232,11 +245,18 @@ impl MarketSnapshotGenerator {
                     if let Ok(snapshot) = self.generate_snapshot(instrument_id) {
                         // 广播快照
                         if let Err(e) = self.snapshot_tx.send(snapshot.clone()) {
-                            log::error!("Failed to broadcast snapshot for {}: {}", instrument_id, e);
+                            log::error!(
+                                "Failed to broadcast snapshot for {}: {}",
+                                instrument_id,
+                                e
+                            );
                         } else {
                             *self.snapshot_count.write() += 1;
-                            log::trace!("Generated snapshot for {}: last_price={:.2}",
-                                instrument_id, snapshot.last_price);
+                            log::trace!(
+                                "Generated snapshot for {}: last_price={:.2}",
+                                instrument_id,
+                                snapshot.last_price
+                            );
                         }
                     }
                 }
@@ -247,14 +267,15 @@ impl MarketSnapshotGenerator {
     /// 生成单个合约的快照
     fn generate_snapshot(&self, instrument_id: &str) -> Result<MarketSnapshot, String> {
         // 获取订单簿
-        let orderbook = self.matching_engine
+        let orderbook = self
+            .matching_engine
             .get_orderbook(instrument_id)
             .ok_or_else(|| format!("Orderbook not found for {}", instrument_id))?;
 
         let mut ob = orderbook.write();
 
         // 获取买卖五档（qars 的 get_depth 不带参数，需要手动提取前5档）
-        ob.get_depth();  // 更新内部深度
+        ob.get_depth(); // 更新内部深度
 
         // 从 qars orderbook 手动提取买卖5档（聚合相同价格的订单数量）
         let bids = if let Some(bid_orders) = ob.bid_queue.get_sorted_orders() {
@@ -262,17 +283,22 @@ impl MarketSnapshotGenerator {
             let mut price_map: HashMap<String, f64> = HashMap::new();
 
             // 聚合相同价格的订单数量
-            for order in bid_orders.iter().take(50) {  // 取足够多的订单以便聚合
+            for order in bid_orders.iter().take(50) {
+                // 取足够多的订单以便聚合
                 *price_map.entry(order.price.to_string()).or_insert(0.0) += order.volume;
             }
 
             // 转换为 PriceLevel 并排序
-            let mut levels: Vec<super::PriceLevel> = price_map.into_iter()
+            let mut levels: Vec<super::PriceLevel> = price_map
+                .into_iter()
                 .filter_map(|(price_str, volume)| {
-                    price_str.parse::<f64>().ok().map(|price| super::PriceLevel {
-                        price,
-                        volume: volume as i64,
-                    })
+                    price_str
+                        .parse::<f64>()
+                        .ok()
+                        .map(|price| super::PriceLevel {
+                            price,
+                            volume: volume as i64,
+                        })
                 })
                 .collect();
 
@@ -290,17 +316,22 @@ impl MarketSnapshotGenerator {
             let mut price_map: HashMap<String, f64> = HashMap::new();
 
             // 聚合相同价格的订单数量
-            for order in ask_orders.iter().take(50) {  // 取足够多的订单以便聚合
+            for order in ask_orders.iter().take(50) {
+                // 取足够多的订单以便聚合
                 *price_map.entry(order.price.to_string()).or_insert(0.0) += order.volume;
             }
 
             // 转换为 PriceLevel 并排序
-            let mut levels: Vec<super::PriceLevel> = price_map.into_iter()
+            let mut levels: Vec<super::PriceLevel> = price_map
+                .into_iter()
                 .filter_map(|(price_str, volume)| {
-                    price_str.parse::<f64>().ok().map(|price| super::PriceLevel {
-                        price,
-                        volume: volume as i64,
-                    })
+                    price_str
+                        .parse::<f64>()
+                        .ok()
+                        .map(|price| super::PriceLevel {
+                            price,
+                            volume: volume as i64,
+                        })
                 })
                 .collect();
 
@@ -314,20 +345,26 @@ impl MarketSnapshotGenerator {
         };
 
         // 获取最新价（qars 的 lastprice 是 f64，不是 Option<f64>）
-        let last_price = if ob.lastprice > 0.0 { ob.lastprice } else { 0.0 };
+        let last_price = if ob.lastprice > 0.0 {
+            ob.lastprice
+        } else {
+            0.0
+        };
 
         // 获取日内统计
         let mut daily_stats = self.daily_stats.write();
-        let stats = daily_stats.entry(instrument_id.to_string()).or_insert_with(|| {
-            DailyStats {
-                open: last_price,
-                high: last_price,
-                low: last_price,
-                pre_close: last_price,  // TODO: 从配置或数据库获取昨收盘价
-                volume: 0,
-                turnover: 0.0,
-            }
-        });
+        let stats = daily_stats
+            .entry(instrument_id.to_string())
+            .or_insert_with(|| {
+                DailyStats {
+                    open: last_price,
+                    high: last_price,
+                    low: last_price,
+                    pre_close: last_price, // TODO: 从配置或数据库获取昨收盘价
+                    volume: 0,
+                    turnover: 0.0,
+                }
+            });
 
         // 更新统计数据
         if last_price > stats.high {
@@ -359,9 +396,9 @@ impl MarketSnapshotGenerator {
             pre_close: stats.pre_close,
             volume: stats.volume,
             turnover: stats.turnover,
-            open_interest: 0,  // TODO: 从持仓管理器获取
-            upper_limit: stats.pre_close * 1.10,  // 假设10%涨停
-            lower_limit: stats.pre_close * 0.90,  // 假设10%跌停
+            open_interest: 0,                    // TODO: 从持仓管理器获取
+            upper_limit: stats.pre_close * 1.10, // 假设10%涨停
+            lower_limit: stats.pre_close * 0.90, // 假设10%跌停
             ..Default::default()
         };
 
@@ -424,16 +461,16 @@ impl MarketSnapshotGenerator {
     /// 设置昨收盘价
     pub fn set_pre_close(&self, instrument_id: &str, pre_close: f64) {
         let mut daily_stats = self.daily_stats.write();
-        let stats = daily_stats.entry(instrument_id.to_string()).or_insert_with(|| {
-            DailyStats {
+        let stats = daily_stats
+            .entry(instrument_id.to_string())
+            .or_insert_with(|| DailyStats {
                 open: pre_close,
                 high: pre_close,
                 low: pre_close,
                 pre_close,
                 volume: 0,
                 turnover: 0.0,
-            }
-        });
+            });
         stats.pre_close = pre_close;
     }
 
@@ -449,7 +486,7 @@ impl MarketSnapshotGenerator {
                 // 从主通道接收
                 let rx_guard = snapshot_rx.read();
                 if let Ok(snapshot) = rx_guard.try_recv() {
-                    drop(rx_guard);  // 尽早释放锁
+                    drop(rx_guard); // 尽早释放锁
 
                     // 转发到订阅者
                     if tx.send(snapshot).is_err() {

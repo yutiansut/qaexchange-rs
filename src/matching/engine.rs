@@ -2,13 +2,13 @@
 //!
 //! 基于 qars::Orderbook 的封装，添加成交记录和行情推送功能
 
-use crate::matching::{Orderbook, Success, Failed, OrderProcessingResult, TradingState};
-use crate::matching::trade_recorder::TradeRecorder;
 use crate::core::Order;
+use crate::matching::trade_recorder::TradeRecorder;
+use crate::matching::{Failed, OrderProcessingResult, Orderbook, Success, TradingState};
 use crate::ExchangeError;
-use std::sync::Arc;
-use parking_lot::RwLock;
 use dashmap::DashMap;
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// 合约资产类型（使用字符串的哈希值作为 Copy 类型）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,17 +46,31 @@ impl ExchangeMatchingEngine {
     }
 
     /// 注册新合约
-    pub fn register_instrument(&self, instrument_id: String, prev_close: f64) -> Result<(), ExchangeError> {
+    pub fn register_instrument(
+        &self,
+        instrument_id: String,
+        prev_close: f64,
+    ) -> Result<(), ExchangeError> {
         let asset = InstrumentAsset::from_code(&instrument_id);
         let orderbook = Orderbook::new(asset, prev_close);
-        self.orderbooks.insert(instrument_id.clone(), Arc::new(RwLock::new(orderbook)));
-        log::info!("Registered instrument: {} with prev_close: {}", instrument_id, prev_close);
+        self.orderbooks
+            .insert(instrument_id.clone(), Arc::new(RwLock::new(orderbook)));
+        log::info!(
+            "Registered instrument: {} with prev_close: {}",
+            instrument_id,
+            prev_close
+        );
         Ok(())
     }
 
     /// 获取订单簿
-    pub fn get_orderbook(&self, instrument_id: &str) -> Option<Arc<RwLock<Orderbook<InstrumentAsset>>>> {
-        self.orderbooks.get(instrument_id).map(|r| r.value().clone())
+    pub fn get_orderbook(
+        &self,
+        instrument_id: &str,
+    ) -> Option<Arc<RwLock<Orderbook<InstrumentAsset>>>> {
+        self.orderbooks
+            .get(instrument_id)
+            .map(|r| r.value().clone())
     }
 
     /// 获取所有合约列表
@@ -80,23 +94,33 @@ impl ExchangeMatchingEngine {
     }
 
     /// 设置交易状态 (TODO: 需要 qars Orderbook 支持此方法)
-    pub fn set_trading_state(&self, instrument_id: &str, _state: TradingState) -> Result<(), ExchangeError> {
+    pub fn set_trading_state(
+        &self,
+        instrument_id: &str,
+        _state: TradingState,
+    ) -> Result<(), ExchangeError> {
         if self.get_orderbook(instrument_id).is_some() {
             // TODO: 实现 set_trading_state
             // let mut ob = orderbook.write();
             // ob.set_trading_state(state);
-            log::info!("Set trading state for {}: {:?} (NOT IMPLEMENTED)", instrument_id, _state);
+            log::info!(
+                "Set trading state for {}: {:?} (NOT IMPLEMENTED)",
+                instrument_id,
+                _state
+            );
             Ok(())
         } else {
-            Err(ExchangeError::MatchingError(
-                format!("Instrument not found: {}", instrument_id)
-            ))
+            Err(ExchangeError::MatchingError(format!(
+                "Instrument not found: {}",
+                instrument_id
+            )))
         }
     }
 
     /// 获取最新价格
     pub fn get_last_price(&self, instrument_id: &str) -> Option<f64> {
-        self.get_orderbook(instrument_id).map(|ob| ob.read().lastprice)
+        self.get_orderbook(instrument_id)
+            .map(|ob| ob.read().lastprice)
     }
 }
 
@@ -124,7 +148,9 @@ mod tests {
     #[test]
     fn test_get_orderbook() {
         let engine = ExchangeMatchingEngine::new();
-        engine.register_instrument("TEST2301".to_string(), 100.0).unwrap();
+        engine
+            .register_instrument("TEST2301".to_string(), 100.0)
+            .unwrap();
 
         let orderbook = engine.get_orderbook("TEST2301");
         assert!(orderbook.is_some());

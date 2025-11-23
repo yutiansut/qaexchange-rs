@@ -7,12 +7,12 @@
 //! 4. WAL 日志 - 写入日志后才确认，保证数据安全
 
 use crate::core::QA_Account;
-use crate::protocol::ipc_messages::{TradeReport, OrderAccepted};
-use dashmap::DashMap;
-use std::sync::Arc;
-use parking_lot::RwLock;
+use crate::protocol::ipc_messages::{OrderAccepted, TradeReport};
 use crossbeam::channel::{Receiver, Sender};
+use dashmap::DashMap;
+use parking_lot::RwLock;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 /// 账户系统核心
 ///
@@ -67,14 +67,15 @@ impl AccountSystemCore {
 
     /// 注册账户
     pub fn register_account(&self, user_id: String, account: QA_Account) {
-        self.accounts.insert(user_id.clone(), Arc::new(RwLock::new(account)));
+        self.accounts
+            .insert(user_id.clone(), Arc::new(RwLock::new(account)));
         log::info!("Registered account in AccountSystemCore: {}", user_id);
     }
 
     /// 启动账户系统主循环
     pub fn run(&self) {
-        use std::sync::atomic::Ordering;
         use crossbeam::channel::select;
+        use std::sync::atomic::Ordering;
 
         self.running.store(true, Ordering::SeqCst);
         log::info!("AccountSystemCore started");
@@ -151,9 +152,7 @@ impl AccountSystemCore {
                 .trim_end_matches('\0')
                 .to_string();
 
-            grouped.entry(user_id)
-                   .or_insert_with(Vec::new)
-                   .push(trade);
+            grouped.entry(user_id).or_insert_with(Vec::new).push(trade);
         }
 
         // 2. 并行更新不同账户（减少锁竞争）
@@ -181,8 +180,11 @@ impl AccountSystemCore {
             }
         });
 
-        log::debug!("Batch updated {} trades for {} accounts",
-            trades.len(), grouped.len());
+        log::debug!(
+            "Batch updated {} trades for {} accounts",
+            trades.len(),
+            grouped.len()
+        );
     }
 
     /// 应用单笔成交到账户
@@ -227,10 +229,10 @@ impl AccountSystemCore {
 
         // 计算 towards (qars 定义：1=BUY OPEN, 3=BUY CLOSE, -2=SELL OPEN, -3=SELL CLOSE)
         let towards = match (trade.direction, trade.offset) {
-            (0, 0) => 1,      // BUY OPEN
-            (1, 0) => -2,     // SELL OPEN
-            (0, 1) => 3,      // BUY CLOSE
-            (1, 1) => -3,     // SELL CLOSE
+            (0, 0) => 1,  // BUY OPEN
+            (1, 0) => -2, // SELL OPEN
+            (0, 1) => 3,  // BUY CLOSE
+            (1, 1) => -3, // SELL CLOSE
             _ => 1,
         };
 
@@ -239,7 +241,11 @@ impl AccountSystemCore {
         // 关键步骤1：更新订单的 exchange_order_id（交易所全局唯一ID）
         if let Some(order) = acc.dailyorders.get_mut(&order_id) {
             order.exchange_order_id = exchange_order_id.clone();
-            log::debug!("Updated exchange_order_id: {} -> {}", order_id, exchange_order_id);
+            log::debug!(
+                "Updated exchange_order_id: {} -> {}",
+                order_id,
+                exchange_order_id
+            );
         }
 
         // 关键步骤2：调用 receive_deal_sim 处理成交
@@ -255,7 +261,8 @@ impl AccountSystemCore {
             towards,
         );
 
-        log::debug!("Applied trade: {} {} {} @ {} x {} (exchange_order_id: {})",
+        log::debug!(
+            "Applied trade: {} {} {} @ {} x {} (exchange_order_id: {})",
             std::str::from_utf8(&trade.user_id).unwrap_or(""),
             if trade.direction == 0 { "BUY" } else { "SELL" },
             instrument_id,

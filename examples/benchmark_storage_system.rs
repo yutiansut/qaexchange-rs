@@ -424,7 +424,10 @@ fn print_latency_stats(name: &str, latencies: &[f64], duration: Duration, total_
 
     println!("\n{} 结果:", name);
     println!("  • 总耗时:   {:>10.2} s", duration.as_secs_f64());
-    println!("  • 吞吐量:   {:>10} ops/s", format_number(throughput as usize));
+    println!(
+        "  • 吞吐量:   {:>10} ops/s",
+        format_number(throughput as usize)
+    );
     println!("  • 平均延迟: {:>10.2} μs", avg);
     println!("  • P50 延迟: {:>10.2} μs", p50);
     println!("  • P95 延迟: {:>10.2} μs", p95);

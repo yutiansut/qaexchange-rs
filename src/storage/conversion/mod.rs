@@ -56,12 +56,12 @@ pub mod metadata;
 pub mod scheduler;
 pub mod worker;
 
-pub use metadata::{ConversionMetadata, ConversionRecord, ConversionStatus, ConversionStats};
-pub use scheduler::{ConversionScheduler, SchedulerConfig, ConversionTask};
+pub use metadata::{ConversionMetadata, ConversionRecord, ConversionStats, ConversionStatus};
+pub use scheduler::{ConversionScheduler, ConversionTask, SchedulerConfig};
 pub use worker::{ConversionWorker, WorkerConfig, WorkerPool};
 
-use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// 转换系统管理器
 ///
@@ -92,11 +92,8 @@ impl ConversionManager {
         ));
 
         // 创建 Worker 线程池
-        let worker_pool = WorkerPool::new(
-            worker_config,
-            metadata.clone(),
-            scheduler.task_receiver(),
-        );
+        let worker_pool =
+            WorkerPool::new(worker_config, metadata.clone(), scheduler.task_receiver());
 
         Ok(Self {
             metadata,
@@ -163,20 +160,15 @@ impl ConversionManager {
         let storage_base = self.scheduler.storage_base_path.clone();
         let olap_dir = storage_base.join(instrument_id).join("olap");
 
-        std::fs::create_dir_all(&olap_dir)
-            .map_err(|e| format!("Create OLAP dir failed: {}", e))?;
+        std::fs::create_dir_all(&olap_dir).map_err(|e| format!("Create OLAP dir failed: {}", e))?;
 
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
         let olap_parquet = olap_dir.join(format!("manual_{}.parquet", timestamp));
 
         // 创建转换记录
         let id = metadata.allocate_id();
-        let record = ConversionRecord::new(
-            id,
-            instrument_id.to_string(),
-            oltp_sstables,
-            olap_parquet,
-        );
+        let record =
+            ConversionRecord::new(id, instrument_id.to_string(), oltp_sstables, olap_parquet);
 
         log::info!("Manually triggering conversion task {}", id);
 
@@ -207,12 +199,8 @@ mod tests {
         let scheduler_config = SchedulerConfig::default();
         let worker_config = WorkerConfig::default();
 
-        let manager = ConversionManager::new(
-            storage_path,
-            metadata_path,
-            scheduler_config,
-            worker_config,
-        );
+        let manager =
+            ConversionManager::new(storage_path, metadata_path, scheduler_config, worker_config);
 
         assert!(manager.is_ok());
     }
@@ -226,13 +214,9 @@ mod tests {
         let scheduler_config = SchedulerConfig::default();
         let worker_config = WorkerConfig::default();
 
-        let manager = ConversionManager::new(
-            storage_path,
-            metadata_path,
-            scheduler_config,
-            worker_config,
-        )
-        .unwrap();
+        let manager =
+            ConversionManager::new(storage_path, metadata_path, scheduler_config, worker_config)
+                .unwrap();
 
         let stats = manager.get_stats();
         assert_eq!(stats.total, 0);

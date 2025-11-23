@@ -16,7 +16,7 @@ pub struct OrderBookQuery {
 }
 
 fn default_depth() -> usize {
-    5  // 默认五档
+    5 // 默认五档
 }
 
 /// 获取订单簿（买卖盘）
@@ -27,19 +27,34 @@ pub async fn get_orderbook(
     query: web::Query<OrderBookQuery>,
     market_service: web::Data<MarketDataService>,
 ) -> Result<HttpResponse> {
-    log::info!("🔍 [HTTP API] GET /api/market/orderbook/{}?depth={}", instrument_id, query.depth);
+    log::info!(
+        "🔍 [HTTP API] GET /api/market/orderbook/{}?depth={}",
+        instrument_id,
+        query.depth
+    );
 
     match market_service.get_orderbook_snapshot(&instrument_id, query.depth) {
         Ok(snapshot) => {
-            log::info!("✅ [HTTP API] Orderbook found for {}: {} bids, {} asks",
-                instrument_id, snapshot.bids.len(), snapshot.asks.len());
+            log::info!(
+                "✅ [HTTP API] Orderbook found for {}: {} bids, {} asks",
+                instrument_id,
+                snapshot.bids.len(),
+                snapshot.asks.len()
+            );
             Ok(HttpResponse::Ok().json(ApiResponse::success(snapshot)))
         }
         Err(e) => {
-            log::error!("❌ [HTTP API] Failed to get orderbook for {}: {}", instrument_id, e);
-            Ok(HttpResponse::InternalServerError().json(
-                ApiResponse::<()>::error(500, format!("Failed to get orderbook: {}", e))
-            ))
+            log::error!(
+                "❌ [HTTP API] Failed to get orderbook for {}: {}",
+                instrument_id,
+                e
+            );
+            Ok(
+                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
+                    500,
+                    format!("Failed to get orderbook: {}", e),
+                )),
+            )
         }
     }
 }
@@ -47,16 +62,17 @@ pub async fn get_orderbook(
 /// 获取合约列表
 ///
 /// GET /api/market/instruments
-pub async fn get_instruments(
-    market_service: web::Data<MarketDataService>,
-) -> Result<HttpResponse> {
+pub async fn get_instruments(market_service: web::Data<MarketDataService>) -> Result<HttpResponse> {
     match market_service.get_instruments() {
         Ok(instruments) => Ok(HttpResponse::Ok().json(ApiResponse::success(instruments))),
         Err(e) => {
             log::error!("Failed to get instruments: {}", e);
-            Ok(HttpResponse::InternalServerError().json(
-                ApiResponse::<()>::error(500, format!("Failed to get instruments: {}", e))
-            ))
+            Ok(
+                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
+                    500,
+                    format!("Failed to get instruments: {}", e),
+                )),
+            )
         }
     }
 }
@@ -72,15 +88,26 @@ pub async fn get_tick(
 
     match market_service.get_tick_data(&instrument_id) {
         Ok(tick) => {
-            log::info!("✅ [HTTP API] Tick data found for {}: price={}, ts={}",
-                instrument_id, tick.last_price, tick.timestamp);
+            log::info!(
+                "✅ [HTTP API] Tick data found for {}: price={}, ts={}",
+                instrument_id,
+                tick.last_price,
+                tick.timestamp
+            );
             Ok(HttpResponse::Ok().json(ApiResponse::success(tick)))
         }
         Err(e) => {
-            log::error!("❌ [HTTP API] Failed to get tick for {}: {}", instrument_id, e);
-            Ok(HttpResponse::InternalServerError().json(
-                ApiResponse::<()>::error(500, format!("Failed to get tick: {}", e))
-            ))
+            log::error!(
+                "❌ [HTTP API] Failed to get tick for {}: {}",
+                instrument_id,
+                e
+            );
+            Ok(
+                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
+                    500,
+                    format!("Failed to get tick: {}", e),
+                )),
+            )
         }
     }
 }
@@ -107,9 +134,12 @@ pub async fn get_recent_trades(
         Ok(trades) => Ok(HttpResponse::Ok().json(ApiResponse::success(trades))),
         Err(e) => {
             log::error!("Failed to get trades for {}: {}", instrument_id, e);
-            Ok(HttpResponse::InternalServerError().json(
-                ApiResponse::<()>::error(500, format!("Failed to get trades: {}", e))
-            ))
+            Ok(
+                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
+                    500,
+                    format!("Failed to get trades: {}", e),
+                )),
+            )
         }
     }
 }
@@ -124,9 +154,12 @@ pub async fn get_market_order_stats(
         Ok(stats) => Ok(HttpResponse::Ok().json(ApiResponse::success(stats))),
         Err(e) => {
             log::error!("Failed to get market order stats: {}", e);
-            Ok(HttpResponse::InternalServerError().json(
-                ApiResponse::<()>::error(500, format!("Failed to get stats: {}", e))
-            ))
+            Ok(
+                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
+                    500,
+                    format!("Failed to get stats: {}", e),
+                )),
+            )
         }
     }
 }

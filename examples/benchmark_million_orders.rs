@@ -10,18 +10,18 @@
 //! - 10 个品种
 //! - 测量吞吐量、延迟、内存占用
 
-use qaexchange::matching::core::MatchingEngineCore;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use dashmap::DashMap;
+use parking_lot::RwLock;
 use qaexchange::account::core::AccountSystemCore;
-use qaexchange::protocol::ipc_messages::*;
 use qaexchange::core::QA_Account;
-use qaexchange::matching::Orderbook;
+use qaexchange::matching::core::MatchingEngineCore;
 use qaexchange::matching::engine::InstrumentAsset;
-use crossbeam::channel::{unbounded, Sender, Receiver};
+use qaexchange::matching::Orderbook;
+use qaexchange::protocol::ipc_messages::*;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use parking_lot::RwLock;
-use dashmap::DashMap;
 
 const NUM_ORDERS: usize = 1_000_000;
 const NUM_ACCOUNTS: usize = 100;
@@ -79,8 +79,8 @@ fn main() {
 
 struct BenchmarkResult {
     total_time_ms: u128,
-    throughput: f64,         // orders/sec
-    avg_latency_us: f64,     // microseconds
+    throughput: f64,     // orders/sec
+    avg_latency_us: f64, // microseconds
     p50_latency_us: f64,
     p95_latency_us: f64,
     p99_latency_us: f64,
@@ -97,10 +97,7 @@ fn benchmark_centralized() -> BenchmarkResult {
     // 注册品种
     for i in 0..NUM_INSTRUMENTS {
         let code = format!("IX240{}", i);
-        let orderbook = Orderbook::new(
-            InstrumentAsset::from_code(&code),
-            100.0,
-        );
+        let orderbook = Orderbook::new(InstrumentAsset::from_code(&code), 100.0);
         orderbooks.insert(code, Arc::new(RwLock::new(orderbook)));
     }
 
@@ -114,7 +111,7 @@ fn benchmark_centralized() -> BenchmarkResult {
             &user_id,
             10_000_000.0, // 每个账户1000万初始资金
             false,
-            "sim",  // sim 模式
+            "sim", // sim 模式
         );
         accounts.insert(user_id, Arc::new(RwLock::new(account)));
     }
@@ -183,7 +180,8 @@ fn benchmark_centralized() -> BenchmarkResult {
         latencies.push(order_latency);
 
         if (idx + 1) % 100_000 == 0 {
-            println!("  进度: {}/{} ({:.1}%)",
+            println!(
+                "  进度: {}/{} ({:.1}%)",
                 format_number(idx + 1),
                 format_number(NUM_ORDERS),
                 (idx + 1) as f64 / NUM_ORDERS as f64 * 100.0
@@ -205,7 +203,7 @@ fn benchmark_distributed() -> BenchmarkResult {
     let (client_tx, client_rx) = unbounded::<OrderRequest>();
     let (order_tx, order_rx) = unbounded::<OrderRequest>();
     let (trade_tx, trade_rx) = unbounded::<TradeReport>();
-    let (accepted_tx, accepted_rx) = unbounded::<OrderAccepted>();  // 订单确认通道
+    let (accepted_tx, accepted_rx) = unbounded::<OrderAccepted>(); // 订单确认通道
     let (market_tx, market_rx) = unbounded::<OrderbookSnapshot>();
     let (account_tx, account_rx) = unbounded();
 
@@ -214,7 +212,7 @@ fn benchmark_distributed() -> BenchmarkResult {
         order_rx.clone(),
         trade_tx.clone(),
         market_tx.clone(),
-        accepted_tx.clone(),  // 添加订单确认通道
+        accepted_tx.clone(), // 添加订单确认通道
     );
 
     for i in 0..NUM_INSTRUMENTS {
@@ -235,7 +233,7 @@ fn benchmark_distributed() -> BenchmarkResult {
     // 启动账户系统线程
     let account_system = Arc::new(AccountSystemCore::new(
         trade_rx.clone(),
-        accepted_rx.clone(),  // 添加订单确认通道
+        accepted_rx.clone(), // 添加订单确认通道
         Some(account_tx.clone()),
         100, // batch_size
     ));
@@ -248,7 +246,7 @@ fn benchmark_distributed() -> BenchmarkResult {
             &user_id,
             10_000_000.0,
             false,
-            "sim",  // sim 模式
+            "sim", // sim 模式
         );
         account_system.register_account(user_id, account);
     }
@@ -286,9 +284,17 @@ fn benchmark_distributed() -> BenchmarkResult {
 
                         // qars towards: 1=BUY OPEN, 3=BUY CLOSE, -2=SELL OPEN, -3=SELL CLOSE
                         let towards = if order_req.direction == 0 {
-                            if order_req.offset == 0 { 1 } else { 3 }  // BUY OPEN=1, BUY CLOSE=3
+                            if order_req.offset == 0 {
+                                1
+                            } else {
+                                3
+                            } // BUY OPEN=1, BUY CLOSE=3
                         } else {
-                            if order_req.offset == 0 { -2 } else { -3 }  // SELL OPEN=-2, SELL CLOSE=-3
+                            if order_req.offset == 0 {
+                                -2
+                            } else {
+                                -3
+                            } // SELL OPEN=-2, SELL CLOSE=-3
                         };
 
                         let datetime = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -304,7 +310,7 @@ fn benchmark_distributed() -> BenchmarkResult {
                         ) {
                             let account_order_id = qars_order.order_id.clone();
                             let order_id_bytes = account_order_id.as_bytes();
-                            let len = order_id_bytes.len().min(40);  // UUID需要40字节
+                            let len = order_id_bytes.len().min(40); // UUID需要40字节
                             order_req.order_id[..len].copy_from_slice(&order_id_bytes[..len]);
 
                             let _ = order_sender.send(order_req);
@@ -316,13 +322,9 @@ fn benchmark_distributed() -> BenchmarkResult {
     };
 
     // 丢弃行情（我们不关心行情，只测撮合性能）
-    let _market_handle = thread::spawn(move || {
-        while let Ok(_) = market_rx.recv() {}
-    });
+    let _market_handle = thread::spawn(move || while let Ok(_) = market_rx.recv() {});
 
-    let _notify_handle = thread::spawn(move || {
-        while let Ok(_) = account_rx.recv() {}
-    });
+    let _notify_handle = thread::spawn(move || while let Ok(_) = account_rx.recv() {});
 
     println!("  ✓ 撮合引擎线程已启动");
     println!("  ✓ 账户系统线程已启动");
@@ -351,7 +353,8 @@ fn benchmark_distributed() -> BenchmarkResult {
         latencies.push(order_latency);
 
         if (idx + 1) % 100_000 == 0 {
-            println!("  进度: {}/{} ({:.1}%)",
+            println!(
+                "  进度: {}/{} ({:.1}%)",
                 format_number(idx + 1),
                 format_number(NUM_ORDERS),
                 (idx + 1) as f64 / NUM_ORDERS as f64 * 100.0
@@ -371,7 +374,11 @@ fn benchmark_distributed() -> BenchmarkResult {
     calculate_result(total_time, latencies, NUM_ORDERS / 2)
 }
 
-fn generate_orders(num_orders: usize, num_accounts: usize, num_instruments: usize) -> Vec<OrderRequest> {
+fn generate_orders(
+    num_orders: usize,
+    num_accounts: usize,
+    num_instruments: usize,
+) -> Vec<OrderRequest> {
     let mut orders = Vec::with_capacity(num_orders);
 
     for i in 0..num_orders {
@@ -394,7 +401,11 @@ fn generate_orders(num_orders: usize, num_accounts: usize, num_instruments: usiz
             &format!("ORDER_{:07}", i),
             &user_id,
             &instrument_id,
-            if is_buy { OrderDirection::BUY } else { OrderDirection::SELL },
+            if is_buy {
+                OrderDirection::BUY
+            } else {
+                OrderDirection::SELL
+            },
             OrderOffset::OPEN,
             price,
             10.0,
@@ -435,8 +446,14 @@ fn calculate_result(
 fn print_results(name: &str, result: &BenchmarkResult) {
     println!("{}架构性能指标:", name);
     println!("  • 总耗时:      {:>10} ms", result.total_time_ms);
-    println!("  • 吞吐量:      {:>10} orders/sec", format_number(result.throughput as usize));
-    println!("  • 成交数:      {:>10}", format_number(result.trades_count));
+    println!(
+        "  • 吞吐量:      {:>10} orders/sec",
+        format_number(result.throughput as usize)
+    );
+    println!(
+        "  • 成交数:      {:>10}",
+        format_number(result.trades_count)
+    );
     println!("  • 平均延迟:    {:>10.2} μs", result.avg_latency_us);
     println!("  • P50 延迟:    {:>10.2} μs", result.p50_latency_us);
     println!("  • P95 延迟:    {:>10.2} μs", result.p95_latency_us);

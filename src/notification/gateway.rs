@@ -10,8 +10,8 @@
 use super::message::Notification;
 use dashmap::DashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 /// WebSocket会话信息
 #[derive(Debug, Clone)]
@@ -104,7 +104,7 @@ impl NotificationGateway {
             subscriptions: Arc::new(parking_lot::RwLock::new(std::collections::HashSet::new())),
             connected_at: chrono::Utc::now().timestamp(),
             last_active: Arc::new(std::sync::atomic::AtomicI64::new(
-                chrono::Utc::now().timestamp()
+                chrono::Utc::now().timestamp(),
             )),
         };
 
@@ -117,7 +117,9 @@ impl NotificationGateway {
             .or_insert_with(Vec::new)
             .push(session_id.clone());
 
-        self.stats.active_sessions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.stats
+            .active_sessions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         log::info!("Session registered: {} for user {}", session_id, user_id);
     }
@@ -130,7 +132,9 @@ impl NotificationGateway {
                 sessions.retain(|sid| sid.as_ref() != session_id);
             }
 
-            self.stats.active_sessions.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            self.stats
+                .active_sessions
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
 
             log::info!("Session unregistered: {}", session_id);
         }
@@ -148,7 +152,11 @@ impl NotificationGateway {
     pub fn unsubscribe_channel(&self, session_id: &str, channel: &str) {
         if let Some(session) = self.sessions.get(session_id) {
             session.subscriptions.write().remove(channel);
-            log::debug!("Session {} unsubscribed from channel {}", session_id, channel);
+            log::debug!(
+                "Session {} unsubscribed from channel {}",
+                session_id,
+                channel
+            );
         }
     }
 
@@ -159,7 +167,11 @@ impl NotificationGateway {
             for channel in channels {
                 subs.insert(channel);
             }
-            log::debug!("Session {} subscribed to {} channels", session_id, subs.len());
+            log::debug!(
+                "Session {} subscribed to {} channels",
+                session_id,
+                subs.len()
+            );
         }
     }
 
@@ -231,7 +243,10 @@ impl NotificationGateway {
                 }
             }
 
-            log::info!("Notification pusher stopped for gateway {}", self.gateway_id);
+            log::info!(
+                "Notification pusher stopped for gateway {}",
+                self.gateway_id
+            );
         })
     }
 
@@ -264,15 +279,23 @@ impl NotificationGateway {
 
                     // 发送到WebSocket
                     if let Err(e) = session.sender.send(json) {
-                        log::error!("Failed to send notification to session {}: {}", session_id, e);
-                        self.stats.messages_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        log::error!(
+                            "Failed to send notification to session {}: {}",
+                            session_id,
+                            e
+                        );
+                        self.stats
+                            .messages_failed
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     } else {
-                        self.stats.messages_pushed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        self.stats
+                            .messages_pushed
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                         // 更新最后活跃时间
                         session.last_active.store(
                             chrono::Utc::now().timestamp(),
-                            std::sync::atomic::Ordering::Relaxed
+                            std::sync::atomic::Ordering::Relaxed,
                         );
                     }
                 }
@@ -287,9 +310,10 @@ impl NotificationGateway {
             std::collections::HashMap::new();
 
         for notif in notifications {
-            grouped.entry(notif.user_id.clone())
-                   .or_insert_with(Vec::new)
-                   .push(notif);
+            grouped
+                .entry(notif.user_id.clone())
+                .or_insert_with(Vec::new)
+                .push(notif);
         }
 
         // 并行推送（每个用户）
@@ -317,7 +341,9 @@ impl NotificationGateway {
                     let session_id = entry.key();
                     let session = entry.value();
 
-                    let last_active = session.last_active.load(std::sync::atomic::Ordering::Relaxed);
+                    let last_active = session
+                        .last_active
+                        .load(std::sync::atomic::Ordering::Relaxed);
                     if now - last_active > timeout {
                         to_remove.push(session_id.clone());
                     }
@@ -336,9 +362,18 @@ impl NotificationGateway {
     pub fn get_stats(&self) -> GatewayStatsSnapshot {
         GatewayStatsSnapshot {
             gateway_id: self.gateway_id.clone(),
-            messages_pushed: self.stats.messages_pushed.load(std::sync::atomic::Ordering::Relaxed),
-            messages_failed: self.stats.messages_failed.load(std::sync::atomic::Ordering::Relaxed),
-            active_sessions: self.stats.active_sessions.load(std::sync::atomic::Ordering::Relaxed),
+            messages_pushed: self
+                .stats
+                .messages_pushed
+                .load(std::sync::atomic::Ordering::Relaxed),
+            messages_failed: self
+                .stats
+                .messages_failed
+                .load(std::sync::atomic::Ordering::Relaxed),
+            active_sessions: self
+                .stats
+                .active_sessions
+                .load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -360,7 +395,9 @@ pub struct GatewayStatsSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notification::message::{NotificationType, NotificationPayload, AccountUpdateNotify};
+    use crate::notification::message::{
+        AccountUpdateNotify, NotificationPayload, NotificationType,
+    };
 
     #[tokio::test]
     async fn test_gateway_creation() {
@@ -422,7 +459,9 @@ mod tests {
                 assert!(json.contains("account_update"));
                 assert!(json.contains("user_01"));
             }
-        }).await.expect("Timeout waiting for message");
+        })
+        .await
+        .expect("Timeout waiting for message");
     }
 
     #[tokio::test]
@@ -465,10 +504,9 @@ mod tests {
 
         // 接收所有消息
         let mut count = 0;
-        while let Ok(Some(_json)) = tokio::time::timeout(
-            Duration::from_millis(100),
-            session_rx.recv()
-        ).await {
+        while let Ok(Some(_json)) =
+            tokio::time::timeout(Duration::from_millis(100), session_rx.recv()).await
+        {
             count += 1;
         }
 

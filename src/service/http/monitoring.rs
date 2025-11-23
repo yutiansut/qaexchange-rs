@@ -4,9 +4,9 @@ use actix_web::{web, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use super::handlers::AppState;
 use crate::exchange::{AccountManager, OrderRouter};
 use crate::storage::conversion::ConversionManager;
-use super::handlers::AppState;
 
 /// 系统监控状态
 #[derive(Debug, Serialize)]
@@ -120,9 +120,7 @@ pub struct OlapStats {
 /// 查询系统监控信息
 ///
 /// GET /api/monitoring/system
-pub async fn get_system_monitoring(
-    app_state: web::Data<Arc<AppState>>,
-) -> impl Responder {
+pub async fn get_system_monitoring(app_state: web::Data<Arc<AppState>>) -> impl Responder {
     // 1. 账户统计
     let accounts = get_account_stats(&app_state.account_mgr);
 
@@ -187,9 +185,7 @@ pub async fn get_system_monitoring(
 /// 查询账户统计
 ///
 /// GET /api/monitoring/accounts
-pub async fn get_accounts_monitoring(
-    app_state: web::Data<Arc<AppState>>,
-) -> impl Responder {
+pub async fn get_accounts_monitoring(app_state: web::Data<Arc<AppState>>) -> impl Responder {
     let stats = get_account_stats(&app_state.account_mgr);
     HttpResponse::Ok().json(stats)
 }
@@ -197,9 +193,7 @@ pub async fn get_accounts_monitoring(
 /// 查询订单统计
 ///
 /// GET /api/monitoring/orders
-pub async fn get_orders_monitoring(
-    app_state: web::Data<Arc<AppState>>,
-) -> impl Responder {
+pub async fn get_orders_monitoring(app_state: web::Data<Arc<AppState>>) -> impl Responder {
     let stats = get_order_stats(&app_state.order_router);
     HttpResponse::Ok().json(stats)
 }
@@ -207,9 +201,7 @@ pub async fn get_orders_monitoring(
 /// 查询成交统计
 ///
 /// GET /api/monitoring/trades
-pub async fn get_trades_monitoring(
-    app_state: web::Data<Arc<AppState>>,
-) -> impl Responder {
+pub async fn get_trades_monitoring(app_state: web::Data<Arc<AppState>>) -> impl Responder {
     let stats = get_trade_stats(&app_state.order_router);
     HttpResponse::Ok().json(stats)
 }
@@ -217,9 +209,7 @@ pub async fn get_trades_monitoring(
 /// 查询存储统计
 ///
 /// GET /api/monitoring/storage
-pub async fn get_storage_monitoring(
-    app_state: web::Data<Arc<AppState>>,
-) -> impl Responder {
+pub async fn get_storage_monitoring(app_state: web::Data<Arc<AppState>>) -> impl Responder {
     let oltp_stats = if let Some(ref stats_handle) = app_state.storage_stats {
         let stats = stats_handle.lock();
         OltpStats {
@@ -333,9 +323,7 @@ fn get_trade_stats(order_router: &OrderRouter) -> TradeStats {
 /// 生成日志报告
 ///
 /// GET /api/monitoring/report
-pub async fn generate_report(
-    app_state: web::Data<Arc<AppState>>,
-) -> impl Responder {
+pub async fn generate_report(app_state: web::Data<Arc<AppState>>) -> impl Responder {
     let accounts = get_account_stats(&app_state.account_mgr);
     let orders = get_order_stats(&app_state.order_router);
     let trades = get_trade_stats(&app_state.order_router);

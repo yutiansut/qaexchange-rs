@@ -113,49 +113,49 @@ pub struct Quote {
     pub instrument_id: String,
 
     /// 合约基础信息
-    pub volume_multiple: i32,    // 合约乘数
-    pub price_tick: f64,          // 最小变动价位
-    pub price_decs: i32,          // 价格小数位数
+    pub volume_multiple: i32, // 合约乘数
+    pub price_tick: f64, // 最小变动价位
+    pub price_decs: i32, // 价格小数位数
 
     /// 交易限制
-    pub max_market_order_volume: i32,  // 市价单最大下单量
-    pub min_market_order_volume: i32,  // 市价单最小下单量
-    pub max_limit_order_volume: i32,   // 限价单最大下单量
-    pub min_limit_order_volume: i32,   // 限价单最小下单量
+    pub max_market_order_volume: i32, // 市价单最大下单量
+    pub min_market_order_volume: i32, // 市价单最小下单量
+    pub max_limit_order_volume: i32,  // 限价单最大下单量
+    pub min_limit_order_volume: i32,  // 限价单最小下单量
 
     /// 保证金和手续费
-    pub margin: f64,              // 保证金率
-    pub commission: f64,          // 手续费率
+    pub margin: f64, // 保证金率
+    pub commission: f64, // 手续费率
 
     /// 行情时间
-    pub datetime: String,         // 行情时间（ISO 8601 格式）
+    pub datetime: String, // 行情时间（ISO 8601 格式）
 
     /// 盘口数据（一档）
-    pub ask_price1: f64,          // 卖一价
-    pub ask_volume1: i64,         // 卖一量
-    pub bid_price1: f64,          // 买一价
-    pub bid_volume1: i64,         // 买一量
+    pub ask_price1: f64, // 卖一价
+    pub ask_volume1: i64, // 卖一量
+    pub bid_price1: f64,  // 买一价
+    pub bid_volume1: i64, // 买一量
 
     /// 价格信息
-    pub last_price: f64,          // 最新价
-    pub highest: f64,             // 最高价
-    pub lowest: f64,              // 最低价
-    pub average: f64,             // 均价
-    pub pre_close: f64,           // 昨收价
-    pub pre_settlement: f64,      // 昨结算价
-    pub open: f64,                // 开盘价
-    pub close: f64,               // 收盘价
-    pub settlement: f64,          // 结算价
+    pub last_price: f64, // 最新价
+    pub highest: f64,        // 最高价
+    pub lowest: f64,         // 最低价
+    pub average: f64,        // 均价
+    pub pre_close: f64,      // 昨收价
+    pub pre_settlement: f64, // 昨结算价
+    pub open: f64,           // 开盘价
+    pub close: f64,          // 收盘价
+    pub settlement: f64,     // 结算价
 
     /// 涨跌停
-    pub lower_limit: f64,         // 跌停价
-    pub upper_limit: f64,         // 涨停价
+    pub lower_limit: f64, // 跌停价
+    pub upper_limit: f64, // 涨停价
 
     /// 成交信息
-    pub amount: f64,              // 成交额
-    pub volume: i64,              // 成交量
-    pub open_interest: i64,       // 持仓量
-    pub pre_open_interest: i64,   // 昨持仓量
+    pub amount: f64, // 成交额
+    pub volume: i64,            // 成交量
+    pub open_interest: i64,     // 持仓量
+    pub pre_open_interest: i64, // 昨持仓量
 }
 
 /// K线柱
@@ -176,8 +176,8 @@ pub struct KlineBar {
     pub volume: i64,
 
     /// 持仓量
-    pub open_oi: i64,    // 开盘持仓
-    pub close_oi: i64,   // 收盘持仓
+    pub open_oi: i64, // 开盘持仓
+    pub close_oi: i64, // 收盘持仓
 }
 
 /// K线数据
@@ -211,10 +211,10 @@ pub struct TickBar {
     pub datetime: i64,
 
     /// 价格信息
-    pub last_price: f64,   // 最新价
-    pub average: f64,      // 均价
-    pub highest: f64,      // 最高价
-    pub lowest: f64,       // 最低价
+    pub last_price: f64, // 最新价
+    pub average: f64, // 均价
+    pub highest: f64, // 最高价
+    pub lowest: f64,  // 最低价
 
     /// 盘口
     pub bid_price1: f64,
@@ -253,10 +253,10 @@ pub struct TickSeries {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notify {
     /// 消息类型
-    pub r#type: String,  // MESSAGE / TEXT / HTML
+    pub r#type: String, // MESSAGE / TEXT / HTML
 
     /// 消息级别
-    pub level: String,   // INFO / WARNING / ERROR
+    pub level: String, // INFO / WARNING / ERROR
 
     /// 消息码
     pub code: i32,
@@ -387,7 +387,7 @@ pub mod message_level {
 
 /// 委托单状态常量
 pub mod order_status {
-    pub const ALIVE: &str = "ALIVE";       // 未完成
+    pub const ALIVE: &str = "ALIVE"; // 未完成
     pub const FINISHED: &str = "FINISHED"; // 已完成
 }
 
@@ -407,9 +407,9 @@ pub mod offset {
 
 /// 委托价格类型常量
 pub mod price_type {
-    pub const LIMIT: &str = "LIMIT";   // 限价单
+    pub const LIMIT: &str = "LIMIT"; // 限价单
     pub const MARKET: &str = "MARKET"; // 市价单
-    pub const ANY: &str = "ANY";       // 任意价
+    pub const ANY: &str = "ANY"; // 任意价
 }
 
 // ============================================================================

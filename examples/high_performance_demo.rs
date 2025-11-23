@@ -14,11 +14,13 @@
 //! Thread        Thread       Thread
 //! ```
 
-use qaexchange::matching::core::MatchingEngineCore;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use qaexchange::account::core::AccountSystemCore;
-use qaexchange::protocol::ipc_messages::{OrderRequest, TradeReport, OrderbookSnapshot, OrderAccepted, OrderDirection, OrderOffset};
 use qaexchange::core::QA_Account;
-use crossbeam::channel::{unbounded, Sender, Receiver};
+use qaexchange::matching::core::MatchingEngineCore;
+use qaexchange::protocol::ipc_messages::{
+    OrderAccepted, OrderDirection, OrderOffset, OrderRequest, OrderbookSnapshot, TradeReport,
+};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -44,12 +46,12 @@ fn main() {
     // 1. 订单先经过账户系统，生成 order_id 并记录到 dailyorders
     // 2. 撮合引擎只负责撮合，不关心账户状态
     // 3. 成交回报通过 order_id 匹配回原始订单
-    let (client_tx, client_rx) = unbounded::<OrderRequest>();    // Client → Gateway
-    let (order_tx, order_rx) = unbounded::<OrderRequest>();      // Gateway → MatchingEngine (已通过风控)
-    let (trade_tx, trade_rx) = unbounded::<TradeReport>();       // MatchingEngine → AccountSystem
+    let (client_tx, client_rx) = unbounded::<OrderRequest>(); // Client → Gateway
+    let (order_tx, order_rx) = unbounded::<OrderRequest>(); // Gateway → MatchingEngine (已通过风控)
+    let (trade_tx, trade_rx) = unbounded::<TradeReport>(); // MatchingEngine → AccountSystem
     let (accepted_tx, accepted_rx) = unbounded::<OrderAccepted>(); // MatchingEngine → AccountSystem (订单确认)
     let (market_tx, market_rx) = unbounded::<OrderbookSnapshot>(); // MatchingEngine → MarketData
-    let (account_tx, account_rx) = unbounded();                  // AccountSystem → Client
+    let (account_tx, account_rx) = unbounded(); // AccountSystem → Client
 
     // 2. 启动撮合引擎线程
     println!(">>> 启动撮合引擎线程");
@@ -93,7 +95,7 @@ fn main() {
             &user_id,
             1_000_000.0,
             false,
-            "sim",  // sim 模式
+            "sim", // sim 模式
         );
         account_system.register_account(user_id.clone(), account);
     }
@@ -134,9 +136,17 @@ fn main() {
                         let mut acc = account.write();
 
                         let towards = if order_req.direction == 0 {
-                            if order_req.offset == 0 { 1 } else { 3 }  // BUY OPEN=1, BUY CLOSE=3
+                            if order_req.offset == 0 {
+                                1
+                            } else {
+                                3
+                            } // BUY OPEN=1, BUY CLOSE=3
                         } else {
-                            if order_req.offset == 0 { -2 } else { -3 } // SELL OPEN=-2, SELL CLOSE=-3
+                            if order_req.offset == 0 {
+                                -2
+                            } else {
+                                -3
+                            } // SELL OPEN=-2, SELL CLOSE=-3
                         };
 
                         let datetime = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -160,7 +170,10 @@ fn main() {
                                 let len = order_id_bytes.len().min(40);
                                 order_req.order_id[..len].copy_from_slice(&order_id_bytes[..len]);
 
-                                println!("  [Gateway] {} 订单已创建: {} (冻结资金完成)", user_id, account_order_id);
+                                println!(
+                                    "  [Gateway] {} 订单已创建: {} (冻结资金完成)",
+                                    user_id, account_order_id
+                                );
 
                                 // 发送到撮合引擎
                                 let _ = order_sender.send(order_req);
@@ -185,7 +198,8 @@ fn main() {
                     .unwrap_or("")
                     .trim_end_matches('\0');
 
-                println!("      [行情] {} - 买1: {:.2}@{:.0} | 卖1: {:.2}@{:.0}",
+                println!(
+                    "      [行情] {} - 买1: {:.2}@{:.0} | 卖1: {:.2}@{:.0}",
                     instrument_id,
                     snapshot.bids[0].price,
                     snapshot.bids[0].volume,
@@ -200,10 +214,9 @@ fn main() {
     println!(">>> 启动账户更新监听线程");
     let notify_handle = thread::spawn(move || {
         while let Ok(notify) = account_rx.recv() {
-            println!("      [账户] {} - 余额: {:.2} | 保证金: {:.2}",
-                notify.user_id,
-                notify.balance,
-                notify.margin
+            println!(
+                "      [账户] {} - 余额: {:.2} | 保证金: {:.2}",
+                notify.user_id, notify.balance, notify.margin
             );
         }
     });
@@ -224,12 +237,16 @@ fn main() {
             &format!("user_{:02}", i + 1),
             "IX2401",
             OrderDirection::BUY,
-            OrderOffset::OPEN,  // ← 开多仓
+            OrderOffset::OPEN, // ← 开多仓
             100.0 - i as f64 * 0.1,
             10.0,
         );
         client_tx.send(order).unwrap();
-        println!("  ✓ [Client] user_{:02} BUY OPEN IX2401 @ {:.2} x 10 (建立多头持仓)", i + 1, 100.0 - i as f64 * 0.1);
+        println!(
+            "  ✓ [Client] user_{:02} BUY OPEN IX2401 @ {:.2} x 10 (建立多头持仓)",
+            i + 1,
+            100.0 - i as f64 * 0.1
+        );
     }
 
     // 阶段2: user_04/05 卖出开空仓（会触发撮合）
@@ -240,12 +257,16 @@ fn main() {
             &format!("user_{:02}", i + 1),
             "IX2401",
             OrderDirection::SELL,
-            OrderOffset::OPEN,  // ← 开空仓
+            OrderOffset::OPEN, // ← 开空仓
             100.0 - (i - 3) as f64 * 0.1,
             10.0,
         );
         client_tx.send(order).unwrap();
-        println!("  ✓ [Client] user_{:02} SELL OPEN IX2401 @ {:.2} x 10 (建立空头持仓)", i + 1, 100.0 - (i - 3) as f64 * 0.1);
+        println!(
+            "  ✓ [Client] user_{:02} SELL OPEN IX2401 @ {:.2} x 10 (建立空头持仓)",
+            i + 1,
+            100.0 - (i - 3) as f64 * 0.1
+        );
     }
 
     println!("\n等待开仓成交...");
@@ -258,8 +279,8 @@ fn main() {
         "user_01",
         "IX2401",
         OrderDirection::SELL,
-        OrderOffset::CLOSE,  // ← 平多仓（需要先有多头持仓）
-        100.5,  // 高于开仓价，盈利平仓
+        OrderOffset::CLOSE, // ← 平多仓（需要先有多头持仓）
+        100.5,              // 高于开仓价，盈利平仓
         10.0,
     );
     client_tx.send(order).unwrap();
@@ -272,8 +293,8 @@ fn main() {
         "user_04",
         "IX2401",
         OrderDirection::BUY,
-        OrderOffset::CLOSE,  // ← 平空仓（需要先有空头持仓）
-        99.5,   // 低于开仓价，盈利平仓
+        OrderOffset::CLOSE, // ← 平空仓（需要先有空头持仓）
+        99.5,               // 低于开仓价，盈利平仓
         10.0,
     );
     client_tx.send(order).unwrap();

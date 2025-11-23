@@ -231,7 +231,9 @@ impl SnapshotManager {
     /// # }
     /// ```
     pub async fn push_patch(&self, user_id: &str, patch: Value) {
-        let state = self.user_snapshots.entry(user_id.to_string())
+        let state = self
+            .user_snapshots
+            .entry(user_id.to_string())
             .or_insert_with(|| Arc::new(UserSnapshotState::new()))
             .clone();
 
@@ -483,10 +485,7 @@ mod tests {
         manager.initialize_user("user123").await;
 
         // 批量应用 patch（不推送到待发送队列）
-        let patches = vec![
-            json!({"balance": 100000.0}),
-            json!({"available": 95000.0}),
-        ];
+        let patches = vec![json!({"balance": 100000.0}), json!({"available": 95000.0})];
         manager.apply_patches("user123", patches).await;
 
         // 快照应该更新
@@ -497,7 +496,9 @@ mod tests {
         // peek 应该超时（没有推送到待发送队列）
         let manager_timeout = SnapshotManager::with_timeout(Duration::from_millis(100));
         manager_timeout.initialize_user("user123").await;
-        manager_timeout.apply_patches("user123", vec![json!({"x": 1})]).await;
+        manager_timeout
+            .apply_patches("user123", vec![json!({"x": 1})])
+            .await;
         let result = manager_timeout.peek("user123").await;
         assert!(result.is_none());
     }
@@ -540,7 +541,9 @@ mod tests {
     async fn test_remove_user() {
         let manager = SnapshotManager::new();
         manager.initialize_user("user123").await;
-        manager.push_patch("user123", json!({"balance": 100000.0})).await;
+        manager
+            .push_patch("user123", json!({"balance": 100000.0}))
+            .await;
 
         // 移除用户
         manager.remove_user("user123").await;
@@ -604,8 +607,14 @@ mod tests {
 
         // 快照应该正确合并
         let snapshot = manager.get_snapshot("user123").await.unwrap();
-        assert_eq!(snapshot["trade"]["user123"]["accounts"]["ACC001"]["balance"], 105000.0);
-        assert_eq!(snapshot["trade"]["user123"]["accounts"]["ACC001"]["available"], 95000.0);
+        assert_eq!(
+            snapshot["trade"]["user123"]["accounts"]["ACC001"]["balance"],
+            105000.0
+        );
+        assert_eq!(
+            snapshot["trade"]["user123"]["accounts"]["ACC001"]["available"],
+            95000.0
+        );
     }
 
     #[tokio::test]

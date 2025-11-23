@@ -14,4 +14,4 @@ pub mod manager;
 pub mod types;
 
 pub use manager::CheckpointManager;
-pub use types::{CheckpointMetadata, CheckpointInfo};
+pub use types::{CheckpointInfo, CheckpointMetadata};

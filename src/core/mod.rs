@@ -8,7 +8,7 @@ pub use qars::qaaccount::order::{QAOrder, QAOrderExt};
 pub use qars::qaaccount::position::QA_Position;
 
 // 重导出 QIFI 协议
-pub use qars::qaprotocol::qifi::account::{Account, Order, Position, Trade, Frozen, QIFI};
+pub use qars::qaprotocol::qifi::account::{Account, Frozen, Order, Position, Trade, QIFI};
 
 /// 账户管理器的扩展功能
 pub mod account_ext;

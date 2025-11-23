@@ -1,12 +1,12 @@
 //! 压力测试：10 个品种 + 10 个账户随机交易
 
-use qaexchange::exchange::{AccountManager, InstrumentRegistry, OrderRouter, TradeGateway};
+use qaexchange::core::account_ext::{AccountType, OpenAccountRequest};
 use qaexchange::exchange::instrument_registry::InstrumentInfo;
-use qaexchange::matching::engine::ExchangeMatchingEngine;
-use qaexchange::core::account_ext::{OpenAccountRequest, AccountType};
 use qaexchange::exchange::order_router::SubmitOrderRequest;
-use std::sync::Arc;
+use qaexchange::exchange::{AccountManager, InstrumentRegistry, OrderRouter, TradeGateway};
+use qaexchange::matching::engine::ExchangeMatchingEngine;
 use rand::Rng;
+use std::sync::Arc;
 
 fn main() {
     // 初始化日志
@@ -50,7 +50,7 @@ fn main() {
 
     for (code, name, price) in &instruments {
         // 注册到合约注册表
-        use qaexchange::exchange::instrument_registry::{InstrumentType, InstrumentStatus};
+        use qaexchange::exchange::instrument_registry::{InstrumentStatus, InstrumentType};
         let mut info = InstrumentInfo::new(
             code.to_string(),
             name.to_string(),
@@ -59,10 +59,13 @@ fn main() {
         );
         info.status = InstrumentStatus::Active;
 
-        instrument_registry.register(info).expect(&format!("Failed to register {}", code));
+        instrument_registry
+            .register(info)
+            .expect(&format!("Failed to register {}", code));
 
         // 创建订单簿
-        matching_engine.register_instrument(code.to_string(), *price)
+        matching_engine
+            .register_instrument(code.to_string(), *price)
             .expect(&format!("Failed to register {}", code));
 
         println!("  ✓ {} - {} (初始价格: {})", code, name, price);
@@ -84,11 +87,15 @@ fn main() {
             account_type: AccountType::Individual,
         };
 
-        let account_id = account_mgr.open_account(req)
+        let account_id = account_mgr
+            .open_account(req)
             .expect(&format!("Failed to open account for {}", user_id));
 
         accounts.push(account_id.clone());
-        println!("  ✓ {} - {} (初始资金: 1,000,000)", account_id, account_name);
+        println!(
+            "  ✓ {} - {} (初始资金: 1,000,000)",
+            account_id, account_name
+        );
     }
     println!("✓ 10 个账户创建完成\n");
 
@@ -139,7 +146,8 @@ fn main() {
 
         if response.success {
             success_count += 1;
-            println!("  [{}] ✓ {} {} {} {} @ {} x {} | 订单: {}",
+            println!(
+                "  [{}] ✓ {} {} {} {} @ {} x {} | 订单: {}",
                 round + 1,
                 account_id,
                 direction,
@@ -151,7 +159,8 @@ fn main() {
             );
         } else {
             failed_count += 1;
-            println!("  [{}] ✗ {} {} {} {} @ {} x {} | 失败: {}",
+            println!(
+                "  [{}] ✗ {} {} {} {} @ {} x {} | 失败: {}",
                 round + 1,
                 account_id,
                 direction,
@@ -159,7 +168,9 @@ fn main() {
                 instrument_id,
                 format!("{:.2}", price),
                 volume,
-                response.error_message.unwrap_or_else(|| "Unknown error".to_string())
+                response
+                    .error_message
+                    .unwrap_or_else(|| "Unknown error".to_string())
             );
         }
 
@@ -169,7 +180,8 @@ fn main() {
             match notification {
                 Notification::Trade(trade) => {
                     trade_count += 1;
-                    println!("      >>> 成交: {} {} {} @ {} x {} (手续费: {:.2})",
+                    println!(
+                        "      >>> 成交: {} {} {} @ {} x {} (手续费: {:.2})",
                         trade.user_id,
                         trade.direction,
                         trade.instrument_id,
@@ -180,15 +192,16 @@ fn main() {
                 }
                 Notification::OrderStatus(status) => {
                     if status.status == "FILLED" || status.status == "PARTIAL_FILLED" {
-                        println!("      >>> 订单状态: {} - {}", status.order_id, status.status);
+                        println!(
+                            "      >>> 订单状态: {} - {}",
+                            status.order_id, status.status
+                        );
                     }
                 }
                 Notification::AccountUpdate(update) => {
-                    println!("      >>> 账户更新: {} 余额={:.2} 可用={:.2} 保证金={:.2}",
-                        update.user_id,
-                        update.balance,
-                        update.available,
-                        update.margin
+                    println!(
+                        "      >>> 账户更新: {} 余额={:.2} 可用={:.2} 保证金={:.2}",
+                        update.user_id, update.balance, update.available, update.margin
                     );
                 }
             }

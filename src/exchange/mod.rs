@@ -34,12 +34,14 @@ pub mod priority_queue;
 
 // 重导出核心类型
 pub use account_mgr::AccountManager;
-pub use capital_mgr::{CapitalManager, FundTransaction, TransactionType, TransactionStatus};
-pub use order_router::OrderRouter;
-pub use trade_gateway::{TradeGateway, Notification};
-pub use settlement::SettlementEngine;
-pub use instrument_registry::InstrumentRegistry;
-pub use user_mgr::{UserManager, RegisterRequest, LoginRequest, LoginResponse};
-pub use exchange_types::{ExchangeResponse, ExchangeOrderRecord, ExchangeTradeRecord};
+pub use capital_mgr::{CapitalManager, FundTransaction, TransactionStatus, TransactionType};
+pub use exchange_types::{ExchangeOrderRecord, ExchangeResponse, ExchangeTradeRecord};
 pub use id_generator::ExchangeIdGenerator;
-pub use priority_queue::{PriorityOrderQueue, OrderPriority, PriorityOrderRequest, PriorityQueueStatistics};
+pub use instrument_registry::InstrumentRegistry;
+pub use order_router::OrderRouter;
+pub use priority_queue::{
+    OrderPriority, PriorityOrderQueue, PriorityOrderRequest, PriorityQueueStatistics,
+};
+pub use settlement::SettlementEngine;
+pub use trade_gateway::{Notification, TradeGateway};
+pub use user_mgr::{LoginRequest, LoginResponse, RegisterRequest, UserManager};

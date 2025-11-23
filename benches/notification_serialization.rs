@@ -3,9 +3,9 @@
 // 运行方式：
 // cargo bench --bench notification_serialization
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use qaexchange::notification::message::{
-    Notification, NotificationType, NotificationPayload, AccountUpdateNotify,
+    AccountUpdateNotify, Notification, NotificationPayload, NotificationType,
 };
 use std::sync::Arc;
 
@@ -84,37 +84,27 @@ fn bench_batch_serialization(c: &mut Criterion) {
 
     for count in [10, 100, 1000].iter() {
         // 创建批量通知
-        let notifications: Vec<_> = (0..*count)
-            .map(|_| create_test_notification())
-            .collect();
+        let notifications: Vec<_> = (0..*count).map(|_| create_test_notification()).collect();
 
         // JSON 手动序列化
-        group.bench_with_input(
-            BenchmarkId::new("json_manual", count),
-            count,
-            |b, _| {
-                b.iter(|| {
-                    let _jsons: Vec<_> = notifications
-                        .iter()
-                        .map(|n| black_box(n.to_json()))
-                        .collect();
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("json_manual", count), count, |b, _| {
+            b.iter(|| {
+                let _jsons: Vec<_> = notifications
+                    .iter()
+                    .map(|n| black_box(n.to_json()))
+                    .collect();
+            });
+        });
 
         // rkyv 序列化
-        group.bench_with_input(
-            BenchmarkId::new("rkyv_serialize", count),
-            count,
-            |b, _| {
-                b.iter(|| {
-                    let _bytes: Vec<_> = notifications
-                        .iter()
-                        .map(|n| black_box(n.to_rkyv_bytes().unwrap()))
-                        .collect();
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("rkyv_serialize", count), count, |b, _| {
+            b.iter(|| {
+                let _bytes: Vec<_> = notifications
+                    .iter()
+                    .map(|n| black_box(n.to_rkyv_bytes().unwrap()))
+                    .collect();
+            });
+        });
     }
 
     group.finish();
@@ -126,9 +116,7 @@ fn bench_batch_deserialization(c: &mut Criterion) {
 
     for count in [10, 100, 1000].iter() {
         // 创建并序列化批量通知
-        let notifications: Vec<_> = (0..*count)
-            .map(|_| create_test_notification())
-            .collect();
+        let notifications: Vec<_> = (0..*count).map(|_| create_test_notification()).collect();
 
         let serialized: Vec<_> = notifications
             .iter()
@@ -136,35 +124,27 @@ fn bench_batch_deserialization(c: &mut Criterion) {
             .collect();
 
         // rkyv 零拷贝反序列化
-        group.bench_with_input(
-            BenchmarkId::new("rkyv_zero_copy", count),
-            count,
-            |b, _| {
-                b.iter(|| {
-                    let _archived: Vec<_> = serialized
-                        .iter()
-                        .map(|bytes| black_box(Notification::from_rkyv_bytes(bytes).unwrap()))
-                        .collect();
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("rkyv_zero_copy", count), count, |b, _| {
+            b.iter(|| {
+                let _archived: Vec<_> = serialized
+                    .iter()
+                    .map(|bytes| black_box(Notification::from_rkyv_bytes(bytes).unwrap()))
+                    .collect();
+            });
+        });
 
         // rkyv 完整反序列化
-        group.bench_with_input(
-            BenchmarkId::new("rkyv_full", count),
-            count,
-            |b, _| {
-                b.iter(|| {
-                    let _deserialized: Vec<_> = serialized
-                        .iter()
-                        .map(|bytes| {
-                            let archived = Notification::from_rkyv_bytes(bytes).unwrap();
-                            black_box(Notification::from_archived(archived).unwrap())
-                        })
-                        .collect();
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("rkyv_full", count), count, |b, _| {
+            b.iter(|| {
+                let _deserialized: Vec<_> = serialized
+                    .iter()
+                    .map(|bytes| {
+                        let archived = Notification::from_rkyv_bytes(bytes).unwrap();
+                        black_box(Notification::from_archived(archived).unwrap())
+                    })
+                    .collect();
+            });
+        });
     }
 
     group.finish();

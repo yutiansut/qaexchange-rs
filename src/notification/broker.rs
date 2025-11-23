@@ -8,12 +8,12 @@
 //! 5. 优先级队列管理
 
 use super::message::Notification;
-use dashmap::DashMap;
-use std::sync::Arc;
-use std::collections::HashSet;
-use parking_lot::Mutex;
-use tokio::sync::mpsc;
 use crossbeam::queue::ArrayQueue;
+use dashmap::DashMap;
+use parking_lot::Mutex;
+use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 
 /// 通知路由中心
 pub struct NotificationBroker {
@@ -128,7 +128,8 @@ impl NotificationBroker {
         sender: mpsc::UnboundedSender<Notification>,
     ) {
         let subscriber_id = subscriber_id.into();
-        self.global_subscribers.insert(subscriber_id.clone(), sender);
+        self.global_subscribers
+            .insert(subscriber_id.clone(), sender);
         log::info!("Global subscriber registered: {}", subscriber_id);
     }
 
@@ -158,7 +159,9 @@ impl NotificationBroker {
     pub fn publish(&self, notification: Notification) -> Result<(), String> {
         // 1. 消息去重
         if self.is_duplicate(&notification.message_id) {
-            self.stats.messages_deduplicated.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.stats
+                .messages_deduplicated
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         }
 
@@ -166,14 +169,18 @@ impl NotificationBroker {
         let priority = notification.priority.min(3) as usize;
         if let Err(_) = self.priority_queues[priority].push(notification.clone()) {
             // 队列满，丢弃消息
-            self.stats.messages_dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.stats
+                .messages_dropped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             log::warn!("Priority queue {} is full, message dropped", priority);
             return Err(format!("Priority queue {} is full", priority));
         }
 
         // 3. 消息已入队，由 priority_processor 统一路由
         // 注意：不要在这里立即路由，否则会导致消息重复发送
-        self.stats.messages_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.stats
+            .messages_sent
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -185,7 +192,11 @@ impl NotificationBroker {
                 if let Some(sender) = self.gateway_senders.get(gateway_id.as_ref()) {
                     // 使用 tokio::mpsc 发送（零成本）
                     if let Err(e) = sender.send(notification.clone()) {
-                        log::error!("Failed to send notification to gateway {}: {}", gateway_id, e);
+                        log::error!(
+                            "Failed to send notification to gateway {}: {}",
+                            gateway_id,
+                            e
+                        );
                     }
                 } else {
                     log::warn!("Gateway {} not found in senders", gateway_id);
@@ -200,7 +211,11 @@ impl NotificationBroker {
             let subscriber_id = entry.key();
             let sender = entry.value();
             if let Err(e) = sender.send(notification.clone()) {
-                log::error!("Failed to send notification to global subscriber {}: {}", subscriber_id, e);
+                log::error!(
+                    "Failed to send notification to global subscriber {}: {}",
+                    subscriber_id,
+                    e
+                );
             }
         }
     }
@@ -219,10 +234,7 @@ impl NotificationBroker {
         // 限制缓存大小（保留最近10000条）
         if cache.len() > 10000 {
             // 清空一半缓存（简化实现，生产环境应使用LRU）
-            let to_remove: Vec<Arc<str>> = cache.iter()
-                .take(5000)
-                .cloned()
-                .collect();
+            let to_remove: Vec<Arc<str>> = cache.iter().take(5000).cloned().collect();
             for id in to_remove {
                 cache.remove(&id);
             }
@@ -274,9 +286,18 @@ impl NotificationBroker {
     /// 获取统计信息
     pub fn get_stats(&self) -> BrokerStatsSnapshot {
         BrokerStatsSnapshot {
-            messages_sent: self.stats.messages_sent.load(std::sync::atomic::Ordering::Relaxed),
-            messages_deduplicated: self.stats.messages_deduplicated.load(std::sync::atomic::Ordering::Relaxed),
-            messages_dropped: self.stats.messages_dropped.load(std::sync::atomic::Ordering::Relaxed),
+            messages_sent: self
+                .stats
+                .messages_sent
+                .load(std::sync::atomic::Ordering::Relaxed),
+            messages_deduplicated: self
+                .stats
+                .messages_deduplicated
+                .load(std::sync::atomic::Ordering::Relaxed),
+            messages_dropped: self
+                .stats
+                .messages_dropped
+                .load(std::sync::atomic::Ordering::Relaxed),
             active_users: self.user_gateways.len(),
             active_gateways: self.gateway_senders.len(),
             queue_sizes: [
@@ -315,7 +336,9 @@ pub struct BrokerStatsSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notification::message::{NotificationType, NotificationPayload, AccountUpdateNotify};
+    use crate::notification::message::{
+        AccountUpdateNotify, NotificationPayload, NotificationType,
+    };
 
     #[tokio::test]
     async fn test_broker_creation() {
@@ -383,10 +406,10 @@ mod tests {
         broker.publish(notification.clone()).unwrap();
 
         // 接收消息（等待优先级处理器处理）
-        let received = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.recv()
-        ).await.expect("Timeout waiting for message").unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("Timeout waiting for message")
+            .unwrap();
 
         assert_eq!(received.user_id.as_ref(), "user_01");
         assert_eq!(received.message_type, NotificationType::AccountUpdate);
@@ -426,8 +449,8 @@ mod tests {
         broker.publish(notification.clone()).unwrap();
 
         let stats = broker.get_stats();
-        assert_eq!(stats.messages_sent, 1);  // 只发送一次
-        assert_eq!(stats.messages_deduplicated, 1);  // 去重一次
+        assert_eq!(stats.messages_sent, 1); // 只发送一次
+        assert_eq!(stats.messages_deduplicated, 1); // 去重一次
     }
 
     #[tokio::test]

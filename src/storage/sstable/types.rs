@@ -1,7 +1,7 @@
 // SSTable 类型定义
 
-use rkyv::{Archive, Serialize as RkyvSerialize, Deserialize as RkyvDeserialize};
 use super::bloom::BloomFilter;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 /// SSTable 元数据
 #[derive(Debug, Clone, Archive, RkyvSerialize, RkyvDeserialize)]

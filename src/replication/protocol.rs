@@ -1,8 +1,8 @@
 //! 复制协议定义
 
-use serde::{Serialize, Deserialize};
-use rkyv::Deserialize as RkyvDeserialize;
 use crate::storage::wal::WalRecord;
+use rkyv::Deserialize as RkyvDeserialize;
+use serde::{Deserialize, Serialize};
 
 /// 复制消息类型（可序列化版本，用于网络传输）
 #[derive(Debug, Clone, Serialize, Deserialize)]

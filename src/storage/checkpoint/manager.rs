@@ -1,10 +1,10 @@
 //! Checkpoint 管理器
 
-use super::types::{CheckpointMetadata, CheckpointInfo};
-use std::path::{Path, PathBuf};
+use super::types::{CheckpointInfo, CheckpointMetadata};
+use rkyv::Deserialize as RkyvDeserialize;
 use std::fs::{File, OpenOptions};
-use std::io::{Write, Read};
-use rkyv::{Deserialize as RkyvDeserialize};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 /// Checkpoint 管理器
 pub struct CheckpointManager {
@@ -46,7 +46,8 @@ impl CheckpointManager {
         );
 
         // 生成 Checkpoint 文件名
-        let checkpoint_file = self.checkpoint_dir
+        let checkpoint_file = self
+            .checkpoint_dir
             .join(format!("checkpoint_{:010}.ckpt", checkpoint_id));
 
         // 序列化元数据
@@ -127,8 +128,8 @@ impl CheckpointManager {
 
     /// 加载指定的 Checkpoint
     fn load_checkpoint(&self, path: &Path) -> Result<CheckpointInfo, String> {
-        let mut file = File::open(path)
-            .map_err(|e| format!("Open checkpoint file failed: {}", e))?;
+        let mut file =
+            File::open(path).map_err(|e| format!("Open checkpoint file failed: {}", e))?;
 
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
@@ -141,9 +142,7 @@ impl CheckpointManager {
             .deserialize(&mut rkyv::Infallible)
             .map_err(|e| format!("Deserialize checkpoint failed: {:?}", e))?;
 
-        let file_size = std::fs::metadata(path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
         Ok(CheckpointInfo {
             path: path.to_string_lossy().to_string(),

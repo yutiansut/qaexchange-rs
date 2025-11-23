@@ -52,13 +52,13 @@ pub use actix;
 pub use actix_web;
 
 // 异步运行时
-pub use tokio;
 pub use futures;
+pub use tokio;
 
 // 并发工具
+pub use crossbeam;
 pub use dashmap;
 pub use parking_lot;
-pub use crossbeam;
 pub use rayon;
 
 // 序列化
@@ -72,8 +72,8 @@ pub use chrono;
 pub use log;
 
 // 错误处理
-pub use thiserror;
 pub use anyhow;
+pub use thiserror;
 
 // UUID
 pub use uuid;
@@ -137,18 +137,18 @@ pub use qars::qaaccount::order::{QAOrder, QAOrderExt};
 pub use qars::qaaccount::position::QA_Position;
 
 // 从 qars 重导出协议类型
-pub use qars::qaprotocol::qifi::account::{Account, Order, Position, Trade, QIFI};
-pub use qars::qaprotocol::tifi::{ReqOrder, ReqCancel, ReqLogin};
 pub use qars::qaprotocol::mifi;
+pub use qars::qaprotocol::qifi::account::{Account, Order, Position, Trade, QIFI};
+pub use qars::qaprotocol::tifi::{ReqCancel, ReqLogin, ReqOrder};
 
 // 从 qars 重导出撮合引擎
 pub use qars::qamarket::matchengine::{
     domain::{OrderDirection, OrderType},
-    orderbook::{Orderbook, Success, Failed, TradingState},
+    orderbook::{Failed, Orderbook, Success, TradingState},
 };
 
 // 从 qars 重导出数据广播
-pub use qars::qadata::broadcast_hub::{DataBroadcaster, BroadcastConfig, MarketDataType};
+pub use qars::qadata::broadcast_hub::{BroadcastConfig, DataBroadcaster, MarketDataType};
 
 // ============================================================================
 // 全局错误类型

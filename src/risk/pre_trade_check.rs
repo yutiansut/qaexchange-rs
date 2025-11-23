@@ -6,13 +6,13 @@
 //! - 订单合法性检查
 //! - 自成交防范
 
-use crate::core::{QA_Account, Order};
+use crate::core::{Order, QA_Account};
 use crate::exchange::AccountManager;
 use crate::ExchangeError;
-use std::sync::Arc;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// 风控检查结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,8 +77,8 @@ impl Default for RiskConfig {
             risk_ratio_warning: 0.8,        // 80% 风险度警告
             risk_ratio_reject: 0.95,        // 95% 拒绝下单
             enable_self_trade_prevention: true,
-            min_order_volume: 1.0,          // 最小1手
-            max_order_volume: 10000.0,      // 最大10000手
+            min_order_volume: 1.0,     // 最小1手
+            max_order_volume: 10000.0, // 最大10000手
         }
     }
 }
@@ -86,14 +86,14 @@ impl Default for RiskConfig {
 /// 订单风控检查请求
 #[derive(Debug, Clone)]
 pub struct OrderCheckRequest {
-    pub account_id: String,     // 交易系统只关心账户ID
+    pub account_id: String, // 交易系统只关心账户ID
     pub instrument_id: String,
-    pub direction: String,      // BUY/SELL
-    pub offset: String,         // OPEN/CLOSE
+    pub direction: String, // BUY/SELL
+    pub offset: String,    // OPEN/CLOSE
     pub volume: f64,
-    pub price: f64,             // 向后兼容
-    pub limit_price: f64,       // 订单价格（用于自成交检查）
-    pub price_type: String,     // LIMIT/MARKET/ANY（用于自成交检查）
+    pub price: f64,         // 向后兼容
+    pub limit_price: f64,   // 订单价格（用于自成交检查）
+    pub price_type: String, // LIMIT/MARKET/ANY（用于自成交检查）
 }
 
 /// 活动订单信息（用于自成交防范）
@@ -101,9 +101,9 @@ pub struct OrderCheckRequest {
 struct ActiveOrderInfo {
     order_id: String,
     instrument_id: String,
-    direction: String,    // BUY/SELL
-    limit_price: f64,     // 订单价格
-    price_type: String,   // LIMIT/MARKET/ANY
+    direction: String,  // BUY/SELL
+    limit_price: f64,   // 订单价格
+    price_type: String, // LIMIT/MARKET/ANY
 }
 
 /// 盘前风控检查器
@@ -175,30 +175,33 @@ impl PreTradeCheck {
 
         // 检查数量范围
         if req.volume < config.min_order_volume {
-            return Err(ExchangeError::RiskCheckFailed(
-                format!("Order volume {} below minimum {}", req.volume, config.min_order_volume)
-            ));
+            return Err(ExchangeError::RiskCheckFailed(format!(
+                "Order volume {} below minimum {}",
+                req.volume, config.min_order_volume
+            )));
         }
 
         if req.volume > config.max_order_volume {
-            return Err(ExchangeError::RiskCheckFailed(
-                format!("Order volume {} exceeds maximum {}", req.volume, config.max_order_volume)
-            ));
+            return Err(ExchangeError::RiskCheckFailed(format!(
+                "Order volume {} exceeds maximum {}",
+                req.volume, config.max_order_volume
+            )));
         }
 
         // 检查价格合法性
         if req.price <= 0.0 {
             return Err(ExchangeError::RiskCheckFailed(
-                "Invalid order price".to_string()
+                "Invalid order price".to_string(),
             ));
         }
 
         // 检查订单金额
         let order_amount = req.price * req.volume;
         if order_amount > config.max_order_amount {
-            return Err(ExchangeError::RiskCheckFailed(
-                format!("Order amount {} exceeds limit {}", order_amount, config.max_order_amount)
-            ));
+            return Err(ExchangeError::RiskCheckFailed(format!(
+                "Order amount {} exceeds limit {}",
+                order_amount, config.max_order_amount
+            )));
         }
 
         Ok(())
@@ -249,8 +252,15 @@ impl PreTradeCheck {
 
         // 如果是开仓，检查持仓限额
         if req.offset == "OPEN" {
-            let current_position = acc.hold.get(&req.instrument_id)
-                .map(|pos| pos.volume_long_today + pos.volume_long_his + pos.volume_short_today + pos.volume_short_his)
+            let current_position = acc
+                .hold
+                .get(&req.instrument_id)
+                .map(|pos| {
+                    pos.volume_long_today
+                        + pos.volume_long_his
+                        + pos.volume_short_today
+                        + pos.volume_short_his
+                })
                 .unwrap_or(0.0);
 
             let new_position = current_position + req.volume;
@@ -316,23 +326,27 @@ impl PreTradeCheck {
             let orders = orders_arc.read();
 
             // 确定对手方向
-            let opposite_direction = if req.direction == "BUY" { "SELL" } else { "BUY" };
+            let opposite_direction = if req.direction == "BUY" {
+                "SELL"
+            } else {
+                "BUY"
+            };
 
             // 检查是否存在同合约的对手方向订单，且价格会导致自成交
             for active_order in orders.iter() {
                 if active_order.instrument_id == req.instrument_id
-                    && active_order.direction == opposite_direction {
-
+                    && active_order.direction == opposite_direction
+                {
                     // ✅ 价格检查：只有当价格会导致成交时才拒绝
                     let would_match = match (req.direction.as_str(), req.price_type.as_str()) {
                         // 新订单是 BUY
-                        ("BUY", "MARKET") => true,  // 市价单总是可能成交
+                        ("BUY", "MARKET") => true, // 市价单总是可能成交
                         ("BUY", _) => {
                             // 限价买单：只有当买价 >= 已有卖单价格时才会成交
                             req.limit_price >= active_order.limit_price
                         }
                         // 新订单是 SELL
-                        ("SELL", "MARKET") => true,  // 市价单总是可能成交
+                        ("SELL", "MARKET") => true, // 市价单总是可能成交
                         ("SELL", _) => {
                             // 限价卖单：只有当卖价 <= 已有买单价格时才会成交
                             req.limit_price <= active_order.limit_price
@@ -407,7 +421,9 @@ impl PreTradeCheck {
     /// 移除活动订单
     pub fn remove_active_order(&self, account_id: &str, order_id: &str) {
         if let Some(orders) = self.active_orders.get(account_id) {
-            orders.write().retain(|order_info| order_info.order_id != order_id);
+            orders
+                .write()
+                .retain(|order_info| order_info.order_id != order_id);
         }
     }
 
@@ -433,7 +449,7 @@ impl PreTradeCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::account_ext::{OpenAccountRequest, AccountType};
+    use crate::core::account_ext::{AccountType, OpenAccountRequest};
 
     fn create_test_account_manager() -> Arc<AccountManager> {
         let mgr = Arc::new(AccountManager::new());
@@ -549,8 +565,22 @@ mod tests {
 
         assert_eq!(checker.get_active_order_count("test_user"), 0);
 
-        checker.register_active_order("test_user", "order1".to_string(), "IX2301".to_string(), "BUY".to_string(), 100.0, "LIMIT".to_string());
-        checker.register_active_order("test_user", "order2".to_string(), "IX2302".to_string(), "SELL".to_string(), 200.0, "LIMIT".to_string());
+        checker.register_active_order(
+            "test_user",
+            "order1".to_string(),
+            "IX2301".to_string(),
+            "BUY".to_string(),
+            100.0,
+            "LIMIT".to_string(),
+        );
+        checker.register_active_order(
+            "test_user",
+            "order2".to_string(),
+            "IX2302".to_string(),
+            "SELL".to_string(),
+            200.0,
+            "LIMIT".to_string(),
+        );
         assert_eq!(checker.get_active_order_count("test_user"), 2);
 
         checker.remove_active_order("test_user", "order1");
@@ -563,7 +593,14 @@ mod tests {
         let checker = PreTradeCheck::new(account_mgr);
 
         // 注册一个 BUY 订单
-        checker.register_active_order("test_user", "order1".to_string(), "IX2301".to_string(), "BUY".to_string(), 100.0, "LIMIT".to_string());
+        checker.register_active_order(
+            "test_user",
+            "order1".to_string(),
+            "IX2301".to_string(),
+            "BUY".to_string(),
+            100.0,
+            "LIMIT".to_string(),
+        );
 
         // 尝试提交同合约的 SELL 订单（价格会导致成交，应被拒绝）
         let req = OrderCheckRequest {
@@ -573,12 +610,18 @@ mod tests {
             offset: "OPEN".to_string(),
             volume: 10.0,
             price: 100.0,
-            limit_price: 100.0,  // ✅ 卖价 100 <= 买价 100，会成交
+            limit_price: 100.0, // ✅ 卖价 100 <= 买价 100，会成交
             price_type: "LIMIT".to_string(),
         };
 
         let result = checker.check(&req).unwrap();
-        assert!(matches!(result, RiskCheckResult::Reject { code: RiskCheckCode::SelfTradingRisk, .. }));
+        assert!(matches!(
+            result,
+            RiskCheckResult::Reject {
+                code: RiskCheckCode::SelfTradingRisk,
+                ..
+            }
+        ));
 
         // 同方向订单应该通过
         let req_same_direction = OrderCheckRequest {

@@ -4,10 +4,10 @@
 //!
 //! @yutiansut @quantaxis
 
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// K线数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,7 +54,7 @@ impl KLine {
             close: price,
             volume: 0,
             amount: 0.0,
-            open_oi: 0,    // 持仓量初始化为0（需要从行情数据获取）
+            open_oi: 0, // 持仓量初始化为0（需要从行情数据获取）
             close_oi: 0,
             is_finished: false,
         }
@@ -72,9 +72,9 @@ impl KLine {
     /// 更新持仓量
     pub fn update_open_interest(&mut self, open_interest: i64) {
         if self.open_oi == 0 {
-            self.open_oi = open_interest;  // 第一次tick设置起始持仓
+            self.open_oi = open_interest; // 第一次tick设置起始持仓
         }
-        self.close_oi = open_interest;     // 每次更新结束持仓
+        self.close_oi = open_interest; // 每次更新结束持仓
     }
 
     /// 标记K线完成
@@ -139,10 +139,10 @@ impl KLinePeriod {
     /// 从DIFF协议的duration(纳秒)转换
     pub fn from_duration_ns(duration_ns: i64) -> Option<Self> {
         match duration_ns {
-            3_000_000_000 => Some(KLinePeriod::Sec3),     // 3秒
-            60_000_000_000 => Some(KLinePeriod::Min1),    // 1分钟
-            300_000_000_000 => Some(KLinePeriod::Min5),   // 5分钟
-            900_000_000_000 => Some(KLinePeriod::Min15),  // 15分钟
+            3_000_000_000 => Some(KLinePeriod::Sec3),      // 3秒
+            60_000_000_000 => Some(KLinePeriod::Min1),     // 1分钟
+            300_000_000_000 => Some(KLinePeriod::Min5),    // 5分钟
+            900_000_000_000 => Some(KLinePeriod::Min15),   // 15分钟
             1_800_000_000_000 => Some(KLinePeriod::Min30), // 30分钟
             3_600_000_000_000 => Some(KLinePeriod::Min60), // 60分钟
             86_400_000_000_000 => Some(KLinePeriod::Day),  // 日线
@@ -213,7 +213,12 @@ impl KLineAggregator {
     }
 
     /// 处理新的Tick数据
-    pub fn on_tick(&mut self, price: f64, volume: i64, timestamp_ms: i64) -> Vec<(KLinePeriod, KLine)> {
+    pub fn on_tick(
+        &mut self,
+        price: f64,
+        volume: i64,
+        timestamp_ms: i64,
+    ) -> Vec<(KLinePeriod, KLine)> {
         let mut finished_klines = Vec::new();
 
         // 所有周期（分级采样：3s → 1min → 5min → 15min → 30min → 60min → Day）
@@ -254,7 +259,8 @@ impl KLineAggregator {
                 }
 
                 // 创建新K线
-                self.current_klines.insert(period, KLine::new(period_start, price));
+                self.current_klines
+                    .insert(period, KLine::new(period_start, price));
             }
 
             // 更新当前K线
@@ -274,7 +280,11 @@ impl KLineAggregator {
     /// 获取历史K线
     pub fn get_history_klines(&self, period: KLinePeriod, count: usize) -> Vec<KLine> {
         if let Some(history) = self.history_klines.get(&period) {
-            let start = if history.len() > count { history.len() - count } else { 0 };
+            let start = if history.len() > count {
+                history.len() - count
+            } else {
+                0
+            };
             history[start..].to_vec()
         } else {
             Vec::new()
@@ -309,7 +319,13 @@ impl KLineManager {
     }
 
     /// 处理Tick数据
-    pub fn on_tick(&self, instrument_id: &str, price: f64, volume: i64, timestamp_ms: i64) -> Vec<(KLinePeriod, KLine)> {
+    pub fn on_tick(
+        &self,
+        instrument_id: &str,
+        price: f64,
+        volume: i64,
+        timestamp_ms: i64,
+    ) -> Vec<(KLinePeriod, KLine)> {
         let mut aggregators = self.aggregators.write();
 
         let aggregator = aggregators
@@ -334,7 +350,8 @@ impl KLineManager {
     pub fn get_current_kline(&self, instrument_id: &str, period: KLinePeriod) -> Option<KLine> {
         let aggregators = self.aggregators.read();
 
-        aggregators.get(instrument_id)
+        aggregators
+            .get(instrument_id)
             .and_then(|agg| agg.get_current_kline(period))
             .cloned()
     }
@@ -377,7 +394,10 @@ mod tests {
         // 10秒内会完成3个3秒K线（0-3s, 3-6s, 6-9s）
         assert!(finished.len() >= 1, "应该至少完成1个3秒K线");
         // 检查没有Min1 K线完成
-        assert!(!finished.iter().any(|(p, _)| *p == KLinePeriod::Min1), "不应完成分钟K线");
+        assert!(
+            !finished.iter().any(|(p, _)| *p == KLinePeriod::Min1),
+            "不应完成分钟K线"
+        );
 
         // 检查当前Min1 K线
         let current = agg.get_current_kline(KLinePeriod::Min1).unwrap();
@@ -424,7 +444,9 @@ mod tests {
         assert!(finished.len() > 0, "Should finish at least one K-line");
 
         // 检查是否有1分钟K线完成
-        let min1_finished = finished.iter().find(|(period, _)| *period == KLinePeriod::Min1);
+        let min1_finished = finished
+            .iter()
+            .find(|(period, _)| *period == KLinePeriod::Min1);
         assert!(min1_finished.is_some(), "Should finish 1-minute K-line");
 
         let (_, kline) = min1_finished.unwrap();
@@ -455,7 +477,9 @@ mod tests {
         assert!(finished.len() >= 3, "Should finish multiple periods");
 
         // 验证有5分钟K线
-        let min5_finished = finished.iter().find(|(period, _)| *period == KLinePeriod::Min5);
+        let min5_finished = finished
+            .iter()
+            .find(|(period, _)| *period == KLinePeriod::Min5);
         assert!(min5_finished.is_some(), "Should finish 5-minute K-line");
     }
 

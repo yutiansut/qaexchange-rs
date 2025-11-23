@@ -1,4 +1,4 @@
 //! 服务层模块
 
-pub mod websocket;
 pub mod http;
+pub mod websocket;

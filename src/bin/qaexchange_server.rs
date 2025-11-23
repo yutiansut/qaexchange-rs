@@ -8,17 +8,17 @@
 //!
 //! 运行: cargo run --bin qaexchange-server
 
-use qaexchange::storage::subscriber::{StorageSubscriber, StorageSubscriberConfig};
-use qaexchange::storage::hybrid::oltp::OltpHybridConfig;
-use qaexchange::exchange::{AccountManager, InstrumentRegistry, TradeGateway, OrderRouter};
+use actix_web::{middleware, web, App, HttpServer as ActixHttpServer};
 use qaexchange::exchange::instrument_registry::InstrumentInfo;
-use qaexchange::matching::engine::ExchangeMatchingEngine;
+use qaexchange::exchange::{AccountManager, InstrumentRegistry, OrderRouter, TradeGateway};
 use qaexchange::market::MarketDataBroadcaster;
+use qaexchange::matching::engine::ExchangeMatchingEngine;
 use qaexchange::service::http::HttpServer;
 use qaexchange::service::websocket::WebSocketServer;
-use actix_web::{App, HttpServer as ActixHttpServer, middleware, web};
-use std::sync::Arc;
+use qaexchange::storage::hybrid::oltp::OltpHybridConfig;
+use qaexchange::storage::subscriber::{StorageSubscriber, StorageSubscriberConfig};
 use std::io;
+use std::sync::Arc;
 
 /// 交易所服务配置
 #[derive(Debug, Clone)]
@@ -109,7 +109,7 @@ impl ExchangeServer {
         log::info!("Initializing instruments...");
 
         // 注册合约：沪深300股指期货
-        use qaexchange::exchange::instrument_registry::{InstrumentType, InstrumentStatus};
+        use qaexchange::exchange::instrument_registry::{InstrumentStatus, InstrumentType};
         let instruments = vec![
             {
                 let mut info = InstrumentInfo::new(
@@ -172,7 +172,10 @@ impl ExchangeServer {
             log::info!("  ✓ {} @ {}", inst.instrument_id, init_price);
         }
 
-        log::info!("✅ {} instruments initialized", self.instrument_registry.list_all().len());
+        log::info!(
+            "✅ {} instruments initialized",
+            self.instrument_registry.list_all().len()
+        );
     }
 
     /// 启动存储订阅器
@@ -216,8 +219,8 @@ impl ExchangeServer {
     async fn start_http_server(self: Arc<Self>) -> io::Result<actix_web::dev::Server> {
         log::info!("Starting HTTP server at {}...", self.config.http_address);
 
-        use qaexchange::service::http::handlers::AppState;
         use qaexchange::matching::trade_recorder::TradeRecorder;
+        use qaexchange::service::http::handlers::AppState;
         use qaexchange::user::UserManager;
 
         let app_state = Arc::new(AppState {
@@ -252,10 +255,10 @@ impl ExchangeServer {
     async fn start_websocket_server(self: Arc<Self>) -> io::Result<actix_web::dev::Server> {
         log::info!("Starting WebSocket server at {}...", self.config.ws_address);
 
-        use qaexchange::user::UserManager;
+        use actix::Actor;
         use qaexchange::market::KLineActor;
         use qaexchange::storage::wal::manager::WalManager;
-        use actix::Actor;
+        use qaexchange::user::UserManager;
 
         // 创建 KLineActor
         let wal_path = format!("{}/kline_wal", self.config.storage_path);
@@ -277,7 +280,10 @@ impl ExchangeServer {
             App::new()
                 .app_data(web::Data::new(ws_server.clone()))
                 .wrap(middleware::Logger::default())
-                .route("/ws", web::get().to(qaexchange::service::websocket::ws_route))
+                .route(
+                    "/ws",
+                    web::get().to(qaexchange::service::websocket::ws_route),
+                )
                 .route("/health", web::get().to(|| async { "OK" }))
         })
         .bind(&bind_address)?
@@ -309,10 +315,7 @@ impl ExchangeServer {
         print_startup_banner(&server.config);
 
         // 6. 等待服务器
-        tokio::try_join!(
-            async { http_server.await },
-            async { ws_server.await }
-        )?;
+        tokio::try_join!(async { http_server.await }, async { ws_server.await })?;
 
         Ok(())
     }
@@ -367,13 +370,22 @@ fn print_startup_banner(config: &ExchangeConfig) {
     println!("   • IH2501 - 上证50股指期货2501  @ 2800.0");
 
     println!("\n💡 Quick Start:");
-    println!("   1. 开户:     curl -X POST http://{}/api/account/open \\", config.http_address);
+    println!(
+        "   1. 开户:     curl -X POST http://{}/api/account/open \\",
+        config.http_address
+    );
     println!("                  -H 'Content-Type: application/json' \\");
     println!("                  -d '{{\"user_id\":\"demo\",\"user_name\":\"Demo User\",\"init_cash\":1000000,\"account_type\":\"individual\",\"password\":\"demo123\"}}'");
-    println!("\n   2. 提交订单: curl -X POST http://{}/api/order/submit \\", config.http_address);
+    println!(
+        "\n   2. 提交订单: curl -X POST http://{}/api/order/submit \\",
+        config.http_address
+    );
     println!("                  -H 'Content-Type: application/json' \\");
     println!("                  -d '{{\"user_id\":\"demo\",\"instrument_id\":\"IF2501\",\"direction\":\"BUY\",\"offset\":\"OPEN\",\"volume\":1,\"price\":3800,\"order_type\":\"LIMIT\"}}'");
-    println!("\n   3. 查询账户: curl http://{}/api/account/demo", config.http_address);
+    println!(
+        "\n   3. 查询账户: curl http://{}/api/account/demo",
+        config.http_address
+    );
 
     println!("\n🔗 Documentation:");
     println!("   • Architecture:  docs/DECOUPLED_STORAGE_ARCHITECTURE.md");

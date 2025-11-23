@@ -2,11 +2,11 @@
 //!
 //! 定期获取订单簿快照并广播给订阅者
 
+use crate::market::{MarketDataBroadcaster, MarketDataService, PriceLevel};
+use crate::matching::engine::ExchangeMatchingEngine;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
-use crate::market::{MarketDataBroadcaster, MarketDataService, PriceLevel};
-use crate::matching::engine::ExchangeMatchingEngine;
 
 /// 订单簿快照广播服务
 pub struct SnapshotBroadcastService {
@@ -43,12 +43,19 @@ impl SnapshotBroadcastService {
             // 为每个合约广播订单簿快照
             for instrument_id in instruments {
                 // 检查是否有订阅者
-                if self.market_broadcaster.instrument_subscriber_count(&instrument_id) == 0 {
+                if self
+                    .market_broadcaster
+                    .instrument_subscriber_count(&instrument_id)
+                    == 0
+                {
                     continue; // 没有订阅者，跳过
                 }
 
                 // 获取订单簿快照
-                match self.market_data_service.get_orderbook_snapshot(&instrument_id, 10) {
+                match self
+                    .market_data_service
+                    .get_orderbook_snapshot(&instrument_id, 10)
+                {
                     Ok(snapshot) => {
                         // 广播快照
                         self.market_broadcaster.broadcast_orderbook_snapshot(
@@ -58,7 +65,11 @@ impl SnapshotBroadcastService {
                         );
                     }
                     Err(e) => {
-                        log::warn!("Failed to get orderbook snapshot for {}: {}", instrument_id, e);
+                        log::warn!(
+                            "Failed to get orderbook snapshot for {}: {}",
+                            instrument_id,
+                            e
+                        );
                     }
                 }
             }
@@ -74,7 +85,10 @@ impl SnapshotBroadcastService {
         let service = Self::new(matching_engine, market_broadcaster);
 
         tokio::spawn(async move {
-            log::info!("Orderbook snapshot broadcaster started (interval: {}ms)", interval_ms);
+            log::info!(
+                "Orderbook snapshot broadcaster started (interval: {}ms)",
+                interval_ms
+            );
             service.start(interval_ms).await;
         });
     }

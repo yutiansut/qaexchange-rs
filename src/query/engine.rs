@@ -2,9 +2,9 @@
 
 use super::scanner::SSTableScanner;
 use super::types::*;
+use polars::io::SerWriter;
 use polars::prelude::*;
 use polars::sql::SQLContext;
-use polars::io::SerWriter;
 use std::path::Path;
 
 /// 查询引擎
@@ -133,12 +133,11 @@ impl QueryEngine {
 
         // 应用时间范围过滤
         if let Some(time_range) = &request.time_range {
-            df = df
-                .filter(
-                    col("timestamp")
-                        .gt_eq(lit(time_range.start))
-                        .and(col("timestamp").lt_eq(lit(time_range.end))),
-                );
+            df = df.filter(
+                col("timestamp")
+                    .gt_eq(lit(time_range.start))
+                    .and(col("timestamp").lt_eq(lit(time_range.end))),
+            );
         }
 
         // 应用其他过滤条件
@@ -178,8 +177,7 @@ impl QueryEngine {
             df = df.limit(limit as u32);
         }
 
-        df.collect()
-            .map_err(|e| format!("Collect failed: {}", e))
+        df.collect().map_err(|e| format!("Collect failed: {}", e))
     }
 
     /// 执行时间序列查询
@@ -227,8 +225,7 @@ impl QueryEngine {
         if let Some(granularity_secs) = granularity {
             let granularity_ns = granularity_secs * 1_000_000_000;
             df = df.with_column(
-                (col("timestamp") / lit(granularity_ns) * lit(granularity_ns))
-                    .alias("time_bucket"),
+                (col("timestamp") / lit(granularity_ns) * lit(granularity_ns)).alias("time_bucket"),
             );
         }
 
@@ -252,8 +249,7 @@ impl QueryEngine {
         // 执行分组聚合
         df = df.group_by(&group_by).agg(&agg_exprs);
 
-        df.collect()
-            .map_err(|e| format!("Collect failed: {}", e))
+        df.collect().map_err(|e| format!("Collect failed: {}", e))
     }
 
     /// 应用过滤条件
@@ -280,7 +276,9 @@ impl QueryEngine {
             (FilterOp::Lte, FilterValue::Int(v)) => col_expr.lt_eq(lit(*v)),
             (FilterOp::Lte, FilterValue::Float(v)) => col_expr.lt_eq(lit(*v)),
 
-            (FilterOp::In, FilterValue::IntList(v)) => col_expr.is_in(lit(Series::new("".into(), v)), false),
+            (FilterOp::In, FilterValue::IntList(v)) => {
+                col_expr.is_in(lit(Series::new("".into(), v)), false)
+            }
             (FilterOp::NotIn, FilterValue::IntList(v)) => {
                 col_expr.is_in(lit(Series::new("".into(), v)), false).not()
             }
@@ -297,11 +295,7 @@ impl QueryEngine {
     }
 
     /// 应用聚合
-    fn apply_aggregations(
-        &self,
-        df: LazyFrame,
-        aggs: &[Aggregation],
-    ) -> Result<LazyFrame, String> {
+    fn apply_aggregations(&self, df: LazyFrame, aggs: &[Aggregation]) -> Result<LazyFrame, String> {
         let agg_exprs: Vec<Expr> = aggs
             .iter()
             .map(|agg| {
@@ -333,13 +327,13 @@ impl QueryEngine {
         df: DataFrame,
         elapsed_ms: u64,
     ) -> Result<QueryResponse, String> {
-        let columns: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
-
-        let dtypes: Vec<String> = df
-            .dtypes()
+        let columns: Vec<String> = df
+            .get_column_names()
             .iter()
-            .map(|dt| format!("{:?}", dt))
+            .map(|s| s.to_string())
             .collect();
+
+        let dtypes: Vec<String> = df.dtypes().iter().map(|dt| format!("{:?}", dt)).collect();
 
         let row_count = df.height();
 
@@ -369,12 +363,12 @@ impl Default for QueryEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sstable::olap_parquet::ParquetSSTableWriter;
     use crate::storage::memtable::olap::{create_olap_schema, OlapMemTable};
     use crate::storage::memtable::types::MemTableKey;
+    use crate::storage::sstable::olap_parquet::ParquetSSTableWriter;
     use crate::storage::wal::WalRecord;
-    use std::sync::Arc;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn create_test_data(tmp_dir: &tempfile::TempDir) -> PathBuf {
         let file_path = tmp_dir.path().join("test.parquet");
@@ -403,8 +397,8 @@ mod tests {
 
         let memtable = OlapMemTable::from_records(records);
 
-        let mut writer = ParquetSSTableWriter::create(&file_path, Arc::new(create_olap_schema()))
-            .unwrap();
+        let mut writer =
+            ParquetSSTableWriter::create(&file_path, Arc::new(create_olap_schema())).unwrap();
 
         writer.write_chunk(memtable.chunk()).unwrap();
         writer.finish().unwrap();

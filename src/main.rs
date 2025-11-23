@@ -8,27 +8,29 @@
 //!
 //! 运行: cargo run --bin qaexchange-server
 
-use qaexchange::storage::subscriber::{StorageSubscriber, StorageSubscriberConfig};
-use qaexchange::storage::hybrid::oltp::OltpHybridConfig;
-use qaexchange::storage::conversion::{ConversionManager, SchedulerConfig, WorkerConfig};
-use qaexchange::exchange::{AccountManager, InstrumentRegistry, TradeGateway, OrderRouter, SettlementEngine, CapitalManager};
-use qaexchange::user::UserManager;
-use qaexchange::exchange::instrument_registry::{InstrumentInfo, InstrumentType, InstrumentStatus};
+use qaexchange::exchange::instrument_registry::{InstrumentInfo, InstrumentStatus, InstrumentType};
+use qaexchange::exchange::{
+    AccountManager, CapitalManager, InstrumentRegistry, OrderRouter, SettlementEngine, TradeGateway,
+};
+use qaexchange::market::{MarketDataBroadcaster, SnapshotBroadcastService};
 use qaexchange::matching::engine::ExchangeMatchingEngine;
 use qaexchange::notification::broker::NotificationBroker;
-use qaexchange::market::{MarketDataBroadcaster, SnapshotBroadcastService};
+use qaexchange::storage::conversion::{ConversionManager, SchedulerConfig, WorkerConfig};
+use qaexchange::storage::hybrid::oltp::OltpHybridConfig;
+use qaexchange::storage::subscriber::{StorageSubscriber, StorageSubscriberConfig};
+use qaexchange::user::UserManager;
 // use qaexchange::service::http::HttpServer;  // 未使用
-use qaexchange::service::http::admin::AdminAppState;
 use actix::Actor;
+use actix_web::{middleware, web, App, HttpServer as ActixHttpServer};
+use chrono;
+use qaexchange::risk::RiskMonitor;
+use qaexchange::service::http::admin::AdminAppState;
 use qaexchange::service::http::management::ManagementAppState;
 use qaexchange::service::websocket::WebSocketServer;
-use qaexchange::risk::RiskMonitor;
 use qaexchange::utils::config::ExchangeConfig as TomlConfig;
-use actix_web::{App, HttpServer as ActixHttpServer, middleware, web};
-use std::sync::Arc;
 use std::io;
 use std::path::PathBuf;
-use chrono;
+use std::sync::Arc;
 
 /// 交易所服务配置
 #[derive(Debug, Clone)]
@@ -114,7 +116,8 @@ struct ExchangeServer {
     market_data_storage: Arc<qaexchange::storage::hybrid::OltpHybridStorage>,
 
     /// 存储订阅器统计信息
-    storage_stats: Option<Arc<parking_lot::Mutex<qaexchange::storage::subscriber::SubscriberStats>>>,
+    storage_stats:
+        Option<Arc<parking_lot::Mutex<qaexchange::storage::subscriber::SubscriberStats>>>,
 
     /// OLAP 转换管理器
     conversion_mgr: Option<Arc<parking_lot::Mutex<ConversionManager>>>,
@@ -131,7 +134,10 @@ struct ExchangeServer {
 
 impl ExchangeServer {
     /// 创建交易所服务
-    fn new(config: ExchangeConfig, perf_config: qaexchange::utils::config::PerformanceConfig) -> Self {
+    fn new(
+        config: ExchangeConfig,
+        perf_config: qaexchange::utils::config::PerformanceConfig,
+    ) -> Self {
         log::info!("Initializing Exchange Server...");
 
         // 1. 创建核心组件
@@ -151,10 +157,11 @@ impl ExchangeServer {
                 "users",
                 qaexchange::storage::hybrid::oltp::OltpHybridConfig {
                     base_path: config.storage_path.clone(),
-                    memtable_size_bytes: 1 * 1024 * 1024,  // 1MB（降低阈值以便测试）
+                    memtable_size_bytes: 1 * 1024 * 1024, // 1MB（降低阈值以便测试）
                     estimated_entry_size: 512,
                 },
-            ).expect("Failed to create user storage")
+            )
+            .expect("Failed to create user storage"),
         );
 
         user_mgr_inner.set_storage(user_storage.clone());
@@ -200,53 +207,56 @@ impl ExchangeServer {
         log::info!("Starting KLine Actor...");
         let kline_actor = qaexchange::market::KLineActor::new(
             market_broadcaster.clone(),
-            kline_wal_manager.clone()
+            kline_wal_manager.clone(),
         )
-            // .with_instruments(vec![])  // 空列表表示订阅所有合约
-            .start();
+        // .with_instruments(vec![])  // 空列表表示订阅所有合约
+        .start();
         log::info!("✅ KLine Actor started (subscribed to tick events)");
 
         // 1.4 创建 iceoryx2 管理器（如果启用）
-        let iceoryx_manager: Option<Arc<parking_lot::RwLock<qaexchange::ipc::IceoryxManager>>> = if perf_config.iceoryx.enabled {
-            log::info!("Initializing iceoryx2 manager...");
-            let ipc_config = qaexchange::ipc::IpcConfig {
-                service_prefix: perf_config.iceoryx.service_prefix.clone(),
-                max_subscribers: perf_config.iceoryx.max_subscribers,
-                queue_capacity: perf_config.iceoryx.queue_capacity,
-                max_message_size: perf_config.iceoryx.max_message_size,
+        let iceoryx_manager: Option<Arc<parking_lot::RwLock<qaexchange::ipc::IceoryxManager>>> =
+            if perf_config.iceoryx.enabled {
+                log::info!("Initializing iceoryx2 manager...");
+                let ipc_config = qaexchange::ipc::IpcConfig {
+                    service_prefix: perf_config.iceoryx.service_prefix.clone(),
+                    max_subscribers: perf_config.iceoryx.max_subscribers,
+                    queue_capacity: perf_config.iceoryx.queue_capacity,
+                    max_message_size: perf_config.iceoryx.max_message_size,
+                };
+
+                #[cfg(feature = "iceoryx2")]
+                let manager = {
+                    let mut manager = qaexchange::ipc::IceoryxManager::new(ipc_config);
+
+                    // 启动市场数据发布者（需要 iceoryx2 特性）
+                    if let Err(e) = manager.start_market_data_publisher() {
+                        log::error!("Failed to start iceoryx2 market data publisher: {}", e);
+                    } else {
+                        log::info!("✅ iceoryx2 market data publisher started");
+                    }
+
+                    if let Err(e) = manager.start_notification_publisher() {
+                        log::error!("Failed to start iceoryx2 notification publisher: {}", e);
+                    } else {
+                        log::info!("✅ iceoryx2 notification publisher started");
+                    }
+
+                    manager
+                };
+
+                #[cfg(not(feature = "iceoryx2"))]
+                let manager = {
+                    log::warn!("⚠️  iceoryx2 enabled in config but feature not compiled (use --features iceoryx2)");
+                    qaexchange::ipc::IceoryxManager::new(ipc_config)
+                };
+
+                Some(Arc::new(parking_lot::RwLock::new(manager)))
+            } else {
+                log::info!(
+                    "iceoryx2 disabled (set enabled=true in config/performance.toml to enable)"
+                );
+                None
             };
-
-            #[cfg(feature = "iceoryx2")]
-            let manager = {
-                let mut manager = qaexchange::ipc::IceoryxManager::new(ipc_config);
-
-                // 启动市场数据发布者（需要 iceoryx2 特性）
-                if let Err(e) = manager.start_market_data_publisher() {
-                    log::error!("Failed to start iceoryx2 market data publisher: {}", e);
-                } else {
-                    log::info!("✅ iceoryx2 market data publisher started");
-                }
-
-                if let Err(e) = manager.start_notification_publisher() {
-                    log::error!("Failed to start iceoryx2 notification publisher: {}", e);
-                } else {
-                    log::info!("✅ iceoryx2 notification publisher started");
-                }
-
-                manager
-            };
-
-            #[cfg(not(feature = "iceoryx2"))]
-            let manager = {
-                log::warn!("⚠️  iceoryx2 enabled in config but feature not compiled (use --features iceoryx2)");
-                qaexchange::ipc::IceoryxManager::new(ipc_config)
-            };
-
-            Some(Arc::new(parking_lot::RwLock::new(manager)))
-        } else {
-            log::info!("iceoryx2 disabled (set enabled=true in config/performance.toml to enable)");
-            None
-        };
 
         // 2. 创建订单路由器
         let mut order_router = OrderRouter::new(
@@ -262,10 +272,11 @@ impl ExchangeServer {
                 "market_data",
                 qaexchange::storage::hybrid::oltp::OltpHybridConfig {
                     base_path: config.storage_path.clone(),
-                    memtable_size_bytes: 2 * 1024 * 1024,  // 2MB（降低阈值以便测试，生产环境建议 64MB）
-                    estimated_entry_size: 256,  // TickData + OrderBookSnapshot 平均大小
+                    memtable_size_bytes: 2 * 1024 * 1024, // 2MB（降低阈值以便测试，生产环境建议 64MB）
+                    estimated_entry_size: 256,            // TickData + OrderBookSnapshot 平均大小
                 },
-            ).expect("Failed to create market data storage")
+            )
+            .expect("Failed to create market data storage"),
         );
 
         // 3. 设置市场数据广播器和存储到订单路由器
@@ -286,11 +297,15 @@ impl ExchangeServer {
             // 添加VIP用户
             if !perf_config.priority_queue.vip_users.is_empty() {
                 order_router.add_vip_users(perf_config.priority_queue.vip_users.clone());
-                log::info!("✅ Added {} VIP users to priority queue",
-                    perf_config.priority_queue.vip_users.len());
+                log::info!(
+                    "✅ Added {} VIP users to priority queue",
+                    perf_config.priority_queue.vip_users.len()
+                );
             }
         } else {
-            log::info!("Priority queue disabled (set enabled=true in config/performance.toml to enable)");
+            log::info!(
+                "Priority queue disabled (set enabled=true in config/performance.toml to enable)"
+            );
         }
 
         let order_router = Arc::new(order_router);
@@ -470,12 +485,15 @@ impl ExchangeServer {
                 .expect("Failed to register instrument to matching engine");
 
             // 设置初始结算价
-            self.settlement_engine.set_settlement_price(inst.instrument_id.clone(), init_price);
+            self.settlement_engine
+                .set_settlement_price(inst.instrument_id.clone(), init_price);
 
             // 设置快照生成器的昨收盘价（用于涨跌幅计算）
-            self.market_data_service.set_pre_close(&inst.instrument_id, init_price);
+            self.market_data_service
+                .set_pre_close(&inst.instrument_id, init_price);
 
-            log::info!("  ✓ {} @ {} (margin: {}%, commission: {}%)",
+            log::info!(
+                "  ✓ {} @ {} (margin: {}%, commission: {}%)",
                 inst.instrument_id,
                 init_price,
                 inst.margin_rate * 100.0,
@@ -554,27 +572,22 @@ impl ExchangeServer {
         let metadata_path = storage_base.join("conversion_metadata.json");
 
         let scheduler_config = SchedulerConfig {
-            scan_interval_secs: 300,        // 5 分钟扫描一次
-            min_sstables_per_batch: 3,      // 至少 3 个 SSTable
-            max_sstables_per_batch: 20,     // 最多 20 个 SSTable
-            min_sstable_age_secs: 60,       // 文件至少 1 分钟未修改
+            scan_interval_secs: 300,    // 5 分钟扫描一次
+            min_sstables_per_batch: 3,  // 至少 3 个 SSTable
+            max_sstables_per_batch: 20, // 最多 20 个 SSTable
+            min_sstable_age_secs: 60,   // 文件至少 1 分钟未修改
             max_retries: 5,
-            zombie_timeout_secs: 3600,       // 1 小时超时
+            zombie_timeout_secs: 3600, // 1 小时超时
         };
 
         let worker_config = WorkerConfig {
-            worker_count: 2,                // 2 个 worker
+            worker_count: 2, // 2 个 worker
             batch_read_size: 10000,
             delete_source_after_success: true,
-            source_retention_secs: 3600,    // 保留 1 小时
+            source_retention_secs: 3600, // 保留 1 小时
         };
 
-        match ConversionManager::new(
-            storage_base,
-            metadata_path,
-            scheduler_config,
-            worker_config,
-        ) {
+        match ConversionManager::new(storage_base, metadata_path, scheduler_config, worker_config) {
             Ok(mut manager) => {
                 manager.start();
                 log::info!("✅ OLAP conversion system started");
@@ -606,8 +619,9 @@ impl ExchangeServer {
 
         // 创建市场数据服务（解耦：业务逻辑与网络层分离）
         // 传递 market_data_storage 以支持从 WAL 恢复历史行情
-        let mut market_service = qaexchange::market::MarketDataService::new(self.matching_engine.clone())
-            .with_storage(self.market_data_storage.clone());
+        let mut market_service =
+            qaexchange::market::MarketDataService::new(self.matching_engine.clone())
+                .with_storage(self.market_data_storage.clone());
 
         // 如果启用了 iceoryx2，将 manager 传递给 MarketDataService
         if let Some(ref manager) = self.iceoryx_manager {
@@ -637,8 +651,8 @@ impl ExchangeServer {
         let server = ActixHttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(app_state.clone()))
-                .app_data(web::Data::new(market_service.clone()))  // MarketDataService 实现了 Clone
-                .app_data(web::Data::new(kline_actor_addr.clone()))  // KLineActor 地址
+                .app_data(web::Data::new(market_service.clone())) // MarketDataService 实现了 Clone
+                .app_data(web::Data::new(kline_actor_addr.clone())) // KLineActor 地址
                 .app_data(admin_data.clone())
                 .app_data(management_data.clone())
                 .wrap(middleware::Logger::default())
@@ -648,7 +662,7 @@ impl ExchangeServer {
                         .allow_any_origin()
                         .allow_any_method()
                         .allow_any_header()
-                        .max_age(3600)
+                        .max_age(3600),
                 )
                 .configure(qaexchange::service::http::routes::configure)
         })
@@ -657,8 +671,14 @@ impl ExchangeServer {
 
         log::info!("✅ HTTP server started at http://{}", bind_address);
         log::info!("   Health: http://{}/health", bind_address);
-        log::info!("   Market API: http://{}/api/market/instruments", bind_address);
-        log::info!("   Admin API: http://{}/api/admin/market/order-stats", bind_address);
+        log::info!(
+            "   Market API: http://{}/api/market/instruments",
+            bind_address
+        );
+        log::info!(
+            "   Admin API: http://{}/api/admin/market/order-stats",
+            bind_address
+        );
 
         Ok(server)
     }
@@ -696,16 +716,28 @@ impl ExchangeServer {
             App::new()
                 .app_data(web::Data::new(ws_server.clone()))
                 .wrap(middleware::Logger::default())
-                .route("/ws", web::get().to(qaexchange::service::websocket::ws_route))
-                .route("/ws/diff", web::get().to(qaexchange::service::websocket::ws_diff_route))
+                .route(
+                    "/ws",
+                    web::get().to(qaexchange::service::websocket::ws_route),
+                )
+                .route(
+                    "/ws/diff",
+                    web::get().to(qaexchange::service::websocket::ws_diff_route),
+                )
                 .route("/health", web::get().to(|| async { "OK" }))
         })
         .bind(&bind_address)?
         .run();
 
         log::info!("✅ WebSocket server started at ws://{}", bind_address);
-        log::info!("   Legacy Protocol: ws://{}/ws?user_id=<USER_ID>", bind_address);
-        log::info!("   DIFF Protocol:   ws://{}/ws/diff?user_id=<USER_ID> (Recommended)", bind_address);
+        log::info!(
+            "   Legacy Protocol: ws://{}/ws?user_id=<USER_ID>",
+            bind_address
+        );
+        log::info!(
+            "   DIFF Protocol:   ws://{}/ws/diff?user_id=<USER_ID> (Recommended)",
+            bind_address
+        );
         log::info!("   Market Data: Subscribe to channels [orderbook, tick, last_price]");
 
         Ok(server)
@@ -755,12 +787,22 @@ impl ExchangeServer {
                 }
 
                 log::info!("━━━━━━━━━━━━━━━━━━━ Periodic Report ━━━━━━━━━━━━━━━━━━━");
-                log::info!("📊 Accounts: {} total, {} active", total_count, active_count);
-                log::info!("💰 Balance: ¥{:.2} total, ¥{:.2} available, ¥{:.2} margin",
-                    total_balance, total_available, total_margin);
+                log::info!(
+                    "📊 Accounts: {} total, {} active",
+                    total_count,
+                    active_count
+                );
+                log::info!(
+                    "💰 Balance: ¥{:.2} total, ¥{:.2} available, ¥{:.2} margin",
+                    total_balance,
+                    total_available,
+                    total_margin
+                );
                 if total_balance > 0.0 {
-                    log::info!("📈 Margin Utilization: {:.1}%",
-                        (total_margin / total_balance) * 100.0);
+                    log::info!(
+                        "📈 Margin Utilization: {:.1}%",
+                        (total_margin / total_balance) * 100.0
+                    );
                 }
                 log::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             }
@@ -820,7 +862,9 @@ impl ExchangeServer {
                 log::info!("✅ [WAL Recovery] Recovered {} accounts from WAL", count);
             }
             Ok(_) => {
-                log::debug!("[WAL Recovery] No WAL records found (first time startup or after snapshot)");
+                log::debug!(
+                    "[WAL Recovery] No WAL records found (first time startup or after snapshot)"
+                );
             }
             Err(e) => {
                 log::error!("[WAL Recovery] Failed to recover from WAL: {}", e);
@@ -832,14 +876,12 @@ impl ExchangeServer {
     fn recover_from_user_wal(&self) {
         use qaexchange::user::recovery::UserRecovery;
 
-        let user_recovery = UserRecovery::new(
-            self.user_storage.clone(),
-            self.user_mgr.clone()
-        );
+        let user_recovery = UserRecovery::new(self.user_storage.clone(), self.user_mgr.clone());
 
         match user_recovery.recover_all_users() {
             Ok(stats) if stats.users_recovered > 0 => {
-                log::info!("✅ [User Recovery] Recovered {} users ({} registrations, {} bindings) in {}ms",
+                log::info!(
+                    "✅ [User Recovery] Recovered {} users ({} registrations, {} bindings) in {}ms",
                     stats.users_recovered,
                     stats.user_register_records,
                     stats.account_bind_records,
@@ -900,10 +942,7 @@ impl ExchangeServer {
         print_startup_banner(&server.config);
 
         // 8. 等待服务器
-        tokio::try_join!(
-            async { http_server.await },
-            async { ws_server.await }
-        )?;
+        tokio::try_join!(async { http_server.await }, async { ws_server.await })?;
 
         Ok(())
     }
@@ -968,13 +1007,22 @@ fn print_startup_banner(config: &ExchangeConfig) {
     println!("   • IH2501 - 上证50股指期货2501  @ 2800.0");
 
     println!("\n💡 Quick Start:");
-    println!("   1. 开户:     curl -X POST http://{}/api/account/open \\", config.http_address);
+    println!(
+        "   1. 开户:     curl -X POST http://{}/api/account/open \\",
+        config.http_address
+    );
     println!("                  -H 'Content-Type: application/json' \\");
     println!("                  -d '{{\"user_id\":\"demo\",\"user_name\":\"Demo User\",\"init_cash\":1000000,\"account_type\":\"individual\",\"password\":\"demo123\"}}'");
-    println!("\n   2. 提交订单: curl -X POST http://{}/api/order/submit \\", config.http_address);
+    println!(
+        "\n   2. 提交订单: curl -X POST http://{}/api/order/submit \\",
+        config.http_address
+    );
     println!("                  -H 'Content-Type: application/json' \\");
     println!("                  -d '{{\"user_id\":\"demo\",\"instrument_id\":\"IF2501\",\"direction\":\"BUY\",\"offset\":\"OPEN\",\"volume\":1,\"price\":3800,\"order_type\":\"LIMIT\"}}'");
-    println!("\n   3. 查询账户: curl http://{}/api/account/demo", config.http_address);
+    println!(
+        "\n   3. 查询账户: curl http://{}/api/account/demo",
+        config.http_address
+    );
 
     println!("\n🔗 Documentation:");
     println!("   • Architecture:  docs/DECOUPLED_STORAGE_ARCHITECTURE.md");

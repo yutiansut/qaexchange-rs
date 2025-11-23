@@ -6,12 +6,12 @@
 //!
 //! @yutiansut @quantaxis
 
-use actix::{Actor, Context, Handler, Message, Addr, AsyncContext};
-use std::sync::Arc;
-use std::collections::HashMap;
+use actix::{Actor, Addr, AsyncContext, Context, Handler, Message};
 use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use super::kline::{KLine, KLinePeriod, KLineAggregator};
+use super::kline::{KLine, KLineAggregator, KLinePeriod};
 use super::MarketDataBroadcaster;
 use super::MarketDataEvent;
 use crate::storage::wal::{WalManager, WalRecord};
@@ -37,7 +37,7 @@ impl KLineActor {
         Self {
             aggregators: Arc::new(RwLock::new(HashMap::new())),
             broadcaster,
-            subscribed_instruments: Vec::new(),  // 默认订阅所有
+            subscribed_instruments: Vec::new(), // 默认订阅所有
             wal_manager,
         }
     }
@@ -94,12 +94,14 @@ impl KLineActor {
 
                     // 添加到aggregators的历史K线
                     let mut agg_map = self.aggregators.write();
-                    let aggregator = agg_map
-                        .entry(instrument_id_str.clone())
-                        .or_insert_with(|| super::kline::KLineAggregator::new(instrument_id_str.clone()));
+                    let aggregator =
+                        agg_map.entry(instrument_id_str.clone()).or_insert_with(|| {
+                            super::kline::KLineAggregator::new(instrument_id_str.clone())
+                        });
 
                     // 添加到历史K线（保持max_history限制）
-                    let history = aggregator.history_klines
+                    let history = aggregator
+                        .history_klines
                         .entry(kline_period)
                         .or_insert_with(Vec::new);
 
@@ -152,8 +154,8 @@ impl Actor for KLineActor {
         let subscriber_id = uuid::Uuid::new_v4().to_string();
         let receiver = self.broadcaster.subscribe(
             subscriber_id.clone(),
-            self.subscribed_instruments.clone(),  // 空列表表示订阅所有合约
-            vec!["tick".to_string()],  // 只订阅tick事件
+            self.subscribed_instruments.clone(), // 空列表表示订阅所有合约
+            vec!["tick".to_string()],            // 只订阅tick事件
         );
 
         // 启动异步任务持续接收tick事件
@@ -163,7 +165,10 @@ impl Actor for KLineActor {
         let addr = ctx.address();
 
         let fut = async move {
-            log::info!("📊 [KLineActor] Subscribed to tick events (subscriber_id={})", subscriber_id);
+            log::info!(
+                "📊 [KLineActor] Subscribed to tick events (subscriber_id={})",
+                subscriber_id
+            );
 
             loop {
                 // 使用spawn_blocking避免阻塞Tokio执行器
@@ -171,14 +176,22 @@ impl Actor for KLineActor {
                 match tokio::task::spawn_blocking(move || receiver_clone.recv()).await {
                     Ok(Ok(event)) => {
                         // 处理tick事件
-                        if let MarketDataEvent::Tick { instrument_id, price, volume, timestamp, .. } = event {
+                        if let MarketDataEvent::Tick {
+                            instrument_id,
+                            price,
+                            volume,
+                            timestamp,
+                            ..
+                        } = event
+                        {
                             let mut agg_map = aggregators.write();
                             let aggregator = agg_map
                                 .entry(instrument_id.clone())
                                 .or_insert_with(|| KLineAggregator::new(instrument_id.clone()));
 
                             // 聚合K线
-                            let finished_klines = aggregator.on_tick(price, volume as i64, timestamp);
+                            let finished_klines =
+                                aggregator.on_tick(price, volume as i64, timestamp);
 
                             // 广播完成的K线
                             for (period, kline) in finished_klines {
@@ -208,13 +221,22 @@ impl Actor for KLineActor {
                                     amount: kline.amount,
                                     open_oi: kline.open_oi,
                                     close_oi: kline.close_oi,
-                                    timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                                    timestamp: chrono::Utc::now()
+                                        .timestamp_nanos_opt()
+                                        .unwrap_or(0),
                                 };
 
                                 if let Err(e) = wal_manager.append(wal_record) {
-                                    log::error!("📊 [KLineActor] Failed to persist K-line to WAL: {}", e);
+                                    log::error!(
+                                        "📊 [KLineActor] Failed to persist K-line to WAL: {}",
+                                        e
+                                    );
                                 } else {
-                                    log::trace!("📊 [KLineActor] K-line persisted to WAL: {} {:?}", instrument_id, period);
+                                    log::trace!(
+                                        "📊 [KLineActor] K-line persisted to WAL: {} {:?}",
+                                        instrument_id,
+                                        period
+                                    );
                                 }
                             }
                         }
@@ -280,7 +302,8 @@ impl Handler<GetCurrentKLine> for KLineActor {
     fn handle(&mut self, msg: GetCurrentKLine, _ctx: &mut Context<Self>) -> Self::Result {
         let aggregators = self.aggregators.read();
 
-        aggregators.get(&msg.instrument_id)
+        aggregators
+            .get(&msg.instrument_id)
             .and_then(|agg| agg.get_current_kline(msg.period))
             .cloned()
     }
@@ -297,7 +320,9 @@ mod tests {
     fn test_kline_actor_creation() {
         let broadcaster = Arc::new(MarketDataBroadcaster::new());
         let tmp_dir = tempfile::tempdir().unwrap();
-        let wal_manager = Arc::new(crate::storage::wal::WalManager::new(tmp_dir.path().to_str().unwrap()));
+        let wal_manager = Arc::new(crate::storage::wal::WalManager::new(
+            tmp_dir.path().to_str().unwrap(),
+        ));
 
         let actor = KLineActor::new(broadcaster, wal_manager);
         assert!(actor.aggregators.read().is_empty());
@@ -307,7 +332,9 @@ mod tests {
     async fn test_kline_query() {
         let broadcaster = Arc::new(MarketDataBroadcaster::new());
         let tmp_dir = tempfile::tempdir().unwrap();
-        let wal_manager = Arc::new(crate::storage::wal::WalManager::new(tmp_dir.path().to_str().unwrap()));
+        let wal_manager = Arc::new(crate::storage::wal::WalManager::new(
+            tmp_dir.path().to_str().unwrap(),
+        ));
 
         let actor = KLineActor::new(broadcaster, wal_manager);
         let addr = actor.start();
@@ -316,11 +343,14 @@ mod tests {
         let now = chrono::Utc::now().timestamp_millis();
 
         // 查询K线（应该为空）
-        let klines = addr.send(GetKLines {
-            instrument_id: "IF2501".to_string(),
-            period: KLinePeriod::Min1,
-            count: 10,
-        }).await.unwrap();
+        let klines = addr
+            .send(GetKLines {
+                instrument_id: "IF2501".to_string(),
+                period: KLinePeriod::Min1,
+                count: 10,
+            })
+            .await
+            .unwrap();
 
         assert_eq!(klines.len(), 0); // 没有数据时应为空
     }
@@ -338,7 +368,7 @@ mod tests {
             for i in 0..3 {
                 let record = WalRecord::KLineFinished {
                     instrument_id: WalRecord::to_fixed_array_16("IF2501"),
-                    period: 4, // Min1
+                    period: 4,                            // Min1
                     kline_timestamp: 1000000 + i * 60000, // 每分钟一根
                     open: 3800.0 + i as f64,
                     high: 3850.0 + i as f64,
@@ -365,9 +395,14 @@ mod tests {
 
             // 验证恢复的数据
             let agg_map = actor.aggregators.read();
-            let aggregator = agg_map.get("IF2501").expect("Should have IF2501 aggregator");
+            let aggregator = agg_map
+                .get("IF2501")
+                .expect("Should have IF2501 aggregator");
 
-            let history = aggregator.history_klines.get(&KLinePeriod::Min1).expect("Should have Min1 history");
+            let history = aggregator
+                .history_klines
+                .get(&KLinePeriod::Min1)
+                .expect("Should have Min1 history");
             assert_eq!(history.len(), 3, "Should have recovered 3 K-lines");
 
             // 验证第一根K线

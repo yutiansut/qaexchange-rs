@@ -8,14 +8,14 @@
 //!
 //! 运行: cargo run --example decoupled_storage_demo
 
-use qaexchange::storage::subscriber::{StorageSubscriber, StorageSubscriberConfig};
-use qaexchange::storage::hybrid::oltp::OltpHybridConfig;
-use qaexchange::exchange::{AccountManager, InstrumentRegistry, TradeGateway};
-use qaexchange::exchange::order_router::{OrderRouter, SubmitOrderRequest};
+use qaexchange::core::account_ext::{AccountType, OpenAccountRequest};
 use qaexchange::exchange::instrument_registry::InstrumentInfo;
-use qaexchange::core::account_ext::{OpenAccountRequest, AccountType};
+use qaexchange::exchange::order_router::{OrderRouter, SubmitOrderRequest};
+use qaexchange::exchange::{AccountManager, InstrumentRegistry, TradeGateway};
 use qaexchange::matching::engine::ExchangeMatchingEngine;
 use qaexchange::notification::broker::NotificationBroker;
+use qaexchange::storage::hybrid::oltp::OltpHybridConfig;
+use qaexchange::storage::subscriber::{StorageSubscriber, StorageSubscriberConfig};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
@@ -42,9 +42,9 @@ async fn main() {
             memtable_size_bytes: 64 * 1024 * 1024,
             estimated_entry_size: 256,
         },
-        batch_size: 100,           // 批量 100 条
-        batch_timeout_ms: 10,      // 10ms 超时
-        buffer_size: 10000,        // 缓冲 10K 条
+        batch_size: 100,      // 批量 100 条
+        batch_timeout_ms: 10, // 10ms 超时
+        buffer_size: 10000,   // 缓冲 10K 条
     };
 
     let (subscriber, storage_sender, _stats) = StorageSubscriber::new(storage_config);
@@ -99,7 +99,7 @@ async fn main() {
     println!("👤 Step 3: 开户并注册合约");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    use qaexchange::exchange::instrument_registry::{InstrumentType, InstrumentStatus};
+    use qaexchange::exchange::instrument_registry::{InstrumentStatus, InstrumentType};
     let mut info = InstrumentInfo::new(
         "IF2501".to_string(),
         "沪深300股指期货2501".to_string(),
@@ -107,9 +107,12 @@ async fn main() {
         "CFFEX".to_string(),
     );
     info.status = InstrumentStatus::Active;
-    instrument_registry.register(info).expect("Failed to register instrument");
+    instrument_registry
+        .register(info)
+        .expect("Failed to register instrument");
 
-    matching_engine.register_instrument("IF2501".to_string(), 3800.0)
+    matching_engine
+        .register_instrument("IF2501".to_string(), 3800.0)
         .expect("Register instrument failed");
 
     let open_req = OpenAccountRequest {
@@ -120,7 +123,9 @@ async fn main() {
         account_type: AccountType::Individual,
     };
 
-    let account_id = account_mgr.open_account(open_req).expect("Open account failed");
+    let account_id = account_mgr
+        .open_account(open_req)
+        .expect("Open account failed");
 
     println!("✅ 账户和合约注册完成\n");
 
@@ -151,17 +156,9 @@ async fn main() {
         latencies.push(elapsed);
 
         if response.success {
-            println!(
-                "✅ 订单 #{} 提交成功 (延迟: {:?})",
-                i + 1,
-                elapsed
-            );
+            println!("✅ 订单 #{} 提交成功 (延迟: {:?})", i + 1, elapsed);
         } else {
-            println!(
-                "❌ 订单 #{} 提交失败: {:?}",
-                i + 1,
-                response.error_message
-            );
+            println!("❌ 订单 #{} 提交失败: {:?}", i + 1, response.error_message);
         }
     }
 

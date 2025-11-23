@@ -1,10 +1,10 @@
 //! iceoryx2 订阅者实现
 
-use super::{IpcConfig, IpcNotification, IpcMarketData, make_service_name};
-use iceoryx2::prelude::*;
+use super::{make_service_name, IpcConfig, IpcMarketData, IpcNotification};
 use iceoryx2::port::subscriber::Subscriber;
-use std::sync::Arc;
+use iceoryx2::prelude::*;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
 /// iceoryx2 订阅者
 pub struct IceoryxSubscriber<T: Copy + std::fmt::Debug> {

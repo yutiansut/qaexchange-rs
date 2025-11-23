@@ -1,7 +1,7 @@
 //! 节点角色管理
 
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// 节点角色
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

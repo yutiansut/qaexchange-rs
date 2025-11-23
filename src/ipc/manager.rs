@@ -5,8 +5,8 @@
 #[cfg(feature = "iceoryx2")]
 use super::publisher::{MarketDataPublisher, NotificationPublisher};
 use super::{IpcConfig, IpcMarketData, IpcNotification};
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// iceoryx2 管理器
 pub struct IceoryxManager {
@@ -57,7 +57,10 @@ impl IceoryxManager {
         self.market_data_publisher = Some(Arc::new(publisher));
 
         if let Some(ref publisher) = self.market_data_publisher {
-            log::info!("✅ Market data publisher started (service: {})", publisher.service_name());
+            log::info!(
+                "✅ Market data publisher started (service: {})",
+                publisher.service_name()
+            );
         }
 
         Ok(())
@@ -76,7 +79,10 @@ impl IceoryxManager {
         self.notification_publisher = Some(Arc::new(publisher));
 
         if let Some(ref publisher) = self.notification_publisher {
-            log::info!("✅ Notification publisher started (service: {})", publisher.service_name());
+            log::info!(
+                "✅ Notification publisher started (service: {})",
+                publisher.service_name()
+            );
         }
 
         Ok(())
@@ -161,10 +167,16 @@ impl IceoryxManager {
         let (md_subs, notif_subs) = self.get_subscriber_counts();
 
         log::info!("📊 iceoryx2 Statistics:");
-        log::info!("  Market Data: {} messages published, {} subscribers",
-            market_data_count, md_subs);
-        log::info!("  Notifications: {} messages published, {} subscribers",
-            notification_count, notif_subs);
+        log::info!(
+            "  Market Data: {} messages published, {} subscribers",
+            market_data_count,
+            md_subs
+        );
+        log::info!(
+            "  Notifications: {} messages published, {} subscribers",
+            notification_count,
+            notif_subs
+        );
     }
 }
 

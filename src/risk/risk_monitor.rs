@@ -4,10 +4,10 @@
 
 use crate::exchange::AccountManager;
 use crate::ExchangeError;
-use std::sync::Arc;
-use serde::{Deserialize, Serialize};
 use chrono::Local;
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// 风险等级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,7 +121,8 @@ impl RiskMonitor {
     pub fn get_risk_accounts(&self, risk_level_filter: Option<RiskLevel>) -> Vec<RiskAccount> {
         let accounts = self.account_mgr.get_all_accounts();
 
-        accounts.iter()
+        accounts
+            .iter()
             .filter_map(|account| {
                 let mut acc = account.write();
 
@@ -181,11 +182,13 @@ impl RiskMonitor {
             0.0
         };
 
-        let high_risk_count = risk_accounts.iter()
+        let high_risk_count = risk_accounts
+            .iter()
             .filter(|acc| matches!(acc.risk_level, RiskLevel::High | RiskLevel::Critical))
             .count();
 
-        let critical_risk_count = risk_accounts.iter()
+        let critical_risk_count = risk_accounts
+            .iter()
             .filter(|acc| matches!(acc.risk_level, RiskLevel::Critical))
             .count();
 
@@ -209,7 +212,9 @@ impl RiskMonitor {
         instruments_closed: Vec<String>,
         remark: Option<String>,
     ) -> LiquidationRecord {
-        let seq = self.liquidation_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let seq = self
+            .liquidation_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let now = Local::now();
 
         let record = LiquidationRecord {
@@ -230,8 +235,12 @@ impl RiskMonitor {
             .or_insert_with(Vec::new)
             .push(record.clone());
 
-        log::warn!("Liquidation recorded: user={}, loss={}, record_id={}",
-            user_id, record.total_loss, record.record_id);
+        log::warn!(
+            "Liquidation recorded: user={}, loss={}, record_id={}",
+            user_id,
+            record.total_loss,
+            record.record_id
+        );
 
         record
     }
@@ -262,7 +271,7 @@ impl RiskMonitor {
             .into_iter()
             .filter(|record| {
                 record.liquidation_time.as_str() >= start_date
-                && record.liquidation_time.as_str() <= end_date
+                    && record.liquidation_time.as_str() <= end_date
             })
             .collect()
     }
@@ -279,8 +288,8 @@ impl RiskMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::account_ext::{AccountType, OpenAccountRequest};
     use crate::exchange::AccountManager;
-    use crate::core::account_ext::{OpenAccountRequest, AccountType};
 
     #[test]
     fn test_risk_level_from_ratio() {
@@ -299,7 +308,7 @@ mod tests {
         // 开户
         let req = OpenAccountRequest {
             user_id: "test_user".to_string(),
-            account_id: Some("test_user".to_string()),  // 使用固定account_id
+            account_id: Some("test_user".to_string()), // 使用固定account_id
             account_name: "Test User".to_string(),
             init_cash: 100000.0,
             account_type: AccountType::Individual,
@@ -310,7 +319,7 @@ mod tests {
         // 获取风险账户
         let risk_accounts = risk_monitor.get_risk_accounts(None);
         assert_eq!(risk_accounts.len(), 1);
-        assert_eq!(risk_accounts[0].user_id, "test_user");  // user_id字段在RiskAccountInfo中实际存储的是account_id
+        assert_eq!(risk_accounts[0].user_id, "test_user"); // user_id字段在RiskAccountInfo中实际存储的是account_id
         assert_eq!(risk_accounts[0].risk_level, RiskLevel::Low);
 
         // 获取保证金汇总

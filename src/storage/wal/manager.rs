@@ -6,22 +6,22 @@
 // - 恢复速度: > 1GB/s
 
 use super::record::{WalEntry, WalRecord};
-use std::fs::{File, OpenOptions};
-use std::io::{Write, BufWriter, Read, BufReader, Seek, SeekFrom};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
-use std::path::{Path, PathBuf};
 use rkyv::Deserialize;
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// WAL 文件 Header
 #[derive(Debug, Clone)]
 struct WalFileHeader {
-    magic: [u8; 8],           // "QAXWAL01"
+    magic: [u8; 8], // "QAXWAL01"
     version: u32,
     start_sequence: u64,
     timestamp: i64,
-    _reserved: [u8; 100],     // 保留字段，总共 128 字节
+    _reserved: [u8; 100], // 保留字段，总共 128 字节
 }
 
 impl WalFileHeader {
@@ -79,7 +79,7 @@ pub struct WalManager {
     current_file: Arc<Mutex<BufWriter<File>>>,
     current_sequence: Arc<AtomicU64>,
     base_path: String,
-    max_file_size: u64,  // 单个 WAL 文件最大 1GB
+    max_file_size: u64, // 单个 WAL 文件最大 1GB
     current_file_path: Arc<Mutex<String>>,
     current_file_size: Arc<AtomicU64>,
 }
@@ -118,7 +118,7 @@ impl WalManager {
             current_file: Arc::new(Mutex::new(BufWriter::new(file))),
             current_sequence: Arc::new(AtomicU64::new(sequence)),
             base_path: base_path.to_string(),
-            max_file_size: 1_000_000_000,  // 1GB
+            max_file_size: 1_000_000_000, // 1GB
             current_file_path: Arc::new(Mutex::new(file_path)),
             current_file_size: Arc::new(AtomicU64::new(current_size)),
         }
@@ -162,10 +162,7 @@ impl WalManager {
         }
 
         // 打开最新文件用于追加
-        let file = OpenOptions::new()
-            .append(true)
-            .open(latest_file)
-            .unwrap();
+        let file = OpenOptions::new().append(true).open(latest_file).unwrap();
 
         let current_size = file.metadata().unwrap().len();
 
@@ -187,9 +184,7 @@ impl WalManager {
             return Ok(files);
         }
 
-        for entry in std::fs::read_dir(base_path)
-            .map_err(|e| format!("Read dir failed: {}", e))?
-        {
+        for entry in std::fs::read_dir(base_path).map_err(|e| format!("Read dir failed: {}", e))? {
             let entry = entry.map_err(|e| format!("Read entry failed: {}", e))?;
             let path = entry.path();
 
@@ -217,10 +212,9 @@ impl WalManager {
         let length = bytes.len() as u32;
 
         // 检查文件大小，是否需要滚动
-        let current_size = self.current_file_size.fetch_add(
-            (4 + length) as u64,
-            Ordering::Relaxed
-        );
+        let current_size = self
+            .current_file_size
+            .fetch_add((4 + length) as u64, Ordering::Relaxed);
 
         if current_size > self.max_file_size {
             self.rotate_file()?;
@@ -240,7 +234,8 @@ impl WalManager {
         file.flush()
             .map_err(|e| format!("WAL flush failed: {}", e))?;
 
-        file.get_mut().sync_all()
+        file.get_mut()
+            .sync_all()
             .map_err(|e| format!("WAL sync failed: {}", e))?;
 
         Ok(sequence)
@@ -271,16 +266,15 @@ impl WalManager {
             file.write_all(&bytes)
                 .map_err(|e| format!("WAL batch write failed: {}", e))?;
 
-            self.current_file_size.fetch_add(
-                (4 + length) as u64,
-                Ordering::Relaxed
-            );
+            self.current_file_size
+                .fetch_add((4 + length) as u64, Ordering::Relaxed);
         }
 
         // 批量 fsync（只 fsync 一次）
         file.flush()
             .map_err(|e| format!("WAL batch flush failed: {}", e))?;
-        file.get_mut().sync_all()
+        file.get_mut()
+            .sync_all()
             .map_err(|e| format!("WAL batch sync failed: {}", e))?;
 
         Ok(sequences)
@@ -294,8 +288,7 @@ impl WalManager {
         let files = self.list_wal_files()?;
 
         for file_path in files {
-            let mut file = File::open(&file_path)
-                .map_err(|e| format!("Open WAL failed: {}", e))?;
+            let mut file = File::open(&file_path).map_err(|e| format!("Open WAL failed: {}", e))?;
 
             // 读取 Header (128 bytes)
             let mut header_buf = vec![0u8; 128];
@@ -311,7 +304,7 @@ impl WalManager {
                 // 读取长度前缀
                 let mut len_buf = [0u8; 4];
                 match reader.read_exact(&mut len_buf) {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                     Err(e) => return Err(format!("Read length failed: {}", e)),
                 }
@@ -320,14 +313,16 @@ impl WalManager {
 
                 // 读取条目数据
                 let mut entry_buf = vec![0u8; length];
-                reader.read_exact(&mut entry_buf)
+                reader
+                    .read_exact(&mut entry_buf)
                     .map_err(|e| format!("Read entry data failed: {}", e))?;
 
                 // 反序列化（零拷贝）
                 let archived = WalEntry::from_bytes(&entry_buf)?;
 
                 // 转换为 owned
-                let entry: WalEntry = archived.deserialize(&mut rkyv::Infallible)
+                let entry: WalEntry = archived
+                    .deserialize(&mut rkyv::Infallible)
                     .map_err(|e| format!("Deserialize failed: {:?}", e))?;
 
                 // 验证 CRC32
@@ -380,7 +375,7 @@ impl WalManager {
         // 替换当前文件
         *self.current_file.lock() = BufWriter::new(file);
         *self.current_file_path.lock() = new_file_path.clone();
-        self.current_file_size.store(128, Ordering::Relaxed);  // Header size
+        self.current_file_size.store(128, Ordering::Relaxed); // Header size
 
         log::info!("Rotated to new WAL file: {}", new_file_path);
 
@@ -390,8 +385,8 @@ impl WalManager {
     fn list_wal_files(&self) -> Result<Vec<String>, String> {
         let mut files = Vec::new();
 
-        for entry in std::fs::read_dir(&self.base_path)
-            .map_err(|e| format!("Read dir failed: {}", e))?
+        for entry in
+            std::fs::read_dir(&self.base_path).map_err(|e| format!("Read dir failed: {}", e))?
         {
             let entry = entry.map_err(|e| format!("Read entry failed: {}", e))?;
             let path = entry.path();
@@ -494,7 +489,8 @@ mod tests {
             count += 1;
             assert!(entry.verify_crc32());
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(count, 10);
     }
@@ -509,7 +505,8 @@ mod tests {
             wal.append(WalRecord::Checkpoint {
                 sequence: i,
                 timestamp: 12345,
-            }).unwrap();
+            })
+            .unwrap();
         }
 
         // 验证文件存在
@@ -605,12 +602,22 @@ mod tests {
         println!("WAL 批量写入性能:");
         println!("  批次大小: {}", batch_size);
         println!("  耗时: {:?}", elapsed);
-        println!("  吞吐量: {:.0} entries/s (生产环境目标 > 100,000 entries/s)", throughput);
-        println!("  平均延迟: {:.1} μs/entry", elapsed.as_micros() as f64 / batch_size as f64);
+        println!(
+            "  吞吐量: {:.0} entries/s (生产环境目标 > 100,000 entries/s)",
+            throughput
+        );
+        println!(
+            "  平均延迟: {:.1} μs/entry",
+            elapsed.as_micros() as f64 / batch_size as f64
+        );
 
         // 验证吞吐量 > 10K entries/s (基础目标)
         // 生产环境使用 SSD + 更大批次 + 并行写入可达到 > 100K entries/s
-        assert!(throughput > 10_000.0, "Throughput {:.0} entries/s below 10K minimum", throughput);
+        assert!(
+            throughput > 10_000.0,
+            "Throughput {:.0} entries/s below 10K minimum",
+            throughput
+        );
 
         // 打印性能报告
         if throughput > 100_000.0 {

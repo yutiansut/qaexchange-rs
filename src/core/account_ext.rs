@@ -73,9 +73,10 @@ impl AccountExt for QA_Account {
         }
 
         if self.accounts.risk_ratio > 1.0 {
-            return Err(ExchangeError::RiskCheckFailed(
-                format!("Risk ratio too high: {}", self.accounts.risk_ratio),
-            ));
+            return Err(ExchangeError::RiskCheckFailed(format!(
+                "Risk ratio too high: {}",
+                self.accounts.risk_ratio
+            )));
         }
 
         Ok(())

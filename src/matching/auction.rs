@@ -77,13 +77,15 @@ impl AuctionCalculator {
 
             // 计算在该价格下能成交的买卖量
             // 买方：价格 >= auction_price 的订单可以成交
-            let buy_volume: f64 = buy_orders.iter()
+            let buy_volume: f64 = buy_orders
+                .iter()
                 .filter(|(p, _)| *p >= price)
                 .map(|(_, v)| v)
                 .sum();
 
             // 卖方：价格 <= auction_price 的订单可以成交
-            let sell_volume: f64 = sell_orders.iter()
+            let sell_volume: f64 = sell_orders
+                .iter()
                 .filter(|(p, _)| *p <= price)
                 .map(|(_, v)| v)
                 .sum();
@@ -101,12 +103,14 @@ impl AuctionCalculator {
         }
 
         // 3. 选择成交量最大的价格
-        let max_volume = candidates.iter()
+        let max_volume = candidates
+            .iter()
             .map(|(_, vol, _, _)| *vol)
             .fold(f64::NEG_INFINITY, f64::max);
 
         // 筛选出成交量最大的价格
-        let mut best_candidates: Vec<_> = candidates.into_iter()
+        let mut best_candidates: Vec<_> = candidates
+            .into_iter()
             .filter(|(_, vol, _, _)| (*vol - max_volume).abs() < 1e-6)
             .collect();
 
@@ -133,12 +137,14 @@ impl AuctionCalculator {
         };
 
         // 5. 计算最终成交结果
-        let buy_volume: f64 = buy_orders.iter()
+        let buy_volume: f64 = buy_orders
+            .iter()
             .filter(|(p, _)| *p >= auction_price)
             .map(|(_, v)| v)
             .sum();
 
-        let sell_volume: f64 = sell_orders.iter()
+        let sell_volume: f64 = sell_orders
+            .iter()
             .filter(|(p, _)| *p <= auction_price)
             .map(|(_, v)| v)
             .sum();
@@ -161,15 +167,9 @@ mod tests {
 
     #[test]
     fn test_auction_price_calculation() {
-        let buy_orders = vec![
-            (100.0, 1000.0),
-            (99.0, 500.0),
-        ];
+        let buy_orders = vec![(100.0, 1000.0), (99.0, 500.0)];
 
-        let sell_orders = vec![
-            (98.0, 800.0),
-            (97.0, 200.0),
-        ];
+        let sell_orders = vec![(98.0, 800.0), (97.0, 200.0)];
 
         let result = AuctionCalculator::calculate_auction_price(&buy_orders, &sell_orders);
         assert!(result.is_some());
@@ -194,15 +194,9 @@ mod tests {
         // 买单：100元1000手，99元500手
         // 卖单：98元800手，97元200手
         // 在97-100之间，98元能成交1000手（所有卖单），成交量最大
-        let buy_orders = vec![
-            (100.0, 1000.0),
-            (99.0, 500.0),
-        ];
+        let buy_orders = vec![(100.0, 1000.0), (99.0, 500.0)];
 
-        let sell_orders = vec![
-            (98.0, 800.0),
-            (97.0, 200.0),
-        ];
+        let sell_orders = vec![(98.0, 800.0), (97.0, 200.0)];
 
         let result = AuctionCalculator::calculate_auction_price(&buy_orders, &sell_orders).unwrap();
 
@@ -216,15 +210,15 @@ mod tests {
         // 测试参考价tie-breaking
         // 构造一个场景：多个价格成交量相同，选择最接近参考价的
         let buy_orders = vec![
-            (102.0, 100.0),  // 买单：102元100手
-            (100.0, 50.0),   // 买单：100元50手
-            (98.0, 100.0),   // 买单：98元100手
+            (102.0, 100.0), // 买单：102元100手
+            (100.0, 50.0),  // 买单：100元50手
+            (98.0, 100.0),  // 买单：98元100手
         ];
 
         let sell_orders = vec![
-            (98.0, 100.0),   // 卖单：98元100手
-            (100.0, 50.0),   // 卖单：100元50手
-            (102.0, 100.0),  // 卖单：102元100手
+            (98.0, 100.0),  // 卖单：98元100手
+            (100.0, 50.0),  // 卖单：100元50手
+            (102.0, 100.0), // 卖单：102元100手
         ];
 
         // 在98元：买方250手(所有订单)，卖方100手，成交100手
@@ -235,7 +229,8 @@ mod tests {
             &buy_orders,
             &sell_orders,
             Some(100.0),
-        ).unwrap();
+        )
+        .unwrap();
 
         // 应该选择100元（最接近参考价且成交量最大）
         assert!((result.auction_price - 100.0).abs() < 0.1);

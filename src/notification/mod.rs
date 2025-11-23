@@ -81,33 +81,33 @@
 //! }
 //! ```
 
-pub mod message;
 pub mod broker;
 pub mod gateway;
+pub mod message;
 
 // 导出核心类型
 pub use message::{
-    Notification,
-    NotificationType,
-    NotificationPayload,
-    // 订单相关
-    OrderAcceptedNotify,
-    OrderRejectedNotify,
-    OrderPartiallyFilledNotify,
-    OrderFilledNotify,
-    OrderCanceledNotify,
-    // 成交相关
-    TradeExecutedNotify,
     // 账户相关
     AccountUpdateNotify,
+    MarginCallNotify,
+    Notification,
+    NotificationPayload,
+    NotificationType,
+    // 订单相关
+    OrderAcceptedNotify,
+    OrderCanceledNotify,
+    OrderFilledNotify,
+    OrderPartiallyFilledNotify,
+    OrderRejectedNotify,
     // 持仓相关
     PositionUpdateNotify,
     // 风控相关
     RiskAlertNotify,
-    MarginCallNotify,
     // 系统相关
     SystemNoticeNotify,
+    // 成交相关
+    TradeExecutedNotify,
 };
 
-pub use broker::{NotificationBroker, BrokerStatsSnapshot};
-pub use gateway::{NotificationGateway, SessionInfo, GatewayStatsSnapshot};
+pub use broker::{BrokerStatsSnapshot, NotificationBroker};
+pub use gateway::{GatewayStatsSnapshot, NotificationGateway, SessionInfo};

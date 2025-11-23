@@ -1,8 +1,8 @@
 //! 配置管理模块
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExchangeConfig {
@@ -174,22 +174,54 @@ impl Default for IceoryxConfig {
 }
 
 // 默认值函数
-fn default_buffer_size() -> usize { 1000 }
-fn default_flush_interval() -> u64 { 10 }
-fn default_batch_size() -> usize { 1000 }
-fn default_snapshot_interval() -> u64 { 1000 }
-fn default_ws_batch_size() -> usize { 100 }
-fn default_queue_threshold() -> usize { 500 }
-fn default_true() -> bool { true }
-fn default_false() -> bool { false }
-fn default_low_queue_limit() -> usize { 100 }
-fn default_critical_threshold() -> f64 { 1_000_000.0 }
-fn default_memtable_size() -> usize { 64 }
-fn default_entry_size() -> usize { 256 }
-fn default_service_prefix() -> String { "qaexchange".to_string() }
-fn default_max_subscribers() -> usize { 1000 }
-fn default_queue_capacity() -> usize { 1024 }
-fn default_max_message_size() -> usize { 4096 }
+fn default_buffer_size() -> usize {
+    1000
+}
+fn default_flush_interval() -> u64 {
+    10
+}
+fn default_batch_size() -> usize {
+    1000
+}
+fn default_snapshot_interval() -> u64 {
+    1000
+}
+fn default_ws_batch_size() -> usize {
+    100
+}
+fn default_queue_threshold() -> usize {
+    500
+}
+fn default_true() -> bool {
+    true
+}
+fn default_false() -> bool {
+    false
+}
+fn default_low_queue_limit() -> usize {
+    100
+}
+fn default_critical_threshold() -> f64 {
+    1_000_000.0
+}
+fn default_memtable_size() -> usize {
+    64
+}
+fn default_entry_size() -> usize {
+    256
+}
+fn default_service_prefix() -> String {
+    "qaexchange".to_string()
+}
+fn default_max_subscribers() -> usize {
+    1000
+}
+fn default_queue_capacity() -> usize {
+    1024
+}
+fn default_max_message_size() -> usize {
+    4096
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -262,8 +294,7 @@ impl ExchangeConfig {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let content = fs::read_to_string(path.as_ref())
             .map_err(|e| format!("Failed to read config file: {}", e))?;
-        toml::from_str(&content)
-            .map_err(|e| format!("Failed to parse config file: {}", e))
+        toml::from_str(&content).map_err(|e| format!("Failed to parse config file: {}", e))
     }
 
     pub fn load_default() -> Result<Self, String> {

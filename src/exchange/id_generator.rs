@@ -98,9 +98,9 @@ mod tests {
         let generator = ExchangeIdGenerator::new();
 
         // 下单、撤单、成交都用同一个序列（模拟事件流）
-        let order_seq = generator.next_sequence("SHFE.cu2501");  // 下单
+        let order_seq = generator.next_sequence("SHFE.cu2501"); // 下单
         let cancel_seq = generator.next_sequence("SHFE.cu2501"); // 撤单
-        let trade_seq = generator.next_sequence("SHFE.cu2501");  // 成交
+        let trade_seq = generator.next_sequence("SHFE.cu2501"); // 成交
 
         // 应该形成严格递增的事件流
         assert_eq!(order_seq, 1);

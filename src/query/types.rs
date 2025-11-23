@@ -1,6 +1,6 @@
 // 查询引擎类型定义
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// 查询请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,14 +72,14 @@ pub struct Filter {
 /// 过滤操作符
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FilterOp {
-    Eq,      // ==
-    Ne,      // !=
-    Gt,      // >
-    Gte,     // >=
-    Lt,      // <
-    Lte,     // <=
-    In,      // IN
-    NotIn,   // NOT IN
+    Eq,    // ==
+    Ne,    // !=
+    Gt,    // >
+    Gte,   // >=
+    Lt,    // <
+    Lte,   // <=
+    In,    // IN
+    NotIn, // NOT IN
 }
 
 /// 过滤值

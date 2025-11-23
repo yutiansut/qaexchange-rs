@@ -6,13 +6,12 @@
 //! 3. 高效序列化 - serde 零成本序列化
 //! 4. 零拷贝序列化 - rkyv 支持零拷贝反序列化
 
-use serde::{Deserialize, Serialize};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// 通知消息（内部传递，使用Arc避免克隆）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct Notification {
     /// 消息ID（全局唯一，用于去重）
@@ -152,14 +151,26 @@ impl Notification {
     pub fn from_archived(archived: &ArchivedNotification) -> Result<Self, String> {
         use rkyv::Deserialize;
         let mut deserializer = rkyv::de::deserializers::SharedDeserializeMap::new();
-        archived.deserialize(&mut deserializer)
+        archived
+            .deserialize(&mut deserializer)
             .map_err(|e| format!("Failed to deserialize from archived: {:?}", e))
     }
 }
 
 /// 通知消息类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Archive,
+    RkyvSerialize,
+    RkyvDeserialize,
+)]
 #[archive(check_bytes)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationType {
@@ -176,7 +187,7 @@ pub enum NotificationType {
     TradeCanceled,
 
     // 账户相关（P2 - 中优先级）
-    AccountOpen,      // 账户开户（用于WAL恢复）
+    AccountOpen, // 账户开户（用于WAL恢复）
     AccountUpdate,
 
     // 持仓相关（P2 - 中优先级）
@@ -210,7 +221,10 @@ impl NotificationType {
             | Self::TradeExecuted => 1,
 
             // P2 - 中优先级（<100ms）
-            Self::AccountOpen | Self::AccountUpdate | Self::PositionUpdate | Self::PositionProfit => 2,
+            Self::AccountOpen
+            | Self::AccountUpdate
+            | Self::PositionUpdate
+            | Self::PositionProfit => 2,
 
             // P3 - 低优先级（<1s）
             Self::SystemNotice
@@ -282,8 +296,7 @@ impl NotificationType {
 }
 
 /// 通知消息负载（具体内容）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NotificationPayload {
@@ -306,8 +319,7 @@ pub enum NotificationPayload {
 // ============================================================================
 
 /// 订单已接受通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct OrderAcceptedNotify {
     /// 订单ID（账户生成的UUID）
@@ -342,8 +354,7 @@ pub struct OrderAcceptedNotify {
 }
 
 /// 订单已拒绝通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct OrderRejectedNotify {
     /// 订单ID
@@ -363,8 +374,7 @@ pub struct OrderRejectedNotify {
 }
 
 /// 订单部分成交通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct OrderPartiallyFilledNotify {
     /// 订单ID
@@ -390,8 +400,7 @@ pub struct OrderPartiallyFilledNotify {
 }
 
 /// 订单全部成交通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct OrderFilledNotify {
     /// 订单ID
@@ -414,8 +423,7 @@ pub struct OrderFilledNotify {
 }
 
 /// 订单已撤销通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct OrderCanceledNotify {
     /// 订单ID
@@ -439,8 +447,7 @@ pub struct OrderCanceledNotify {
 // ============================================================================
 
 /// 成交回报通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct TradeExecutedNotify {
     /// 成交ID（交易所生成）
@@ -482,8 +489,7 @@ pub struct TradeExecutedNotify {
 // ============================================================================
 
 /// 账户开户通知（用于WAL恢复）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct AccountOpenNotify {
     /// 账户ID (Phase 10: 新增)
@@ -506,8 +512,7 @@ pub struct AccountOpenNotify {
 }
 
 /// 账户更新通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct AccountUpdateNotify {
     /// 用户ID
@@ -543,8 +548,7 @@ pub struct AccountUpdateNotify {
 // ============================================================================
 
 /// 持仓更新通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct PositionUpdateNotify {
     /// 用户ID
@@ -580,8 +584,7 @@ pub struct PositionUpdateNotify {
 // ============================================================================
 
 /// 风控预警通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct RiskAlertNotify {
     /// 用户ID
@@ -607,8 +610,7 @@ pub struct RiskAlertNotify {
 }
 
 /// 追加保证金通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct MarginCallNotify {
     /// 用户ID
@@ -635,8 +637,7 @@ pub struct MarginCallNotify {
 // ============================================================================
 
 /// 系统通知
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
 pub struct SystemNoticeNotify {
     /// 通知标题
@@ -674,7 +675,16 @@ impl NotificationPayload {
         match self {
             Self::OrderAccepted(n) => format!(
                 r#"{{"type":"order_accepted","order_id":"{}","exchange_order_id":"{}","instrument_id":"{}","direction":"{}","offset":"{}","price":{},"volume":{},"order_type":"{}","frozen_margin":{},"timestamp":{}}}"#,
-                n.order_id, n.exchange_order_id, n.instrument_id, n.direction, n.offset, n.price, n.volume, n.order_type, n.frozen_margin, n.timestamp
+                n.order_id,
+                n.exchange_order_id,
+                n.instrument_id,
+                n.direction,
+                n.offset,
+                n.price,
+                n.volume,
+                n.order_type,
+                n.frozen_margin,
+                n.timestamp
             ),
             Self::OrderRejected(n) => format!(
                 r#"{{"type":"order_rejected","order_id":"{}","instrument_id":"{}","reason":"{}","error_code":{},"timestamp":{}}}"#,
@@ -682,11 +692,22 @@ impl NotificationPayload {
             ),
             Self::OrderPartiallyFilled(n) => format!(
                 r#"{{"type":"order_partially_filled","order_id":"{}","exchange_order_id":"{}","instrument_id":"{}","filled_volume":{},"remaining_volume":{},"average_price":{},"timestamp":{}}}"#,
-                n.order_id, n.exchange_order_id, n.instrument_id, n.filled_volume, n.remaining_volume, n.average_price, n.timestamp
+                n.order_id,
+                n.exchange_order_id,
+                n.instrument_id,
+                n.filled_volume,
+                n.remaining_volume,
+                n.average_price,
+                n.timestamp
             ),
             Self::OrderFilled(n) => format!(
                 r#"{{"type":"order_filled","order_id":"{}","exchange_order_id":"{}","instrument_id":"{}","filled_volume":{},"average_price":{},"timestamp":{}}}"#,
-                n.order_id, n.exchange_order_id, n.instrument_id, n.filled_volume, n.average_price, n.timestamp
+                n.order_id,
+                n.exchange_order_id,
+                n.instrument_id,
+                n.filled_volume,
+                n.average_price,
+                n.timestamp
             ),
             Self::OrderCanceled(n) => format!(
                 r#"{{"type":"order_canceled","order_id":"{}","exchange_order_id":"{}","instrument_id":"{}","reason":"{}","timestamp":{}}}"#,
@@ -694,7 +715,17 @@ impl NotificationPayload {
             ),
             Self::TradeExecuted(n) => format!(
                 r#"{{"type":"trade_executed","trade_id":"{}","order_id":"{}","exchange_order_id":"{}","instrument_id":"{}","direction":"{}","offset":"{}","price":{},"volume":{},"commission":{},"fill_type":"{}","timestamp":{}}}"#,
-                n.trade_id, n.order_id, n.exchange_order_id, n.instrument_id, n.direction, n.offset, n.price, n.volume, n.commission, n.fill_type, n.timestamp
+                n.trade_id,
+                n.order_id,
+                n.exchange_order_id,
+                n.instrument_id,
+                n.direction,
+                n.offset,
+                n.price,
+                n.volume,
+                n.commission,
+                n.fill_type,
+                n.timestamp
             ),
             Self::AccountOpen(n) => format!(
                 r#"{{"type":"account_open","account_id":"{}","user_id":"{}","account_name":"{}","init_cash":{},"account_type":{},"timestamp":{}}}"#,
@@ -702,15 +733,37 @@ impl NotificationPayload {
             ),
             Self::AccountUpdate(n) => format!(
                 r#"{{"type":"account_update","user_id":"{}","balance":{},"available":{},"frozen":{},"margin":{},"position_profit":{},"close_profit":{},"risk_ratio":{},"timestamp":{}}}"#,
-                n.user_id, n.balance, n.available, n.frozen, n.margin, n.position_profit, n.close_profit, n.risk_ratio, n.timestamp
+                n.user_id,
+                n.balance,
+                n.available,
+                n.frozen,
+                n.margin,
+                n.position_profit,
+                n.close_profit,
+                n.risk_ratio,
+                n.timestamp
             ),
             Self::PositionUpdate(n) => format!(
                 r#"{{"type":"position_update","user_id":"{}","instrument_id":"{}","volume_long":{},"volume_short":{},"cost_long":{},"cost_short":{},"profit_long":{},"profit_short":{},"timestamp":{}}}"#,
-                n.user_id, n.instrument_id, n.volume_long, n.volume_short, n.cost_long, n.cost_short, n.profit_long, n.profit_short, n.timestamp
+                n.user_id,
+                n.instrument_id,
+                n.volume_long,
+                n.volume_short,
+                n.cost_long,
+                n.cost_short,
+                n.profit_long,
+                n.profit_short,
+                n.timestamp
             ),
             Self::RiskAlert(n) => format!(
                 r#"{{"type":"risk_alert","user_id":"{}","alert_type":"{}","severity":"{}","message":"{}","risk_ratio":{},"suggestion":"{}","timestamp":{}}}"#,
-                n.user_id, n.alert_type, n.severity, n.message, n.risk_ratio, n.suggestion, n.timestamp
+                n.user_id,
+                n.alert_type,
+                n.severity,
+                n.message,
+                n.risk_ratio,
+                n.suggestion,
+                n.timestamp
             ),
             Self::MarginCall(n) => format!(
                 r#"{{"type":"margin_call","user_id":"{}","current_margin":{},"required_margin":{},"deadline":{},"message":"{}","timestamp":{}}}"#,

@@ -2,38 +2,38 @@
 //!
 //! 负责订单的接收、风控检查、路由到撮合引擎以及撤单处理
 
-use crate::core::{QAOrder, QAOrderExt, Order};
+use crate::core::{Order, QAOrder, QAOrderExt};
 use crate::exchange::{AccountManager, InstrumentRegistry, TradeGateway};
-use crate::matching::engine::{ExchangeMatchingEngine, InstrumentAsset};
-use crate::matching::{OrderDirection, OrderType, orders, Success, Failed};
-use crate::risk::pre_trade_check::{PreTradeCheck, OrderCheckRequest, RiskCheckResult};
 use crate::market::MarketDataBroadcaster;
+use crate::matching::engine::{ExchangeMatchingEngine, InstrumentAsset};
+use crate::matching::{orders, Failed, OrderDirection, OrderType, Success};
+use crate::risk::pre_trade_check::{OrderCheckRequest, PreTradeCheck, RiskCheckResult};
 use crate::ExchangeError;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use dashmap::DashMap;
-use parking_lot::{RwLock, Mutex};
 use chrono::Local;
+use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// 订单提交请求（交易层 - 只关心账户）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitOrderRequest {
-    pub account_id: String,     // 交易系统只关心账户ID
+    pub account_id: String, // 交易系统只关心账户ID
     pub instrument_id: String,
-    pub direction: String,      // BUY/SELL
-    pub offset: String,          // OPEN/CLOSE/CLOSETODAY
+    pub direction: String, // BUY/SELL
+    pub offset: String,    // OPEN/CLOSE/CLOSETODAY
     pub volume: f64,
     pub price: f64,
-    pub order_type: String,      // LIMIT/MARKET
+    pub order_type: String, // LIMIT/MARKET
 }
 
 /// 撤单请求（交易层 - 只关心账户）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelOrderRequest {
-    pub account_id: String,     // 交易系统只关心账户ID
+    pub account_id: String, // 交易系统只关心账户ID
     pub order_id: String,
 }
 
@@ -42,7 +42,7 @@ pub struct CancelOrderRequest {
 pub struct SubmitOrderResponse {
     pub success: bool,
     pub order_id: Option<String>,
-    pub status: Option<String>,  // 订单最终状态：submitted/filled/partially_filled/rejected
+    pub status: Option<String>, // 订单最终状态：submitted/filled/partially_filled/rejected
     pub error_message: Option<String>,
     pub error_code: Option<u32>,
 }
@@ -86,8 +86,8 @@ struct OrderRouteInfo {
     status: OrderStatus,
     submit_time: i64,
     update_time: i64,
-    filled_volume: f64,  // 已成交数量
-    qa_order_id: String, // qars 内部订单ID (用于 receive_deal_sim)
+    filled_volume: f64,                    // 已成交数量
+    qa_order_id: String,                   // qars 内部订单ID (用于 receive_deal_sim)
     matching_engine_order_id: Option<u64>, // 撮合引擎订单ID (用于撤单)
 }
 
@@ -151,7 +151,6 @@ pub struct OrderRouter {
     trade_amount: parking_lot::RwLock<f64>,
 
     // ========== 性能优化字段 ==========
-
     /// 快照频率控制：记录每个合约的上次快照时间
     last_snapshot_time: Arc<DashMap<String, Instant>>,
 
@@ -196,10 +195,10 @@ impl OrderRouter {
             trade_amount: parking_lot::RwLock::new(0.0),
             // 性能优化字段初始化
             last_snapshot_time: Arc::new(DashMap::new()),
-            snapshot_interval: Duration::from_secs(1),  // 默认1秒
+            snapshot_interval: Duration::from_secs(1), // 默认1秒
             tick_buffer: Arc::new(Mutex::new(Vec::with_capacity(1000))),
             flush_stop_signal: Arc::new(AtomicBool::new(false)),
-            priority_queue: None,  // 默认不启用
+            priority_queue: None, // 默认不启用
             priority_queue_enabled: AtomicBool::new(false),
         }
     }
@@ -219,15 +218,22 @@ impl OrderRouter {
     /// # 参数
     /// - `low_queue_limit`: 低优先级队列最大长度（默认100）
     /// - `critical_amount_threshold`: 大额订单阈值（默认1,000,000.0）
-    pub fn enable_priority_queue(&mut self, low_queue_limit: usize, critical_amount_threshold: f64) {
+    pub fn enable_priority_queue(
+        &mut self,
+        low_queue_limit: usize,
+        critical_amount_threshold: f64,
+    ) {
         let queue = Arc::new(crate::exchange::PriorityOrderQueue::new(
             low_queue_limit,
             critical_amount_threshold,
         ));
         self.priority_queue = Some(queue);
         self.priority_queue_enabled.store(true, Ordering::SeqCst);
-        log::info!("✅ Priority queue enabled (low_limit={}, threshold={:.2})",
-            low_queue_limit, critical_amount_threshold);
+        log::info!(
+            "✅ Priority queue enabled (low_limit={}, threshold={:.2})",
+            low_queue_limit,
+            critical_amount_threshold
+        );
     }
 
     /// 禁用优先级队列
@@ -274,10 +280,10 @@ impl OrderRouter {
             trade_amount: parking_lot::RwLock::new(0.0),
             // 性能优化字段初始化
             last_snapshot_time: Arc::new(DashMap::new()),
-            snapshot_interval: Duration::from_secs(1),  // 默认1秒
+            snapshot_interval: Duration::from_secs(1), // 默认1秒
             tick_buffer: Arc::new(Mutex::new(Vec::with_capacity(1000))),
             flush_stop_signal: Arc::new(AtomicBool::new(false)),
-            priority_queue: None,  // 默认不启用
+            priority_queue: None, // 默认不启用
             priority_queue_enabled: AtomicBool::new(false),
         }
     }
@@ -292,7 +298,11 @@ impl OrderRouter {
         self.submit_order_with_options(req, OrderSubmitOptions { force: true })
     }
 
-    fn submit_order_with_options(&self, req: SubmitOrderRequest, opts: OrderSubmitOptions) -> SubmitOrderResponse {
+    fn submit_order_with_options(
+        &self,
+        req: SubmitOrderRequest,
+        opts: OrderSubmitOptions,
+    ) -> SubmitOrderResponse {
         // 1. 生成订单ID
         let order_id = self.generate_order_id();
 
@@ -305,7 +315,7 @@ impl OrderRouter {
                 offset: req.offset.clone(),
                 volume: req.volume,
                 price: req.price,
-                limit_price: req.price,           // ✅ price 作为 limit_price
+                limit_price: req.price, // ✅ price 作为 limit_price
                 price_type: req.order_type.clone(), // ✅ order_type 作为 price_type
             };
 
@@ -335,7 +345,12 @@ impl OrderRouter {
                 }
             }
         } else {
-            log::warn!("⚠️  Force order submitted for account {} instrument {} volume {}", req.account_id, req.instrument_id, req.volume);
+            log::warn!(
+                "⚠️  Force order submitted for account {} instrument {} volume {}",
+                req.account_id,
+                req.instrument_id,
+                req.volume
+            );
         }
 
         // 3. 创建订单 (复用 qars QAOrder)
@@ -343,7 +358,7 @@ impl OrderRouter {
         let current_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         let order = QAOrder::new(
-            req.account_id.clone(),  // QAOrder 的第一个参数是 account_id
+            req.account_id.clone(), // QAOrder 的第一个参数是 account_id
             req.instrument_id.clone(),
             towards,
             "EXCHANGE".to_string(), // exchange_id
@@ -387,7 +402,9 @@ impl OrderRouter {
         if !opts.force && acc.money < required_funds {
             log::warn!(
                 "Insufficient funds (double-check): account={}, available={:.2}, required={:.2}",
-                req.account_id, acc.money, required_funds
+                req.account_id,
+                acc.money,
+                required_funds
             );
             return SubmitOrderResponse {
                 success: false,
@@ -415,7 +432,11 @@ impl OrderRouter {
         let qa_order_id = match qa_order_result {
             Ok(ref qa_order) => qa_order.order_id.clone(),
             Err(e) => {
-                log::warn!("Order rejected - insufficient funds/margin for account {}: {:?}", req.account_id, e);
+                log::warn!(
+                    "Order rejected - insufficient funds/margin for account {}: {:?}",
+                    req.account_id,
+                    e
+                );
                 return SubmitOrderResponse {
                     success: false,
                     order_id: Some(order_id),
@@ -428,7 +449,11 @@ impl OrderRouter {
 
         drop(acc); // 释放账户锁
 
-        log::debug!("Funds frozen for order {}, qars order_id: {}", order_id, qa_order_id);
+        log::debug!(
+            "Funds frozen for order {}, qars order_id: {}",
+            order_id,
+            qa_order_id
+        );
 
         // 4. 存储订单信息
         let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
@@ -439,10 +464,11 @@ impl OrderRouter {
             update_time: timestamp,
             filled_volume: 0.0,
             qa_order_id: qa_order_id.clone(), // 存储 qars 订单ID
-            matching_engine_order_id: None, // 撮合引擎订单ID (在 Accepted 事件中设置)
+            matching_engine_order_id: None,   // 撮合引擎订单ID (在 Accepted 事件中设置)
         };
 
-        self.orders.insert(order_id.clone(), Arc::new(RwLock::new(route_info)));
+        self.orders
+            .insert(order_id.clone(), Arc::new(RwLock::new(route_info)));
 
         // 5. 更新账户订单索引
         self.user_orders
@@ -457,8 +483,8 @@ impl OrderRouter {
             order_id.clone(),
             req.instrument_id.clone(),
             req.direction.clone(),
-            req.price,                // ✅ price 作为 limit_price
-            req.order_type.clone(),   // ✅ order_type 作为 price_type
+            req.price,              // ✅ price 作为 limit_price
+            req.order_type.clone(), // ✅ order_type 作为 price_type
         );
 
         // 7. 路由到撮合引擎
@@ -474,12 +500,20 @@ impl OrderRouter {
                         OrderStatus::PartiallyFilled => "partially_filled",
                         OrderStatus::Cancelled => "cancelled",
                         OrderStatus::Rejected => "rejected",
-                        _ => "submitted",  // Submitted, PendingRoute, PendingRisk
+                        _ => "submitted", // Submitted, PendingRoute, PendingRisk
                     };
-                    log::debug!("Order {} final status: {:?} -> {}", order_id, info.status, status_str);
+                    log::debug!(
+                        "Order {} final status: {:?} -> {}",
+                        order_id,
+                        info.status,
+                        status_str
+                    );
                     status_str
                 } else {
-                    log::warn!("Order {} not found in orders map when checking status", order_id);
+                    log::warn!(
+                        "Order {} not found in orders map when checking status",
+                        order_id
+                    );
                     "submitted"
                 };
 
@@ -519,18 +553,26 @@ impl OrderRouter {
         order_id: String,
     ) -> Result<(), ExchangeError> {
         // 获取订单簿
-        let orderbook = self.matching_engine.get_orderbook(instrument_id)
-            .ok_or_else(|| ExchangeError::MatchingError(
-                format!("Orderbook not found for instrument: {}", instrument_id)
-            ))?;
+        let orderbook = self
+            .matching_engine
+            .get_orderbook(instrument_id)
+            .ok_or_else(|| {
+                ExchangeError::MatchingError(format!(
+                    "Orderbook not found for instrument: {}",
+                    instrument_id
+                ))
+            })?;
 
         // 转换订单方向
         let direction = match order.direction.as_str() {
             "BUY" => OrderDirection::BUY,
             "SELL" => OrderDirection::SELL,
-            _ => return Err(ExchangeError::OrderError(
-                format!("Invalid direction: {}", order.direction)
-            )),
+            _ => {
+                return Err(ExchangeError::OrderError(format!(
+                    "Invalid direction: {}",
+                    order.direction
+                )))
+            }
         };
 
         // 创建撮合订单请求
@@ -547,7 +589,8 @@ impl OrderRouter {
 
         // 提交到订单簿
         let mut ob = orderbook.write();
-        let results = ob.process_order(match_request)
+        let results = ob
+            .process_order(match_request)
             .into_iter()
             .collect::<Vec<_>>();
         drop(ob); // 尽早释放锁
@@ -575,8 +618,12 @@ impl OrderRouter {
         let mut handled_accepted = false;
         let mut handled_trade = false; // 是否已处理成交事件（Filled/PartiallyFilled）
 
-        log::debug!("🔍 process_matching_results: order_id={}, user_id={}, results_count={}",
-            order_id, order.user_id, results.len());
+        log::debug!(
+            "🔍 process_matching_results: order_id={}, user_id={}, results_count={}",
+            order_id,
+            order.user_id,
+            results.len()
+        );
 
         for (idx, result) in results.into_iter().enumerate() {
             log::debug!("🔍   Result[{}]: {:?}", idx, result);
@@ -586,22 +633,40 @@ impl OrderRouter {
                         Success::Accepted { .. } => {
                             // 只处理第一个Accepted
                             if !handled_accepted {
-                                log::debug!("🔍     Processing Accepted event for order {}", order_id);
+                                log::debug!(
+                                    "🔍     Processing Accepted event for order {}",
+                                    order_id
+                                );
                                 self.handle_success_result(order_id, order, success)?;
                                 handled_accepted = true;
                             } else {
-                                log::debug!("🔍     Skipping duplicate Accepted event for order {}", order_id);
+                                log::debug!(
+                                    "🔍     Skipping duplicate Accepted event for order {}",
+                                    order_id
+                                );
                             }
                         }
-                        Success::Filled { order_id: match_order_id, opposite_order_id, .. }
-                        | Success::PartiallyFilled { order_id: match_order_id, opposite_order_id, .. } => {
+                        Success::Filled {
+                            order_id: match_order_id,
+                            opposite_order_id,
+                            ..
+                        }
+                        | Success::PartiallyFilled {
+                            order_id: match_order_id,
+                            opposite_order_id,
+                            ..
+                        } => {
                             // 处理成交事件
                             // qars 会返回两个事件：新订单成交 + 对手单成交
                             // 我们需要更新对手单的状态（如果它属于我们管理的订单）
 
                             if !handled_trade {
                                 // 第一个事件：新订单的成交
-                                log::debug!("🔍     Processing NEW order trade: order_id={}, opposite={}", match_order_id, opposite_order_id);
+                                log::debug!(
+                                    "🔍     Processing NEW order trade: order_id={}, opposite={}",
+                                    match_order_id,
+                                    opposite_order_id
+                                );
                                 self.handle_success_result(order_id, order, success.clone())?;
                                 handled_trade = true;
                             } else {
@@ -617,13 +682,23 @@ impl OrderRouter {
                                     log::debug!("🔍     Found opposite order {} in our orderbook, updating status", opposite_order_str);
 
                                     // 提取对手单信息用于处理
-                                    if let Some(opposite_info) = self.orders.get(&opposite_order_str) {
-                                        let opposite_order_data = opposite_info.read().order.clone();
+                                    if let Some(opposite_info) =
+                                        self.orders.get(&opposite_order_str)
+                                    {
+                                        let opposite_order_data =
+                                            opposite_info.read().order.clone();
                                         // 处理对手单的成交
-                                        self.handle_success_result(&opposite_order_str, &opposite_order_data, success)?;
+                                        self.handle_success_result(
+                                            &opposite_order_str,
+                                            &opposite_order_data,
+                                            success,
+                                        )?;
                                     }
                                 } else {
-                                    log::debug!("🔍     Opposite order {} not in our orderbook, skipping", opposite_order_str);
+                                    log::debug!(
+                                        "🔍     Opposite order {} not in our orderbook, skipping",
+                                        opposite_order_str
+                                    );
                                 }
                             }
                         }
@@ -692,7 +767,11 @@ impl OrderRouter {
                     order.volume_orign,
                 )?;
 
-                log::debug!("Order {} accepted, exchange_order_id={}", order_id, exchange_order_id);
+                log::debug!(
+                    "Order {} accepted, exchange_order_id={}",
+                    order_id,
+                    exchange_order_id
+                );
 
                 // 持久化订单簿tick数据（订单挂入导致bid/ask变化）
                 self.persist_orderbook_tick(&order.instrument_id)?;
@@ -700,9 +779,15 @@ impl OrderRouter {
                 // 广播订单簿更新（通知前端订单簿已变化）
                 if let Some(ref broadcaster) = self.market_broadcaster {
                     // 获取更新后的bid/ask价格用于广播
-                    if let Some(orderbook) = self.matching_engine.get_orderbook(&order.instrument_id) {
+                    if let Some(orderbook) =
+                        self.matching_engine.get_orderbook(&order.instrument_id)
+                    {
                         let ob = orderbook.read();
-                        let side = if order.direction == "BUY" { "bid" } else { "ask" };
+                        let side = if order.direction == "BUY" {
+                            "bid"
+                        } else {
+                            "ask"
+                        };
                         broadcaster.broadcast_orderbook_update(
                             order.instrument_id.clone(),
                             side.to_string(),
@@ -715,9 +800,22 @@ impl OrderRouter {
                 // 持久化订单簿快照（订单已进入订单簿）
                 self.persist_orderbook_snapshot(&order.instrument_id)?;
             }
-            Success::Filled { order_id: match_order_id, direction, order_type, price, volume, ts, opposite_order_id } => {
+            Success::Filled {
+                order_id: match_order_id,
+                direction,
+                order_type,
+                price,
+                volume,
+                ts,
+                opposite_order_id,
+            } => {
                 // 订单完全成交
-                log::info!("Order {} filled: price={}, volume={}", order_id, price, volume);
+                log::info!(
+                    "Order {} filled: price={}, volume={}",
+                    order_id,
+                    price,
+                    volume
+                );
 
                 // 更新订单状态和已成交量
                 if let Some(order_info) = self.orders.get(order_id) {
@@ -732,7 +830,11 @@ impl OrderRouter {
 
                 // 广播Tick成交数据
                 if let Some(ref broadcaster) = self.market_broadcaster {
-                    let direction_str = if order.direction == "BUY" { "buy" } else { "sell" };
+                    let direction_str = if order.direction == "BUY" {
+                        "buy"
+                    } else {
+                        "sell"
+                    };
                     broadcaster.broadcast_tick(
                         order.instrument_id.clone(),
                         price,
@@ -773,15 +875,34 @@ impl OrderRouter {
                     Some(opposite_order_id as i64),
                 )?;
 
-                log::debug!("Trade executed: trade_id={}, order_id={}, volume={}, price={}",
-                    trade_id, order_id, volume, price);
+                log::debug!(
+                    "Trade executed: trade_id={}, order_id={}, volume={}, price={}",
+                    trade_id,
+                    order_id,
+                    volume,
+                    price
+                );
 
                 // 从活动订单追踪中移除
-                self.risk_checker.remove_active_order(&order.user_id, order_id);
+                self.risk_checker
+                    .remove_active_order(&order.user_id, order_id);
             }
-            Success::PartiallyFilled { order_id: match_order_id, direction, order_type, price, volume, ts, opposite_order_id } => {
+            Success::PartiallyFilled {
+                order_id: match_order_id,
+                direction,
+                order_type,
+                price,
+                volume,
+                ts,
+                opposite_order_id,
+            } => {
                 // 订单部分成交
-                log::info!("Order {} partially filled: price={}, volume={}", order_id, price, volume);
+                log::info!(
+                    "Order {} partially filled: price={}, volume={}",
+                    order_id,
+                    price,
+                    volume
+                );
 
                 // 更新订单状态和累计成交量
                 if let Some(order_info) = self.orders.get(order_id) {
@@ -796,7 +917,11 @@ impl OrderRouter {
 
                 // 广播Tick成交数据
                 if let Some(ref broadcaster) = self.market_broadcaster {
-                    let direction_str = if order.direction == "BUY" { "buy" } else { "sell" };
+                    let direction_str = if order.direction == "BUY" {
+                        "buy"
+                    } else {
+                        "sell"
+                    };
                     broadcaster.broadcast_tick(
                         order.instrument_id.clone(),
                         price,
@@ -835,8 +960,13 @@ impl OrderRouter {
                     Some(opposite_order_id as i64),
                 )?;
 
-                log::debug!("Trade executed (partial): trade_id={}, order_id={}, volume={}, price={}",
-                    trade_id, order_id, volume, price);
+                log::debug!(
+                    "Trade executed (partial): trade_id={}, order_id={}, volume={}, price={}",
+                    trade_id,
+                    order_id,
+                    volume,
+                    price
+                );
             }
             Success::Cancelled { id, ts } => {
                 // 订单被撤销
@@ -852,12 +982,16 @@ impl OrderRouter {
                 // Phase 6: 使用新的 handle_cancel_accepted_new (交易所推送CANCEL_ACCEPTED回报)
                 self.trade_gateway.handle_cancel_accepted_new(
                     &order.instrument_id,
-                    id as i64,  // 使用撮合引擎返回的ID作为exchange_order_id
+                    id as i64, // 使用撮合引擎返回的ID作为exchange_order_id
                     &order.user_id,
                     order_id,
                 )?;
 
-                log::debug!("Order {} cancel accepted, exchange_order_id={}", order_id, id);
+                log::debug!(
+                    "Order {} cancel accepted, exchange_order_id={}",
+                    order_id,
+                    id
+                );
 
                 // 持久化订单簿tick数据（撤单导致bid/ask变化）
                 self.persist_orderbook_tick(&order.instrument_id)?;
@@ -865,25 +999,35 @@ impl OrderRouter {
                 // 广播订单簿更新（通知前端订单簿已变化）
                 if let Some(ref broadcaster) = self.market_broadcaster {
                     // 撤单后，该价格档位的挂单量减少或消失
-                    if let Some(orderbook) = self.matching_engine.get_orderbook(&order.instrument_id) {
+                    if let Some(orderbook) =
+                        self.matching_engine.get_orderbook(&order.instrument_id)
+                    {
                         let ob = orderbook.read();
-                        let side = if order.direction == "BUY" { "bid" } else { "ask" };
+                        let side = if order.direction == "BUY" {
+                            "bid"
+                        } else {
+                            "ask"
+                        };
 
                         // 获取撤单后该价格档位的剩余挂单量
                         let remaining_volume = if order.direction == "BUY" {
-                            ob.bid_queue.get_sorted_orders()
+                            ob.bid_queue
+                                .get_sorted_orders()
                                 .and_then(|orders| {
-                                    orders.iter()
+                                    orders
+                                        .iter()
                                         .find(|o| o.price == order.limit_price)
-                                        .map(|o| o.volume)  // 在闭包内 map 以复制值
+                                        .map(|o| o.volume) // 在闭包内 map 以复制值
                                 })
                                 .unwrap_or(0.0)
                         } else {
-                            ob.ask_queue.get_sorted_orders()
+                            ob.ask_queue
+                                .get_sorted_orders()
                                 .and_then(|orders| {
-                                    orders.iter()
+                                    orders
+                                        .iter()
                                         .find(|o| o.price == order.limit_price)
-                                        .map(|o| o.volume)  // 在闭包内 map 以复制值
+                                        .map(|o| o.volume) // 在闭包内 map 以复制值
                                 })
                                 .unwrap_or(0.0)
                         };
@@ -892,7 +1036,7 @@ impl OrderRouter {
                             order.instrument_id.clone(),
                             side.to_string(),
                             order.limit_price,
-                            remaining_volume,  // 0表示该档位已清空
+                            remaining_volume, // 0表示该档位已清空
                         );
                     }
                 }
@@ -901,11 +1045,22 @@ impl OrderRouter {
                 self.persist_orderbook_snapshot(&order.instrument_id)?;
 
                 // 从活动订单追踪中移除
-                self.risk_checker.remove_active_order(&order.user_id, order_id);
+                self.risk_checker
+                    .remove_active_order(&order.user_id, order_id);
             }
-            Success::Amended { id, price, volume, ts } => {
+            Success::Amended {
+                id,
+                price,
+                volume,
+                ts,
+            } => {
                 // 订单修改 (暂不处理，预留)
-                log::info!("Order {} amended: price={}, volume={}", order_id, price, volume);
+                log::info!(
+                    "Order {} amended: price={}, volume={}",
+                    order_id,
+                    price,
+                    volume
+                );
             }
         }
         Ok(())
@@ -914,32 +1069,34 @@ impl OrderRouter {
     /// 撤单
     pub fn cancel_order(&self, req: CancelOrderRequest) -> Result<(), ExchangeError> {
         // 1. 验证订单存在
-        let order_info = self.orders.get(&req.order_id)
-            .ok_or_else(|| ExchangeError::OrderError(
-                format!("Order not found: {}", req.order_id)
-            ))?;
+        let order_info = self.orders.get(&req.order_id).ok_or_else(|| {
+            ExchangeError::OrderError(format!("Order not found: {}", req.order_id))
+        })?;
 
         let mut info = order_info.write();
 
         // 2. 验证订单所有权
         if info.order.user_id != req.account_id {
             return Err(ExchangeError::OrderError(
-                "Order does not belong to this account".to_string()
+                "Order does not belong to this account".to_string(),
             ));
         }
 
         // 3. 检查订单状态是否可撤单
-        if !matches!(info.status, OrderStatus::Submitted | OrderStatus::PartiallyFilled) {
-            return Err(ExchangeError::OrderError(
-                format!("Order cannot be cancelled in status: {:?}", info.status)
-            ));
+        if !matches!(
+            info.status,
+            OrderStatus::Submitted | OrderStatus::PartiallyFilled
+        ) {
+            return Err(ExchangeError::OrderError(format!(
+                "Order cannot be cancelled in status: {:?}",
+                info.status
+            )));
         }
 
         // 4. 从撮合引擎撤单
-        let matching_engine_order_id = info.matching_engine_order_id
-            .ok_or_else(|| ExchangeError::OrderError(
-                "Matching engine order ID not found".to_string()
-            ))?;
+        let matching_engine_order_id = info.matching_engine_order_id.ok_or_else(|| {
+            ExchangeError::OrderError("Matching engine order ID not found".to_string())
+        })?;
 
         let instrument_id = info.order.instrument_id.clone();
         let direction_str = info.order.direction.clone();
@@ -952,9 +1109,12 @@ impl OrderRouter {
         let direction = match direction_str.as_str() {
             "BUY" => OrderDirection::BUY,
             "SELL" => OrderDirection::SELL,
-            _ => return Err(ExchangeError::OrderError(
-                format!("Invalid direction: {}", direction_str)
-            )),
+            _ => {
+                return Err(ExchangeError::OrderError(format!(
+                    "Invalid direction: {}",
+                    direction_str
+                )))
+            }
         };
 
         // 创建撤单请求
@@ -965,14 +1125,20 @@ impl OrderRouter {
         };
 
         // 获取订单簿
-        let orderbook = self.matching_engine.get_orderbook(&instrument_id)
-            .ok_or_else(|| ExchangeError::MatchingError(
-                format!("Orderbook not found for instrument: {}", instrument_id)
-            ))?;
+        let orderbook = self
+            .matching_engine
+            .get_orderbook(&instrument_id)
+            .ok_or_else(|| {
+                ExchangeError::MatchingError(format!(
+                    "Orderbook not found for instrument: {}",
+                    instrument_id
+                ))
+            })?;
 
         // 提交撤单请求到撮合引擎
         let mut ob = orderbook.write();
-        let results = ob.process_order(cancel_request)
+        let results = ob
+            .process_order(cancel_request)
             .into_iter()
             .collect::<Vec<_>>();
         drop(ob);
@@ -987,9 +1153,10 @@ impl OrderRouter {
                 }
                 Err(failed) => {
                     log::error!("Cancel order failed: {:?}", failed);
-                    return Err(ExchangeError::MatchingError(
-                        format!("Cancel order failed: {:?}", failed)
-                    ));
+                    return Err(ExchangeError::MatchingError(format!(
+                        "Cancel order failed: {:?}",
+                        failed
+                    )));
                 }
             }
         }
@@ -1000,13 +1167,16 @@ impl OrderRouter {
 
     /// 查询订单
     pub fn query_order(&self, order_id: &str) -> Option<Order> {
-        self.orders.get(order_id).map(|info| info.read().order.clone())
+        self.orders
+            .get(order_id)
+            .map(|info| info.read().order.clone())
     }
 
     /// 查询用户所有订单
     pub fn query_user_orders(&self, user_id: &str) -> Vec<Order> {
         if let Some(order_ids) = self.user_orders.get(user_id) {
-            order_ids.read()
+            order_ids
+                .read()
                 .iter()
                 .filter_map(|order_id| self.query_order(order_id))
                 .collect()
@@ -1021,19 +1191,27 @@ impl OrderRouter {
     }
 
     /// 更新订单状态 (由 TradeGateway 调用)
-    pub fn update_order_status(&self, order_id: &str, status: OrderStatus) -> Result<(), ExchangeError> {
-        let order_info = self.orders.get(order_id)
-            .ok_or_else(|| ExchangeError::OrderError(
-                format!("Order not found: {}", order_id)
-            ))?;
+    pub fn update_order_status(
+        &self,
+        order_id: &str,
+        status: OrderStatus,
+    ) -> Result<(), ExchangeError> {
+        let order_info = self
+            .orders
+            .get(order_id)
+            .ok_or_else(|| ExchangeError::OrderError(format!("Order not found: {}", order_id)))?;
 
         let mut info = order_info.write();
         info.status = status;
         info.update_time = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
 
         // 如果订单完成，从风控追踪中移除
-        if matches!(status, OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Rejected) {
-            self.risk_checker.remove_active_order(&info.order.user_id, order_id);
+        if matches!(
+            status,
+            OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Rejected
+        ) {
+            self.risk_checker
+                .remove_active_order(&info.order.user_id, order_id);
         }
 
         Ok(())
@@ -1049,10 +1227,10 @@ impl OrderRouter {
     /// 计算 towards (买卖方向 - 遵循 qars 定义)
     fn calculate_towards(&self, direction: &str, offset: &str) -> i32 {
         match (direction, offset) {
-            ("BUY", "OPEN") => 2,       // 买开 = 2 (qars 标准)
-            ("SELL", "OPEN") => -2,     // 卖开 = -2
-            ("BUY", "CLOSE") => 3,      // 买平 = 3
-            ("SELL", "CLOSE") => -3,    // 卖平 = -3 ✅
+            ("BUY", "OPEN") => 2,    // 买开 = 2 (qars 标准)
+            ("SELL", "OPEN") => -2,  // 卖开 = -2
+            ("BUY", "CLOSE") => 3,   // 买平 = 3
+            ("SELL", "CLOSE") => -3, // 卖平 = -3 ✅
             ("BUY", "CLOSETODAY") => 4,
             ("SELL", "CLOSETODAY") => -4,
             _ => 2, // 默认买开
@@ -1061,10 +1239,14 @@ impl OrderRouter {
 
     /// 获取活动订单数量
     pub fn get_active_order_count(&self) -> usize {
-        self.orders.iter()
+        self.orders
+            .iter()
             .filter(|entry| {
                 let status = entry.value().read().status;
-                matches!(status, OrderStatus::Submitted | OrderStatus::PartiallyFilled)
+                matches!(
+                    status,
+                    OrderStatus::Submitted | OrderStatus::PartiallyFilled
+                )
             })
             .count()
     }
@@ -1082,23 +1264,33 @@ impl OrderRouter {
     }
 
     /// 持久化Tick数据到WAL
-    fn persist_tick_data(&self, instrument_id: &str, price: f64, volume: f64) -> Result<(), ExchangeError> {
+    fn persist_tick_data(
+        &self,
+        instrument_id: &str,
+        price: f64,
+        volume: f64,
+    ) -> Result<(), ExchangeError> {
         if let Some(ref storage) = self.storage {
             use crate::storage::wal::record::WalRecord;
 
             // 获取订单簿中的买卖价
-            let (bid_price, ask_price) = if let Some(orderbook) = self.matching_engine.get_orderbook(instrument_id) {
-                let ob = orderbook.read();
-                let bid = ob.bid_queue.get_sorted_orders()
-                    .and_then(|orders| orders.first().map(|o| o.price))
-                    .unwrap_or(0.0);
-                let ask = ob.ask_queue.get_sorted_orders()
-                    .and_then(|orders| orders.first().map(|o| o.price))
-                    .unwrap_or(0.0);
-                (bid, ask)
-            } else {
-                (0.0, 0.0)
-            };
+            let (bid_price, ask_price) =
+                if let Some(orderbook) = self.matching_engine.get_orderbook(instrument_id) {
+                    let ob = orderbook.read();
+                    let bid = ob
+                        .bid_queue
+                        .get_sorted_orders()
+                        .and_then(|orders| orders.first().map(|o| o.price))
+                        .unwrap_or(0.0);
+                    let ask = ob
+                        .ask_queue
+                        .get_sorted_orders()
+                        .and_then(|orders| orders.first().map(|o| o.price))
+                        .unwrap_or(0.0);
+                    (bid, ask)
+                } else {
+                    (0.0, 0.0)
+                };
 
             // 创建TickData记录
             let tick_record = WalRecord::TickData {
@@ -1113,8 +1305,11 @@ impl OrderRouter {
             // ========== 性能优化：批量写入缓冲 ==========
             // 将tick数据写入缓冲区，由异步线程定期刷新（10ms间隔）
             self.tick_buffer.lock().push(tick_record);
-            log::trace!("Buffered tick data for {} (buffer size: {})",
-                instrument_id, self.tick_buffer.lock().len());
+            log::trace!(
+                "Buffered tick data for {} (buffer size: {})",
+                instrument_id,
+                self.tick_buffer.lock().len()
+            );
         }
 
         Ok(())
@@ -1130,48 +1325,56 @@ impl OrderRouter {
             use crate::storage::wal::record::WalRecord;
 
             // 获取订单簿中的买卖价
-            let (bid_price, ask_price, last_price) = if let Some(orderbook) = self.matching_engine.get_orderbook(instrument_id) {
-                let ob = orderbook.read();
-                let bid = ob.bid_queue.get_sorted_orders()
-                    .and_then(|orders| orders.first().map(|o| o.price))
-                    .unwrap_or(0.0);
-                let ask = ob.ask_queue.get_sorted_orders()
-                    .and_then(|orders| orders.first().map(|o| o.price))
-                    .unwrap_or(0.0);
+            let (bid_price, ask_price, last_price) =
+                if let Some(orderbook) = self.matching_engine.get_orderbook(instrument_id) {
+                    let ob = orderbook.read();
+                    let bid = ob
+                        .bid_queue
+                        .get_sorted_orders()
+                        .and_then(|orders| orders.first().map(|o| o.price))
+                        .unwrap_or(0.0);
+                    let ask = ob
+                        .ask_queue
+                        .get_sorted_orders()
+                        .and_then(|orders| orders.first().map(|o| o.price))
+                        .unwrap_or(0.0);
 
-                // 尝试获取最后成交价（从订单簿的lastprice字段，或使用中间价）
-                let last = if ob.lastprice > 0.0 {
-                    ob.lastprice
-                } else if bid > 0.0 && ask > 0.0 {
-                    (bid + ask) / 2.0
-                } else if bid > 0.0 {
-                    bid
-                } else if ask > 0.0 {
-                    ask
+                    // 尝试获取最后成交价（从订单簿的lastprice字段，或使用中间价）
+                    let last = if ob.lastprice > 0.0 {
+                        ob.lastprice
+                    } else if bid > 0.0 && ask > 0.0 {
+                        (bid + ask) / 2.0
+                    } else if bid > 0.0 {
+                        bid
+                    } else if ask > 0.0 {
+                        ask
+                    } else {
+                        0.0
+                    };
+
+                    (bid, ask, last)
                 } else {
-                    0.0
+                    (0.0, 0.0, 0.0)
                 };
-
-                (bid, ask, last)
-            } else {
-                (0.0, 0.0, 0.0)
-            };
 
             // 创建TickData记录（volume=0表示订单簿变化，非成交）
             let tick_record = WalRecord::TickData {
                 instrument_id: WalRecord::to_fixed_array_16(instrument_id),
-                last_price,  // 保持上次成交价不变
+                last_price, // 保持上次成交价不变
                 bid_price,
                 ask_price,
-                volume: 0,  // 0表示订单簿变化，非成交tick
+                volume: 0, // 0表示订单簿变化，非成交tick
                 timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
             };
 
             // ========== 性能优化：批量写入缓冲 ==========
             // 将订单簿tick数据写入缓冲区，由异步线程定期刷新
             self.tick_buffer.lock().push(tick_record);
-            log::trace!("Buffered orderbook tick for {} (buffer size: {})",
-                instrument_id, self.tick_buffer.lock().len());
+            log::trace!(
+                "Buffered orderbook tick for {} (buffer size: {})",
+                instrument_id,
+                self.tick_buffer.lock().len()
+            );
         }
 
         Ok(())
@@ -1185,8 +1388,11 @@ impl OrderRouter {
         if let Some(last_time) = self.last_snapshot_time.get(instrument_id) {
             if now.duration_since(*last_time) < self.snapshot_interval {
                 // 跳过此次快照（距离上次快照时间太短）
-                log::trace!("Skipping snapshot for {} (last snapshot: {:?} ago)",
-                    instrument_id, now.duration_since(*last_time));
+                log::trace!(
+                    "Skipping snapshot for {} (last snapshot: {:?} ago)",
+                    instrument_id,
+                    now.duration_since(*last_time)
+                );
                 return Ok(());
             }
         }
@@ -1199,15 +1405,27 @@ impl OrderRouter {
                 let ob = orderbook.read();
 
                 // 获取买卖队列的前10档数据
-                let bids = ob.bid_queue.get_sorted_orders()
+                let bids = ob
+                    .bid_queue
+                    .get_sorted_orders()
                     .map(|orders| {
-                        orders.iter().take(10).map(|o| (o.price, o.volume as i64)).collect::<Vec<_>>()
+                        orders
+                            .iter()
+                            .take(10)
+                            .map(|o| (o.price, o.volume as i64))
+                            .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
 
-                let asks = ob.ask_queue.get_sorted_orders()
+                let asks = ob
+                    .ask_queue
+                    .get_sorted_orders()
                     .map(|orders| {
-                        orders.iter().take(10).map(|o| (o.price, o.volume as i64)).collect::<Vec<_>>()
+                        orders
+                            .iter()
+                            .take(10)
+                            .map(|o| (o.price, o.volume as i64))
+                            .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
 
@@ -1216,17 +1434,23 @@ impl OrderRouter {
                 let mut asks_array = [(0.0, 0i64); 10];
 
                 for (i, (price, volume)) in bids.iter().enumerate() {
-                    if i >= 10 { break; }
+                    if i >= 10 {
+                        break;
+                    }
                     bids_array[i] = (*price, *volume);
                 }
 
                 for (i, (price, volume)) in asks.iter().enumerate() {
-                    if i >= 10 { break; }
+                    if i >= 10 {
+                        break;
+                    }
                     asks_array[i] = (*price, *volume);
                 }
 
                 // 获取最新价（从订单簿的第一档或0.0）
-                let last_price = bids.first().map(|(p, _)| *p)
+                let last_price = bids
+                    .first()
+                    .map(|(p, _)| *p)
                     .or_else(|| asks.first().map(|(p, _)| *p))
                     .unwrap_or(0.0);
 
@@ -1244,9 +1468,14 @@ impl OrderRouter {
                     // 不影响交易流程，只记录警告
                 } else {
                     // 更新快照时间
-                    self.last_snapshot_time.insert(instrument_id.to_string(), now);
-                    log::debug!("Persisted orderbook snapshot for {}: {} bids, {} asks",
-                        instrument_id, bids.len(), asks.len());
+                    self.last_snapshot_time
+                        .insert(instrument_id.to_string(), now);
+                    log::debug!(
+                        "Persisted orderbook snapshot for {}: {} bids, {} asks",
+                        instrument_id,
+                        bids.len(),
+                        asks.len()
+                    );
                 }
             }
         }
@@ -1326,20 +1555,24 @@ impl OrderRouter {
                     // 从缓冲区取出所有记录
                     let mut buffer = tick_buffer.lock();
                     if buffer.is_empty() {
-                        drop(buffer);  // 尽早释放锁
+                        drop(buffer); // 尽早释放锁
                         continue;
                     }
 
                     // 取出缓冲区数据（最多1000条）
                     let batch_size = buffer.len().min(1000);
                     let batch: Vec<_> = buffer.drain(..batch_size).collect();
-                    drop(buffer);  // 释放锁
+                    drop(buffer); // 释放锁
 
                     // 批量写入WAL
                     match storage.write_batch(batch.clone()) {
                         Ok(sequences) => {
-                            log::debug!("Batch flushed {} tick records to WAL (seq: {} - {})",
-                                batch.len(), sequences.first().unwrap_or(&0), sequences.last().unwrap_or(&0));
+                            log::debug!(
+                                "Batch flushed {} tick records to WAL (seq: {} - {})",
+                                batch.len(),
+                                sequences.first().unwrap_or(&0),
+                                sequences.last().unwrap_or(&0)
+                            );
                         }
                         Err(e) => {
                             log::error!("Batch flush failed: {}, retrying...", e);
@@ -1358,8 +1591,11 @@ impl OrderRouter {
                     let remaining: Vec<_> = buffer.drain(..).collect();
                     drop(buffer);
                     if let Err(e) = storage.write_batch(remaining.clone()) {
-                        log::error!("Failed to flush remaining {} records on shutdown: {}",
-                            remaining.len(), e);
+                        log::error!(
+                            "Failed to flush remaining {} records on shutdown: {}",
+                            remaining.len(),
+                            e
+                        );
                     } else {
                         log::info!("Flushed remaining {} records on shutdown", remaining.len());
                     }
@@ -1389,19 +1625,36 @@ impl OrderRouter {
     pub fn get_order_detail(&self, order_id: &str) -> Option<(Order, OrderStatus, i64, i64, f64)> {
         self.orders.get(order_id).map(|info| {
             let i = info.read();
-            (i.order.clone(), i.status, i.submit_time, i.update_time, i.filled_volume)
+            (
+                i.order.clone(),
+                i.status,
+                i.submit_time,
+                i.update_time,
+                i.filled_volume,
+            )
         })
     }
 
     /// 获取用户所有订单的详细信息 (order_id, order, status, submit_time, update_time, filled_volume)
-    pub fn get_user_order_details(&self, user_id: &str) -> Vec<(String, Order, OrderStatus, i64, i64, f64)> {
+    pub fn get_user_order_details(
+        &self,
+        user_id: &str,
+    ) -> Vec<(String, Order, OrderStatus, i64, i64, f64)> {
         if let Some(order_ids) = self.user_orders.get(user_id) {
-            order_ids.read()
+            order_ids
+                .read()
                 .iter()
                 .filter_map(|order_id| {
                     self.orders.get(order_id).map(|info| {
                         let i = info.read();
-                        (order_id.clone(), i.order.clone(), i.status, i.submit_time, i.update_time, i.filled_volume)
+                        (
+                            order_id.clone(),
+                            i.order.clone(),
+                            i.status,
+                            i.submit_time,
+                            i.update_time,
+                            i.filled_volume,
+                        )
                     })
                 })
                 .collect()
@@ -1414,7 +1667,7 @@ impl OrderRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::account_ext::{OpenAccountRequest, AccountType};
+    use crate::core::account_ext::{AccountType, OpenAccountRequest};
     use crate::exchange::instrument_registry::InstrumentInfo;
 
     fn create_test_router() -> OrderRouter {
@@ -1432,32 +1685,42 @@ mod tests {
 
         // 创建撮合引擎
         let matching_engine = Arc::new(ExchangeMatchingEngine::new());
-        matching_engine.register_instrument("IX2301".to_string(), 120.0).unwrap();
+        matching_engine
+            .register_instrument("IX2301".to_string(), 120.0)
+            .unwrap();
 
         // 创建合约注册表
         let instrument_registry = Arc::new(InstrumentRegistry::new());
-        instrument_registry.register(InstrumentInfo {
-            instrument_id:"IX2301".to_string(),
-            instrument_name: "IX2301".to_string(),
-            instrument_type: crate::exchange::instrument_registry::InstrumentType::CommodityFuture,
-            exchange: "SHFE".to_string(),
-            contract_multiplier: 1,
-            price_tick: 0.01,
-            margin_rate: 0.1,
-            commission_rate: 0.0005,
-            limit_up_rate: 0.1,
-            limit_down_rate: 0.1,
-            status: crate::exchange::instrument_registry::InstrumentStatus::Active,
-            list_date: Some("2023-01-01".to_string()),
-            expire_date: Some("2023-12-31".to_string()),
-            created_at: "2023-01-01T00:00:00Z".to_string(),
-            updated_at: "2023-01-01T00:00:00Z".to_string(),
-        }).unwrap();
+        instrument_registry
+            .register(InstrumentInfo {
+                instrument_id: "IX2301".to_string(),
+                instrument_name: "IX2301".to_string(),
+                instrument_type:
+                    crate::exchange::instrument_registry::InstrumentType::CommodityFuture,
+                exchange: "SHFE".to_string(),
+                contract_multiplier: 1,
+                price_tick: 0.01,
+                margin_rate: 0.1,
+                commission_rate: 0.0005,
+                limit_up_rate: 0.1,
+                limit_down_rate: 0.1,
+                status: crate::exchange::instrument_registry::InstrumentStatus::Active,
+                list_date: Some("2023-01-01".to_string()),
+                expire_date: Some("2023-12-31".to_string()),
+                created_at: "2023-01-01T00:00:00Z".to_string(),
+                updated_at: "2023-01-01T00:00:00Z".to_string(),
+            })
+            .unwrap();
 
         // 创建成交回报网关
         let trade_gateway = Arc::new(TradeGateway::new(account_mgr.clone()));
 
-        OrderRouter::new(account_mgr, matching_engine, instrument_registry, trade_gateway)
+        OrderRouter::new(
+            account_mgr,
+            matching_engine,
+            instrument_registry,
+            trade_gateway,
+        )
     }
 
     #[test]
@@ -1595,7 +1858,11 @@ mod tests {
         };
 
         let buy_response = router.submit_order(buy_req);
-        assert!(buy_response.success, "Buy order submission failed: {:?}", buy_response.error_message);
+        assert!(
+            buy_response.success,
+            "Buy order submission failed: {:?}",
+            buy_response.error_message
+        );
         let buy_order_id = buy_response.order_id.unwrap();
         log::info!("Buy order submitted: {}", buy_order_id);
 
@@ -1605,13 +1872,17 @@ mod tests {
             instrument_id: "IX2301".to_string(),
             direction: "SELL".to_string(),
             offset: "OPEN".to_string(), // 使用OPEN，因为是不同账户
-            volume: 5.0, // 部分成交
+            volume: 5.0,                // 部分成交
             price: 120.0,
             order_type: "LIMIT".to_string(),
         };
 
         let sell_response = router.submit_order(sell_req);
-        assert!(sell_response.success, "Sell order submission failed: {:?}", sell_response.error_message);
+        assert!(
+            sell_response.success,
+            "Sell order submission failed: {:?}",
+            sell_response.error_message
+        );
         let sell_order_id = sell_response.order_id.unwrap();
         log::info!("Sell order submitted: {}", sell_order_id);
 

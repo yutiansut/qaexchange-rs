@@ -1,16 +1,16 @@
 //! WebSocket 会话管理
 
-use actix::{Actor, ActorContext, AsyncContext, StreamHandler, Handler, Message, Addr};
-use actix_web_actors::ws;
-use std::time::{Duration, Instant};
-use std::collections::HashMap;
-use crossbeam::channel::{Sender, Receiver};
 use super::messages::{ClientMessage, ServerMessage};
 use crate::exchange::TradeGateway;
-use crate::user::UserManager;
 use crate::market::{MarketDataBroadcaster, MarketDataEvent};
-use std::sync::Arc;
+use crate::user::UserManager;
+use actix::{Actor, ActorContext, Addr, AsyncContext, Handler, Message, StreamHandler};
+use actix_web_actors::ws;
+use crossbeam::channel::{Receiver, Sender};
 use log;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// 心跳间隔
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -88,7 +88,10 @@ impl WsSession {
     }
 
     /// 设置会话映射引用（用于注册）
-    pub fn with_sessions(mut self, sessions: Arc<parking_lot::RwLock<HashMap<String, Addr<WsSession>>>>) -> Self {
+    pub fn with_sessions(
+        mut self,
+        sessions: Arc<parking_lot::RwLock<HashMap<String, Addr<WsSession>>>>,
+    ) -> Self {
         self.sessions = Some(sessions);
         self
     }
@@ -145,8 +148,12 @@ impl WsSession {
 
                     // 每5秒最多警告一次
                     if last_warn_time.elapsed() > Duration::from_secs(5) {
-                        log::warn!("WebSocket backpressure: queue_len={}, dropped {} events (total: {})",
-                                   queue_len, to_drop, dropped_count);
+                        log::warn!(
+                            "WebSocket backpressure: queue_len={}, dropped {} events (total: {})",
+                            queue_len,
+                            to_drop,
+                            dropped_count
+                        );
                         last_warn_time = std::time::Instant::now();
                     }
                 }
@@ -183,7 +190,9 @@ impl WsSession {
                     match user_mgr.verify_token(token) {
                         Ok(verified_user_id) => {
                             // Token 验证成功
-                            self.state = SessionState::Authenticated { user_id: verified_user_id.clone() };
+                            self.state = SessionState::Authenticated {
+                                user_id: verified_user_id.clone(),
+                            };
 
                             let response = ServerMessage::AuthResponse {
                                 success: true,
@@ -195,7 +204,11 @@ impl WsSession {
                                 ctx.text(json);
                             }
 
-                            log::info!("Session {} authenticated as user {} via JWT", self.id, verified_user_id);
+                            log::info!(
+                                "Session {} authenticated as user {} via JWT",
+                                self.id,
+                                verified_user_id
+                            );
                         }
                         Err(e) => {
                             // Token 验证失败
@@ -215,7 +228,9 @@ impl WsSession {
                 } else {
                     // UserManager 不可用，降级为简单检查
                     if !user_id.is_empty() && !token.is_empty() {
-                        self.state = SessionState::Authenticated { user_id: user_id.clone() };
+                        self.state = SessionState::Authenticated {
+                            user_id: user_id.clone(),
+                        };
 
                         let response = ServerMessage::AuthResponse {
                             success: true,
@@ -227,7 +242,10 @@ impl WsSession {
                             ctx.text(json);
                         }
 
-                        log::warn!("Session {} authenticated in fallback mode (UserManager not available)", self.id);
+                        log::warn!(
+                            "Session {} authenticated in fallback mode (UserManager not available)",
+                            self.id
+                        );
                     } else {
                         let response = ServerMessage::AuthResponse {
                             success: false,
@@ -242,7 +260,10 @@ impl WsSession {
                 }
             }
 
-            ClientMessage::Subscribe { channels, instruments } => {
+            ClientMessage::Subscribe {
+                channels,
+                instruments,
+            } => {
                 // 更新订阅列表
                 for channel in channels {
                     if !self.subscribed_channels.contains(channel) {
@@ -280,14 +301,22 @@ impl WsSession {
                     ctx.text(json);
                 }
 
-                log::info!("Session {} subscribed to channels: {:?}, instruments: {:?}",
-                    self.id, channels, instruments);
+                log::info!(
+                    "Session {} subscribed to channels: {:?}, instruments: {:?}",
+                    self.id,
+                    channels,
+                    instruments
+                );
             }
 
-            ClientMessage::Unsubscribe { channels, instruments } => {
+            ClientMessage::Unsubscribe {
+                channels,
+                instruments,
+            } => {
                 // 从订阅列表中移除
                 self.subscribed_channels.retain(|ch| !channels.contains(ch));
-                self.subscribed_instruments.retain(|inst| !instruments.contains(inst));
+                self.subscribed_instruments
+                    .retain(|inst| !instruments.contains(inst));
 
                 // 如果所有订阅都取消了，注销订阅
                 if self.subscribed_channels.is_empty() && self.subscribed_instruments.is_empty() {
@@ -308,8 +337,12 @@ impl WsSession {
                     ctx.text(json);
                 }
 
-                log::info!("Session {} unsubscribed from channels: {:?}, instruments: {:?}",
-                    self.id, channels, instruments);
+                log::info!(
+                    "Session {} unsubscribed from channels: {:?}, instruments: {:?}",
+                    self.id,
+                    channels,
+                    instruments
+                );
             }
 
             ClientMessage::Ping => {

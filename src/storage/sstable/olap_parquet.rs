@@ -6,13 +6,15 @@
 // - 适合大规模扫描和聚合查询
 // - 不可变文件
 
-use arrow2::array::{Array, BooleanArray, MutableBooleanArray, MutableArray, MutableFixedSizeBinaryArray};
+use arrow2::array::{
+    Array, BooleanArray, MutableArray, MutableBooleanArray, MutableFixedSizeBinaryArray,
+};
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::Schema;
-use arrow2::io::parquet::read::{FileReader, read_metadata, infer_schema};
+use arrow2::io::parquet::read::{infer_schema, read_metadata, FileReader};
 use arrow2::io::parquet::write::{
-    CompressionOptions, Encoding, FileWriter, Version, WriteOptions,
-    RowGroupIterator, DynIter, DynStreamingIterator,
+    CompressionOptions, DynIter, DynStreamingIterator, Encoding, FileWriter, RowGroupIterator,
+    Version, WriteOptions,
 };
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -43,25 +45,28 @@ impl ParquetSSTableWriter {
 
         // 确保目录存在
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Create dir failed: {}", e))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("Create dir failed: {}", e))?;
         }
 
         // 创建文件
-        let file = File::create(&file_path)
-            .map_err(|e| format!("Create parquet file failed: {}", e))?;
+        let file =
+            File::create(&file_path).map_err(|e| format!("Create parquet file failed: {}", e))?;
 
         // Parquet 写入选项（简化版本，使用 Snappy 压缩）
         let options = WriteOptions {
-            write_statistics: true,    // 写入统计信息（min/max 等）
+            write_statistics: true,                  // 写入统计信息（min/max 等）
             compression: CompressionOptions::Snappy, // Snappy 压缩
-            version: Version::V2,      // Parquet 2.0
+            version: Version::V2,                    // Parquet 2.0
             data_pagesize_limit: None,
         };
 
         // 创建 Parquet Writer
         // Arrow2 FileWriter 接受 schema 作为 &Schema，不是 Arc<Schema>
-        let _encodings: Vec<Vec<Encoding>> = schema.fields.iter().map(|_| vec![Encoding::Plain]).collect();
+        let _encodings: Vec<Vec<Encoding>> = schema
+            .fields
+            .iter()
+            .map(|_| vec![Encoding::Plain])
+            .collect();
 
         let writer = FileWriter::try_new(file, (*schema).clone(), options)
             .map_err(|e| format!("Create parquet writer failed: {}", e))?;
@@ -115,10 +120,12 @@ impl ParquetSSTableWriter {
                 data_pagesize_limit: None,
             },
             vec![vec![Encoding::Plain]; self.schema.fields.len()],
-        ).map_err(|e| format!("Create row group iterator failed: {}", e))?;
+        )
+        .map_err(|e| format!("Create row group iterator failed: {}", e))?;
 
         for group in row_groups {
-            writer.write(group.map_err(|e| format!("Write row group failed: {}", e))?)
+            writer
+                .write(group.map_err(|e| format!("Write row group failed: {}", e))?)
                 .map_err(|e| format!("Write failed: {}", e))?;
         }
 
@@ -170,14 +177,14 @@ impl ParquetSSTable {
         let file_path = file_path.as_ref().to_path_buf();
 
         // 读取 Parquet 元数据
-        let mut file = File::open(&file_path)
-            .map_err(|e| format!("Open parquet file failed: {}", e))?;
+        let mut file =
+            File::open(&file_path).map_err(|e| format!("Open parquet file failed: {}", e))?;
 
-        let parquet_metadata = read_metadata(&mut file)
-            .map_err(|e| format!("Read parquet metadata failed: {}", e))?;
+        let parquet_metadata =
+            read_metadata(&mut file).map_err(|e| format!("Read parquet metadata failed: {}", e))?;
 
-        let schema = infer_schema(&parquet_metadata)
-            .map_err(|e| format!("Infer schema failed: {}", e))?;
+        let schema =
+            infer_schema(&parquet_metadata).map_err(|e| format!("Infer schema failed: {}", e))?;
 
         // 提取统计信息
         let mut entry_count = 0u64;
@@ -229,20 +236,32 @@ impl ParquetSSTable {
     /// # Arguments
     /// * `start_ts` - 起始时间戳（纳秒）
     /// * `end_ts` - 结束时间戳（纳秒）
-    pub fn range_query(&self, start_ts: i64, end_ts: i64) -> Result<Vec<Chunk<Box<dyn Array>>>, String> {
+    pub fn range_query(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<Chunk<Box<dyn Array>>>, String> {
         // 快速路径：时间范围不重叠
-        if self.metadata.max_timestamp != 0 &&
-           (end_ts < self.metadata.min_timestamp || start_ts > self.metadata.max_timestamp) {
+        if self.metadata.max_timestamp != 0
+            && (end_ts < self.metadata.min_timestamp || start_ts > self.metadata.max_timestamp)
+        {
             return Ok(Vec::new());
         }
 
         let mut file = File::open(&self.file_path)
             .map_err(|e| format!("Open parquet file for query failed: {}", e))?;
 
-        let parquet_metadata = read_metadata(&mut file)
-            .map_err(|e| format!("Read parquet metadata failed: {}", e))?;
+        let parquet_metadata =
+            read_metadata(&mut file).map_err(|e| format!("Read parquet metadata failed: {}", e))?;
 
-        let reader = FileReader::new(file, parquet_metadata.row_groups, (*self.schema).clone(), None, None, None);
+        let reader = FileReader::new(
+            file,
+            parquet_metadata.row_groups,
+            (*self.schema).clone(),
+            None,
+            None,
+            None,
+        );
 
         let mut chunks = Vec::new();
 
@@ -266,10 +285,17 @@ impl ParquetSSTable {
         let mut file = File::open(&self.file_path)
             .map_err(|e| format!("Open parquet file for scan failed: {}", e))?;
 
-        let parquet_metadata = read_metadata(&mut file)
-            .map_err(|e| format!("Read parquet metadata failed: {}", e))?;
+        let parquet_metadata =
+            read_metadata(&mut file).map_err(|e| format!("Read parquet metadata failed: {}", e))?;
 
-        let reader = FileReader::new(file, parquet_metadata.row_groups, (*self.schema).clone(), None, None, None);
+        let reader = FileReader::new(
+            file,
+            parquet_metadata.row_groups,
+            (*self.schema).clone(),
+            None,
+            None,
+            None,
+        );
 
         let chunks: Result<Vec<_>, _> = reader.collect();
         chunks.map_err(|e| format!("Read chunks failed: {}", e))
@@ -295,7 +321,9 @@ fn filter_chunk_by_timestamp(
     // 构建 boolean mask
     let mut mask_builder = MutableBooleanArray::new();
     for ts_opt in timestamp_array.iter() {
-        let is_in_range = ts_opt.map(|&ts| ts >= start_ts && ts <= end_ts).unwrap_or(false);
+        let is_in_range = ts_opt
+            .map(|&ts| ts >= start_ts && ts <= end_ts)
+            .unwrap_or(false);
         mask_builder.push(Some(is_in_range));
     }
     let mask: BooleanArray = mask_builder.into();
@@ -314,45 +342,36 @@ fn filter_chunk_by_timestamp(
     }
 
     // 对每个数组应用索引过滤
-    use arrow2::array::{PrimitiveArray, FixedSizeBinaryArray};
+    use arrow2::array::{FixedSizeBinaryArray, PrimitiveArray};
     let filtered_arrays: Vec<Box<dyn Array>> = chunk
         .arrays()
         .iter()
         .map(|array| {
             // 根据类型处理不同的数组
             if let Some(prim_i64) = array.as_any().downcast_ref::<PrimitiveArray<i64>>() {
-                let filtered: PrimitiveArray<i64> = true_indices
-                    .iter()
-                    .map(|&idx| prim_i64.get(idx))
-                    .collect();
+                let filtered: PrimitiveArray<i64> =
+                    true_indices.iter().map(|&idx| prim_i64.get(idx)).collect();
                 Box::new(filtered) as Box<dyn Array>
             } else if let Some(prim_i32) = array.as_any().downcast_ref::<PrimitiveArray<i32>>() {
-                let filtered: PrimitiveArray<i32> = true_indices
-                    .iter()
-                    .map(|&idx| prim_i32.get(idx))
-                    .collect();
+                let filtered: PrimitiveArray<i32> =
+                    true_indices.iter().map(|&idx| prim_i32.get(idx)).collect();
                 Box::new(filtered) as Box<dyn Array>
             } else if let Some(prim_u64) = array.as_any().downcast_ref::<PrimitiveArray<u64>>() {
-                let filtered: PrimitiveArray<u64> = true_indices
-                    .iter()
-                    .map(|&idx| prim_u64.get(idx))
-                    .collect();
+                let filtered: PrimitiveArray<u64> =
+                    true_indices.iter().map(|&idx| prim_u64.get(idx)).collect();
                 Box::new(filtered) as Box<dyn Array>
             } else if let Some(prim_u8) = array.as_any().downcast_ref::<PrimitiveArray<u8>>() {
-                let filtered: PrimitiveArray<u8> = true_indices
-                    .iter()
-                    .map(|&idx| prim_u8.get(idx))
-                    .collect();
+                let filtered: PrimitiveArray<u8> =
+                    true_indices.iter().map(|&idx| prim_u8.get(idx)).collect();
                 Box::new(filtered) as Box<dyn Array>
             } else if let Some(prim_f64) = array.as_any().downcast_ref::<PrimitiveArray<f64>>() {
-                let filtered: PrimitiveArray<f64> = true_indices
-                    .iter()
-                    .map(|&idx| prim_f64.get(idx))
-                    .collect();
+                let filtered: PrimitiveArray<f64> =
+                    true_indices.iter().map(|&idx| prim_f64.get(idx)).collect();
                 Box::new(filtered) as Box<dyn Array>
             } else if let Some(fixed_bin) = array.as_any().downcast_ref::<FixedSizeBinaryArray>() {
                 let size = fixed_bin.size();
-                let mut builder = MutableFixedSizeBinaryArray::with_capacity(size, true_indices.len());
+                let mut builder =
+                    MutableFixedSizeBinaryArray::with_capacity(size, true_indices.len());
                 for &idx in &true_indices {
                     builder.push(fixed_bin.get(idx));
                 }
@@ -360,7 +379,10 @@ fn filter_chunk_by_timestamp(
                 Box::new(filtered) as Box<dyn Array>
             } else {
                 // 未知类型，panic以便调试
-                panic!("Unsupported array type in filter_chunk_by_timestamp: {:?}", array.data_type())
+                panic!(
+                    "Unsupported array type in filter_chunk_by_timestamp: {:?}",
+                    array.data_type()
+                )
             }
         })
         .collect();
@@ -410,11 +432,8 @@ mod tests {
 
         // 写入 Parquet
         {
-            let mut writer = ParquetSSTableWriter::create(
-                &file_path,
-                Arc::new(create_olap_schema()),
-            )
-            .unwrap();
+            let mut writer =
+                ParquetSSTableWriter::create(&file_path, Arc::new(create_olap_schema())).unwrap();
 
             writer.write_chunk(memtable.chunk()).unwrap();
 
@@ -446,11 +465,8 @@ mod tests {
         let records = create_test_records(100);
         let memtable = OlapMemTable::from_records(records);
 
-        let mut writer = ParquetSSTableWriter::create(
-            &file_path,
-            Arc::new(create_olap_schema()),
-        )
-        .unwrap();
+        let mut writer =
+            ParquetSSTableWriter::create(&file_path, Arc::new(create_olap_schema())).unwrap();
 
         writer.write_chunk(memtable.chunk()).unwrap();
         writer.finish().unwrap();
@@ -470,11 +486,8 @@ mod tests {
         let records = create_test_records(100);
         let memtable = OlapMemTable::from_records(records);
 
-        let mut writer = ParquetSSTableWriter::create(
-            &file_path,
-            Arc::new(create_olap_schema()),
-        )
-        .unwrap();
+        let mut writer =
+            ParquetSSTableWriter::create(&file_path, Arc::new(create_olap_schema())).unwrap();
 
         writer.write_chunk(memtable.chunk()).unwrap();
         writer.finish().unwrap();

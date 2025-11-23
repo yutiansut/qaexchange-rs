@@ -13,9 +13,9 @@
 // - 查询延迟: O(k) = ~100ns
 // - 空间开销: ~12 bits/key (1% FP rate)
 
-use rkyv::{Archive, Serialize as RkyvSerialize, Deserialize as RkyvDeserialize};
-use std::hash::{Hash, Hasher};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Bloom Filter 实现
 #[derive(Debug, Clone, Archive, RkyvSerialize, RkyvDeserialize)]
@@ -93,11 +93,11 @@ impl BloomFilter {
         for i in 0..self.k {
             let bit_index = self.get_bit_index(hash, i);
             if !self.get_bit(bit_index) {
-                return false;  // 一定不存在
+                return false; // 一定不存在
             }
         }
 
-        true  // 可能存在
+        true // 可能存在
     }
 
     /// 哈希函数（使用 DefaultHasher）
@@ -216,8 +216,12 @@ mod tests {
         let mut filter = BloomFilter::new(100, 0.01);
 
         let test_keys = vec![
-            "user_123", "user_456", "user_789",
-            "order_abc", "order_def", "order_xyz",
+            "user_123",
+            "user_456",
+            "user_789",
+            "order_abc",
+            "order_def",
+            "order_xyz",
         ];
 
         // 插入
@@ -252,7 +256,11 @@ mod tests {
 
         // 验证功能
         for i in 0..500 {
-            assert!(restored.contains(&i), "Element {} should exist after restore", i);
+            assert!(
+                restored.contains(&i),
+                "Element {} should exist after restore",
+                i
+            );
         }
 
         assert_eq!(restored.n, 500);
@@ -273,8 +281,14 @@ mod tests {
             let filter = BloomFilter::new(n, p);
             let stats = filter.stats();
 
-            println!("n={}, p={}: m={}, k={}, memory={}KB",
-                n, p, stats.m, stats.k, stats.memory_bytes / 1024);
+            println!(
+                "n={}, p={}: m={}, k={}, memory={}KB",
+                n,
+                p,
+                stats.m,
+                stats.k,
+                stats.memory_bytes / 1024
+            );
 
             assert!(stats.k > 0);
             assert!(stats.m > 0);

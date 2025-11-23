@@ -7,11 +7,11 @@
 // 4. 检测和恢复僵尸任务
 
 use super::metadata::{ConversionMetadata, ConversionRecord, ConversionStatus};
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::collections::HashMap;
-use crossbeam::channel::{Sender, Receiver, unbounded};
 
 /// 转换任务
 #[derive(Debug, Clone)]
@@ -44,12 +44,12 @@ pub struct SchedulerConfig {
 impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
-            scan_interval_secs: 300,           // 5 分钟扫描一次
-            min_sstables_per_batch: 3,         // 至少 3 个文件才批量转换
-            max_sstables_per_batch: 20,        // 最多 20 个文件一批
-            min_sstable_age_secs: 60,          // 文件至少 1 分钟未修改
-            max_retries: 5,                     // 最多重试 5 次
-            zombie_timeout_secs: 3600,          // 1 小时未完成视为僵尸
+            scan_interval_secs: 300,    // 5 分钟扫描一次
+            min_sstables_per_batch: 3,  // 至少 3 个文件才批量转换
+            max_sstables_per_batch: 20, // 最多 20 个文件一批
+            min_sstable_age_secs: 60,   // 文件至少 1 分钟未修改
+            max_retries: 5,             // 最多重试 5 次
+            zombie_timeout_secs: 3600,  // 1 小时未完成视为僵尸
         }
     }
 }
@@ -93,7 +93,10 @@ impl ConversionScheduler {
 
     /// 运行调度器（阻塞，应在独立线程中运行）
     pub fn run(&self) {
-        log::info!("Conversion scheduler started with config: {:?}", self.config);
+        log::info!(
+            "Conversion scheduler started with config: {:?}",
+            self.config
+        );
 
         loop {
             // 1. 扫描并提交新任务
@@ -129,9 +132,7 @@ impl ConversionScheduler {
         let instruments = self.scan_instruments()?;
 
         for instrument_id in instruments {
-            let oltp_dir = self.storage_base_path
-                .join(&instrument_id)
-                .join("oltp");
+            let oltp_dir = self.storage_base_path.join(&instrument_id).join("oltp");
 
             if !oltp_dir.exists() {
                 continue;
@@ -191,8 +192,8 @@ impl ConversionScheduler {
         let mut sstables = Vec::new();
         let now = std::time::SystemTime::now();
 
-        let entries = std::fs::read_dir(oltp_dir)
-            .map_err(|e| format!("Read OLTP dir failed: {}", e))?;
+        let entries =
+            std::fs::read_dir(oltp_dir).map_err(|e| format!("Read OLTP dir failed: {}", e))?;
 
         for entry in entries {
             let entry = entry.map_err(|e| format!("Read entry failed: {}", e))?;
@@ -204,8 +205,8 @@ impl ConversionScheduler {
             }
 
             // 检查文件年龄
-            let metadata = std::fs::metadata(&path)
-                .map_err(|e| format!("Get metadata failed: {}", e))?;
+            let metadata =
+                std::fs::metadata(&path).map_err(|e| format!("Get metadata failed: {}", e))?;
 
             if let Ok(modified) = metadata.modified() {
                 if let Ok(age) = now.duration_since(modified) {
@@ -235,21 +236,16 @@ impl ConversionScheduler {
 
         // 检查是否已存在待转换任务（避免重复）
         for record in metadata.get_pending_records() {
-            if record.instrument_id == instrument_id
-                && record.oltp_sstables == sstables
-            {
+            if record.instrument_id == instrument_id && record.oltp_sstables == sstables {
                 log::debug!("Task already exists for {:?}, skipping", sstables);
                 return Ok(());
             }
         }
 
         // 生成 OLAP Parquet 文件名
-        let olap_dir = self.storage_base_path
-            .join(instrument_id)
-            .join("olap");
+        let olap_dir = self.storage_base_path.join(instrument_id).join("olap");
 
-        std::fs::create_dir_all(&olap_dir)
-            .map_err(|e| format!("Create OLAP dir failed: {}", e))?;
+        std::fs::create_dir_all(&olap_dir).map_err(|e| format!("Create OLAP dir failed: {}", e))?;
 
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
         let olap_parquet = olap_dir.join(format!("batch_{}.parquet", timestamp));
@@ -337,7 +333,9 @@ impl ConversionScheduler {
 
             // 提交任务
             self.task_sender
-                .send(ConversionTask { record: record_clone })
+                .send(ConversionTask {
+                    record: record_clone,
+                })
                 .map_err(|e| format!("Send retry task failed: {}", e))?;
         }
 
@@ -370,7 +368,8 @@ impl ConversionScheduler {
                         );
 
                         let mut record_clone = (*record).clone();
-                        record_clone.mark_failed(format!("Zombie task timeout after {} seconds", elapsed));
+                        record_clone
+                            .mark_failed(format!("Zombie task timeout after {} seconds", elapsed));
                         Some(record_clone)
                     } else {
                         None
@@ -420,7 +419,10 @@ impl ConversionScheduler {
         map.insert("converting".to_string(), stats.converting);
         map.insert("success".to_string(), stats.success);
         map.insert("failed".to_string(), stats.failed);
-        map.insert("avg_duration_secs".to_string(), stats.avg_duration_secs as usize);
+        map.insert(
+            "avg_duration_secs".to_string(),
+            stats.avg_duration_secs as usize,
+        );
 
         map
     }

@@ -7,8 +7,8 @@
 //!
 //! 运行: cargo run --example test_snapshot_generator
 
-use qaexchange::matching::engine::ExchangeMatchingEngine;
 use qaexchange::market::snapshot_generator::{MarketSnapshotGenerator, SnapshotGeneratorConfig};
+use qaexchange::matching::engine::ExchangeMatchingEngine;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,7 +32,7 @@ fn main() {
     // 2. 创建快照生成器
     println!("\n2️⃣  创建快照生成器...");
     let config = SnapshotGeneratorConfig {
-        interval_ms: 1000,  // 1秒
+        interval_ms: 1000, // 1秒
         enable_persistence: false,
         instruments: vec![instrument_id.to_string()],
     };
@@ -91,7 +91,8 @@ fn main() {
         while count < 5 {
             if let Ok(snapshot) = subscriber1.recv_timeout(Duration::from_secs(2)) {
                 count += 1;
-                println!("   [订阅者1] 收到快照 #{}: {} @ {:.2} (涨跌: {:.2}%, 成交量: {})",
+                println!(
+                    "   [订阅者1] 收到快照 #{}: {} @ {:.2} (涨跌: {:.2}%, 成交量: {})",
                     count,
                     snapshot.instrument_id,
                     snapshot.last_price,
@@ -107,7 +108,8 @@ fn main() {
         while count < 5 {
             if let Ok(snapshot) = subscriber2.recv_timeout(Duration::from_secs(2)) {
                 count += 1;
-                println!("   [订阅者2] 买一: {:.2} x {}, 卖一: {:.2} x {}",
+                println!(
+                    "   [订阅者2] 买一: {:.2} x {}, 卖一: {:.2} x {}",
                     snapshot.bid_price1,
                     snapshot.bid_volume1,
                     snapshot.ask_price1,
@@ -122,11 +124,9 @@ fn main() {
         while count < 5 {
             if let Ok(snapshot) = subscriber3.recv_timeout(Duration::from_secs(2)) {
                 count += 1;
-                println!("   [订阅者3] OHLC: O={:.2} H={:.2} L={:.2} (成交额: {:.2})",
-                    snapshot.open,
-                    snapshot.high,
-                    snapshot.low,
-                    snapshot.turnover,
+                println!(
+                    "   [订阅者3] OHLC: O={:.2} H={:.2} L={:.2} (成交额: {:.2})",
+                    snapshot.open, snapshot.high, snapshot.low, snapshot.turnover,
                 );
             }
         }
@@ -142,7 +142,10 @@ fn main() {
     println!("\n8️⃣  测试统计:");
     println!("   总快照数: {}", generator.get_snapshot_count());
     println!("   运行时长: {:.2}s", elapsed.as_secs_f64());
-    println!("   快照频率: ~{:.1}/s", generator.get_snapshot_count() as f64 / elapsed.as_secs_f64());
+    println!(
+        "   快照频率: ~{:.1}/s",
+        generator.get_snapshot_count() as f64 / elapsed.as_secs_f64()
+    );
 
     println!("\n✅ 测试完成！\n");
 }

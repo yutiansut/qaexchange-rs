@@ -2,9 +2,9 @@
 
 use super::protocol::{HeartbeatRequest, HeartbeatResponse};
 use super::role::RoleManager;
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::time::{interval, Duration, Instant};
 
 /// 心跳管理器
@@ -194,7 +194,9 @@ impl HeartbeatManager {
             loop {
                 ticker.tick().await;
 
-                if role_manager.is_master() || role_manager.get_role() == super::role::NodeRole::Candidate {
+                if role_manager.is_master()
+                    || role_manager.get_role() == super::role::NodeRole::Candidate
+                {
                     continue;
                 }
 

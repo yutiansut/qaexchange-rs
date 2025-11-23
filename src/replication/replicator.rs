@@ -3,9 +3,9 @@
 use super::protocol::{LogEntry, ReplicationRequest, ReplicationResponse};
 use super::role::RoleManager;
 use crate::storage::wal::WalRecord;
-use std::sync::Arc;
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// 复制配置
@@ -106,7 +106,12 @@ impl LogReplicator {
             return None;
         }
 
-        let next_index = self.slave_next_index.read().get(slave_id).cloned().unwrap_or(1);
+        let next_index = self
+            .slave_next_index
+            .read()
+            .get(slave_id)
+            .cloned()
+            .unwrap_or(1);
         let pending = self.pending_logs.read();
 
         // 查找从next_index开始的日志

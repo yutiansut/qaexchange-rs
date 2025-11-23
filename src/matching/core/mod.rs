@@ -6,13 +6,13 @@
 //! 3. 无状态撮合 - 不维护账户信息，只负责订单匹配
 //! 4. 内存池 - 预分配订单对象，避免 GC
 
-use crate::matching::Orderbook;
 use crate::matching::engine::InstrumentAsset;
-use crate::protocol::ipc_messages::{OrderRequest, TradeReport, OrderbookSnapshot, OrderAccepted};
+use crate::matching::Orderbook;
+use crate::protocol::ipc_messages::{OrderAccepted, OrderRequest, OrderbookSnapshot, TradeReport};
+use crossbeam::channel::{bounded, Receiver, Sender};
 use dashmap::DashMap;
-use std::sync::Arc;
 use parking_lot::RwLock;
-use crossbeam::channel::{bounded, Sender, Receiver};
+use std::sync::Arc;
 
 /// 撮合引擎核心
 ///
@@ -57,12 +57,13 @@ impl MatchingEngineCore {
 
     /// 注册品种
     pub fn register_instrument(&self, instrument_id: String, init_price: f64) {
-        let orderbook = Orderbook::new(
-            InstrumentAsset::from_code(&instrument_id),
-            init_price,
+        let orderbook = Orderbook::new(InstrumentAsset::from_code(&instrument_id), init_price);
+        self.orderbooks
+            .insert(instrument_id.clone(), Arc::new(RwLock::new(orderbook)));
+        log::info!(
+            "Registered instrument in MatchingEngineCore: {}",
+            instrument_id
         );
-        self.orderbooks.insert(instrument_id.clone(), Arc::new(RwLock::new(orderbook)));
-        log::info!("Registered instrument in MatchingEngineCore: {}", instrument_id);
     }
 
     /// 启动撮合引擎主循环
@@ -74,7 +75,10 @@ impl MatchingEngineCore {
 
         while self.running.load(Ordering::SeqCst) {
             // 接收订单请求
-            match self.order_receiver.recv_timeout(std::time::Duration::from_millis(10)) {
+            match self
+                .order_receiver
+                .recv_timeout(std::time::Duration::from_millis(10))
+            {
                 Ok(order_req) => {
                     self.process_order(order_req);
                 }
@@ -130,8 +134,11 @@ impl MatchingEngineCore {
     }
 
     /// 转换为撮合引擎订单
-    fn convert_to_match_order(&self, req: &OrderRequest) -> crate::matching::orders::OrderRequest<InstrumentAsset> {
-        use crate::matching::{OrderDirection, OrderType, orders};
+    fn convert_to_match_order(
+        &self,
+        req: &OrderRequest,
+    ) -> crate::matching::orders::OrderRequest<InstrumentAsset> {
+        use crate::matching::{orders, OrderDirection, OrderType};
 
         let instrument_id = std::str::from_utf8(&req.instrument_id)
             .unwrap_or("")
@@ -146,13 +153,7 @@ impl MatchingEngineCore {
 
         let asset = InstrumentAsset::from_code(&instrument_id);
 
-        orders::new_limit_order_request(
-            asset,
-            direction,
-            req.price,
-            req.volume,
-            req.timestamp,
-        )
+        orders::new_limit_order_request(asset, direction, req.price, req.volume, req.timestamp)
     }
 
     /// 处理成功的撮合结果
@@ -160,31 +161,43 @@ impl MatchingEngineCore {
         use crate::matching::Success;
 
         match success {
-            Success::Filled {   price, volume, ts, .. } => {
+            Success::Filled {
+                price, volume, ts, ..
+            } => {
                 // 发送成交回报
                 let trade = self.create_trade_report(req, price, volume, ts, 0); // 0=完全成交
                 let _ = self.trade_sender.send(trade);
 
-                log::debug!("Order filled: {:?} @ {} x {}",
+                log::debug!(
+                    "Order filled: {:?} @ {} x {}",
                     std::str::from_utf8(&req.order_id).unwrap_or(""),
-                    price, volume);
+                    price,
+                    volume
+                );
             }
-            Success::PartiallyFilled {   price, volume, ts, .. } => {
+            Success::PartiallyFilled {
+                price, volume, ts, ..
+            } => {
                 // 发送部分成交回报
                 let trade = self.create_trade_report(req, price, volume, ts, 1); // 1=部分成交
                 let _ = self.trade_sender.send(trade);
 
-                log::debug!("Order partially filled: {:?} @ {} x {}",
+                log::debug!(
+                    "Order partially filled: {:?} @ {} x {}",
                     std::str::from_utf8(&req.order_id).unwrap_or(""),
-                    price, volume);
+                    price,
+                    volume
+                );
             }
-            Success::Accepted {  ts, .. } => {
+            Success::Accepted { ts, .. } => {
                 // 发送订单确认消息（用于 sim 模式的 on_order_confirm）
                 let accepted = self.create_order_accepted(req, ts);
                 let _ = self.accepted_sender.send(accepted);
 
-                log::debug!("Order accepted: {:?}",
-                    std::str::from_utf8(&req.order_id).unwrap_or(""));
+                log::debug!(
+                    "Order accepted: {:?}",
+                    std::str::from_utf8(&req.order_id).unwrap_or("")
+                );
             }
             _ => {}
         }
@@ -201,8 +214,8 @@ impl MatchingEngineCore {
     ) -> TradeReport {
         let mut trade = TradeReport {
             trade_id: [0; 32],
-            order_id: req.order_id,              // 账户订单ID（用于账户匹配，40字节UUID）
-            exchange_order_id: [0; 32],          // 交易所订单ID（全局唯一）
+            order_id: req.order_id, // 账户订单ID（用于账户匹配，40字节UUID）
+            exchange_order_id: [0; 32], // 交易所订单ID（全局唯一）
             user_id: req.user_id,
             instrument_id: req.instrument_id,
             direction: req.direction,
@@ -239,13 +252,9 @@ impl MatchingEngineCore {
     }
 
     /// 创建订单确认消息
-    fn create_order_accepted(
-        &self,
-        req: &OrderRequest,
-        timestamp: i64,
-    ) -> OrderAccepted {
+    fn create_order_accepted(&self, req: &OrderRequest, timestamp: i64) -> OrderAccepted {
         let mut accepted = OrderAccepted {
-            order_id: req.order_id,              // 40字节UUID
+            order_id: req.order_id, // 40字节UUID
             exchange_order_id: [0; 32],
             user_id: req.user_id,
             instrument_id: req.instrument_id,

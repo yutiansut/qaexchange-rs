@@ -2,25 +2,25 @@
 //!
 //! 提供 RESTful API 接口用于账户管理、订单操作、查询等功能
 
-pub mod models;
-pub mod handlers;
-pub mod routes;
-pub mod monitoring;
-pub mod market;
 pub mod admin;
-pub mod management;
 pub mod auth;
+pub mod handlers;
 pub mod kline;
+pub mod management;
+pub mod market;
+pub mod models;
+pub mod monitoring;
+pub mod routes;
 
-use actix_web::{App, HttpServer as ActixHttpServer, middleware, web};
-use std::sync::Arc;
+use actix_web::{middleware, web, App, HttpServer as ActixHttpServer};
 use std::io;
+use std::sync::Arc;
 
-use handlers::AppState;
-use crate::exchange::{OrderRouter, AccountManager};
-use crate::matching::engine::ExchangeMatchingEngine;
+use crate::exchange::{AccountManager, OrderRouter};
 use crate::market::MarketDataService;
+use crate::matching::engine::ExchangeMatchingEngine;
 use crate::user::UserManager;
+use handlers::AppState;
 
 /// HTTP 服务器
 pub struct HttpServer {
@@ -76,20 +76,17 @@ impl HttpServer {
                 // 应用状态
                 .app_data(web::Data::new(app_state.clone()))
                 .app_data(web::Data::new(market_service.clone()))
-
                 // 中间件
                 .wrap(middleware::Logger::default())
                 .wrap(middleware::Compress::default())
-
                 // CORS 支持
                 .wrap(
                     actix_cors::Cors::default()
                         .allow_any_origin()
                         .allow_any_method()
                         .allow_any_header()
-                        .max_age(3600)
+                        .max_age(3600),
                 )
-
                 // 配置路由
                 .configure(routes::configure)
         })

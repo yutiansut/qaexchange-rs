@@ -7,14 +7,13 @@
 //! 4. 接收和处理通知
 
 use qaexchange::notification::{
-    NotificationBroker, NotificationGateway,
-    Notification, NotificationType, NotificationPayload,
-    OrderAcceptedNotify, TradeExecutedNotify, AccountUpdateNotify,
-    RiskAlertNotify,
+    AccountUpdateNotify, Notification, NotificationBroker, NotificationGateway,
+    NotificationPayload, NotificationType, OrderAcceptedNotify, RiskAlertNotify,
+    TradeExecutedNotify,
 };
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() {
@@ -87,8 +86,14 @@ async fn main() {
         let mut count = 0;
         while let Some(json) = session1_rx.recv().await {
             count += 1;
-            log::info!("[Session 1] Received message {}:\n{}\n", count,
-                       serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(&json).unwrap()).unwrap());
+            log::info!(
+                "[Session 1] Received message {}:\n{}\n",
+                count,
+                serde_json::to_string_pretty(
+                    &serde_json::from_str::<serde_json::Value>(&json).unwrap()
+                )
+                .unwrap()
+            );
 
             if count >= 5 {
                 break;
@@ -102,8 +107,14 @@ async fn main() {
         let mut count = 0;
         while let Some(json) = session2_rx.recv().await {
             count += 1;
-            log::info!("[Session 2] Received message {}:\n{}\n", count,
-                       serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(&json).unwrap()).unwrap());
+            log::info!(
+                "[Session 2] Received message {}:\n{}\n",
+                count,
+                serde_json::to_string_pretty(
+                    &serde_json::from_str::<serde_json::Value>(&json).unwrap()
+                )
+                .unwrap()
+            );
 
             if count >= 2 {
                 break;
@@ -306,11 +317,13 @@ async fn main() {
     log::info!("  - 已丢弃消息: {}", broker_stats.messages_dropped);
     log::info!("  - 活跃用户数: {}", broker_stats.active_users);
     log::info!("  - 活跃Gateway数: {}", broker_stats.active_gateways);
-    log::info!("  - 队列大小: P0={}, P1={}, P2={}, P3={}",
-               broker_stats.queue_sizes[0],
-               broker_stats.queue_sizes[1],
-               broker_stats.queue_sizes[2],
-               broker_stats.queue_sizes[3]);
+    log::info!(
+        "  - 队列大小: P0={}, P1={}, P2={}, P3={}",
+        broker_stats.queue_sizes[0],
+        broker_stats.queue_sizes[1],
+        broker_stats.queue_sizes[2],
+        broker_stats.queue_sizes[3]
+    );
 
     let gateway_stats = gateway.get_stats();
     log::info!("\nGateway统计:");

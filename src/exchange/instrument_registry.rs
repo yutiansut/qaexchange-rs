@@ -2,10 +2,10 @@
 //!
 //! 支持合约的上市、下市、暂停交易、参数修改等全流程管理
 
-use serde::{Deserialize, Serialize};
-use dashmap::DashMap;
 use chrono::{NaiveDate, Utc};
+use dashmap::DashMap;
 use log;
+use serde::{Deserialize, Serialize};
 
 use crate::ExchangeError;
 
@@ -129,9 +129,10 @@ impl InstrumentRegistry {
     /// 注册/上市新合约
     pub fn register(&self, info: InstrumentInfo) -> Result<(), ExchangeError> {
         if self.instruments.contains_key(&info.instrument_id) {
-            return Err(ExchangeError::InstrumentError(
-                format!("Instrument {} already exists", info.instrument_id)
-            ));
+            return Err(ExchangeError::InstrumentError(format!(
+                "Instrument {} already exists",
+                info.instrument_id
+            )));
         }
 
         log::info!("Registering instrument: {}", info.instrument_id);
@@ -141,7 +142,9 @@ impl InstrumentRegistry {
 
     /// 获取合约信息
     pub fn get(&self, instrument_id: &str) -> Option<InstrumentInfo> {
-        self.instruments.get(instrument_id).map(|r| r.value().clone())
+        self.instruments
+            .get(instrument_id)
+            .map(|r| r.value().clone())
     }
 
     /// 列出所有合约
@@ -159,17 +162,22 @@ impl InstrumentRegistry {
     }
 
     /// 更新合约信息
-    pub fn update(&self, instrument_id: &str, update_fn: impl FnOnce(&mut InstrumentInfo)) -> Result<(), ExchangeError> {
+    pub fn update(
+        &self,
+        instrument_id: &str,
+        update_fn: impl FnOnce(&mut InstrumentInfo),
+    ) -> Result<(), ExchangeError> {
         match self.instruments.get_mut(instrument_id) {
             Some(mut info) => {
                 update_fn(info.value_mut());
                 info.value_mut().updated_at = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
                 log::info!("Updated instrument: {}", instrument_id);
                 Ok(())
-            },
-            None => Err(ExchangeError::InstrumentError(
-                format!("Instrument {} not found", instrument_id)
-            )),
+            }
+            None => Err(ExchangeError::InstrumentError(format!(
+                "Instrument {} not found",
+                instrument_id
+            ))),
         }
     }
 

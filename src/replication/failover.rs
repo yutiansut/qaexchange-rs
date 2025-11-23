@@ -1,11 +1,11 @@
 //! 故障转移协调器
 
-use super::role::{RoleManager, NodeRole};
 use super::heartbeat::HeartbeatManager;
 use super::replicator::LogReplicator;
-use std::sync::Arc;
-use std::collections::HashMap;
+use super::role::{NodeRole, RoleManager};
 use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::time::{interval, Duration};
 
 /// 故障转移配置
@@ -183,12 +183,7 @@ impl FailoverCoordinator {
     }
 
     /// 处理投票响应
-    pub fn handle_vote_response(
-        &self,
-        voter_id: String,
-        granted: bool,
-        term: u64,
-    ) {
+    pub fn handle_vote_response(&self, voter_id: String, granted: bool, term: u64) {
         if !matches!(self.role_manager.get_role(), NodeRole::Candidate) {
             return;
         }
@@ -280,10 +275,7 @@ impl FailoverCoordinator {
 
                 // 只有Candidate需要超时重试
                 if matches!(role_manager.get_role(), NodeRole::Candidate) {
-                    log::warn!(
-                        "[{}] Election timeout, retrying",
-                        role_manager.node_id()
-                    );
+                    log::warn!("[{}] Election timeout, retrying", role_manager.node_id());
                     coordinator.start_election();
                 }
             }

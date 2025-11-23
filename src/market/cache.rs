@@ -5,10 +5,10 @@
 //! - L2: MemTable (SkipMap) - < 50μs
 //! - L3: SSTable (mmap) - < 200μs
 
+use super::{OrderBookSnapshot, TickData};
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use super::{TickData, OrderBookSnapshot};
 
 /// L1 行情缓存 (热数据)
 pub struct MarketDataCache {
@@ -71,7 +71,9 @@ impl MarketDataCache {
         if let Some(cached) = self.tick_cache.get(instrument_id) {
             if cached.cached_at.elapsed() < self.ttl {
                 // 缓存命中
-                self.stats.tick_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.stats
+                    .tick_hits
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some(cached.data.clone());
             }
             // 缓存过期，删除
@@ -80,16 +82,21 @@ impl MarketDataCache {
         }
 
         // 缓存未命中
-        self.stats.tick_misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.stats
+            .tick_misses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         None
     }
 
     /// 更新 Tick 缓存 (在成交时调用)
     pub fn update_tick(&self, instrument_id: String, tick: TickData) {
-        self.tick_cache.insert(instrument_id, CachedTick {
-            data: tick,
-            cached_at: Instant::now(),
-        });
+        self.tick_cache.insert(
+            instrument_id,
+            CachedTick {
+                data: tick,
+                cached_at: Instant::now(),
+            },
+        );
     }
 
     /// 获取订单簿 (带缓存)
@@ -97,7 +104,9 @@ impl MarketDataCache {
         if let Some(cached) = self.orderbook_cache.get(instrument_id) {
             if cached.cached_at.elapsed() < self.ttl {
                 // 缓存命中
-                self.stats.orderbook_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.stats
+                    .orderbook_hits
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some(cached.data.clone());
             }
             // 缓存过期，删除
@@ -106,16 +115,21 @@ impl MarketDataCache {
         }
 
         // 缓存未命中
-        self.stats.orderbook_misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.stats
+            .orderbook_misses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         None
     }
 
     /// 更新订单簿缓存 (在快照广播时调用)
     pub fn update_orderbook(&self, instrument_id: String, orderbook: OrderBookSnapshot) {
-        self.orderbook_cache.insert(instrument_id, CachedOrderBook {
-            data: orderbook,
-            cached_at: Instant::now(),
-        });
+        self.orderbook_cache.insert(
+            instrument_id,
+            CachedOrderBook {
+                data: orderbook,
+                cached_at: Instant::now(),
+            },
+        );
     }
 
     /// 使缓存失效
@@ -137,10 +151,22 @@ impl MarketDataCache {
     /// 获取缓存统计信息
     pub fn get_stats(&self) -> CacheStatsSnapshot {
         CacheStatsSnapshot {
-            tick_hits: self.stats.tick_hits.load(std::sync::atomic::Ordering::Relaxed),
-            tick_misses: self.stats.tick_misses.load(std::sync::atomic::Ordering::Relaxed),
-            orderbook_hits: self.stats.orderbook_hits.load(std::sync::atomic::Ordering::Relaxed),
-            orderbook_misses: self.stats.orderbook_misses.load(std::sync::atomic::Ordering::Relaxed),
+            tick_hits: self
+                .stats
+                .tick_hits
+                .load(std::sync::atomic::Ordering::Relaxed),
+            tick_misses: self
+                .stats
+                .tick_misses
+                .load(std::sync::atomic::Ordering::Relaxed),
+            orderbook_hits: self
+                .stats
+                .orderbook_hits
+                .load(std::sync::atomic::Ordering::Relaxed),
+            orderbook_misses: self
+                .stats
+                .orderbook_misses
+                .load(std::sync::atomic::Ordering::Relaxed),
             tick_cache_size: self.tick_cache.len(),
             orderbook_cache_size: self.orderbook_cache.len(),
         }
@@ -148,10 +174,22 @@ impl MarketDataCache {
 
     /// 计算缓存命中率
     pub fn hit_rate(&self) -> f64 {
-        let total_hits = self.stats.tick_hits.load(std::sync::atomic::Ordering::Relaxed)
-            + self.stats.orderbook_hits.load(std::sync::atomic::Ordering::Relaxed);
-        let total_misses = self.stats.tick_misses.load(std::sync::atomic::Ordering::Relaxed)
-            + self.stats.orderbook_misses.load(std::sync::atomic::Ordering::Relaxed);
+        let total_hits = self
+            .stats
+            .tick_hits
+            .load(std::sync::atomic::Ordering::Relaxed)
+            + self
+                .stats
+                .orderbook_hits
+                .load(std::sync::atomic::Ordering::Relaxed);
+        let total_misses = self
+            .stats
+            .tick_misses
+            .load(std::sync::atomic::Ordering::Relaxed)
+            + self
+                .stats
+                .orderbook_misses
+                .load(std::sync::atomic::Ordering::Relaxed);
 
         if total_hits + total_misses == 0 {
             return 0.0;

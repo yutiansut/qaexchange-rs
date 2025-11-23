@@ -5,11 +5,11 @@
 //! - Normal: 普通订单
 //! - Low: 批量回测订单
 
-use std::collections::VecDeque;
-use parking_lot::Mutex;
-use std::sync::Arc;
-use serde::{Deserialize, Serialize};
 use super::order_router::SubmitOrderRequest;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// 订单优先级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -78,7 +78,7 @@ impl PriorityOrderQueue {
             low_queue_limit,
             vip_users: Arc::new(Mutex::new(Vec::new())),
             critical_amount_threshold,
-            low_amount_threshold: 500.0,  // 默认500以下为低优先级
+            low_amount_threshold: 500.0, // 默认500以下为低优先级
             max_queue_length: Arc::new(Mutex::new(0)),
         }
     }
@@ -158,8 +158,10 @@ impl PriorityOrderQueue {
             OrderPriority::Low => {
                 let mut queue = self.low_queue.lock();
                 if queue.len() >= self.low_queue_limit {
-                    log::warn!("Low priority queue full (limit={}), rejecting order",
-                        self.low_queue_limit);
+                    log::warn!(
+                        "Low priority queue full (limit={}), rejecting order",
+                        self.low_queue_limit
+                    );
                     return false;
                 }
                 let account_id = req.order.account_id.clone();
@@ -245,7 +247,10 @@ impl PriorityOrderQueue {
         }
 
         if !batch.is_empty() {
-            log::debug!("Dequeued batch: {} orders (critical/normal/low)", batch.len());
+            log::debug!(
+                "Dequeued batch: {} orders (critical/normal/low)",
+                batch.len()
+            );
         }
 
         batch
@@ -328,8 +333,8 @@ mod tests {
         queue.add_vip_user("vip_user".to_string());
 
         // 入队不同优先级订单
-        queue.enqueue(create_test_order("normal_user", 100.0, 10.0));  // Normal
-        queue.enqueue(create_test_order("vip_user", 100.0, 10.0));     // Critical (VIP)
+        queue.enqueue(create_test_order("normal_user", 100.0, 10.0)); // Normal
+        queue.enqueue(create_test_order("vip_user", 100.0, 10.0)); // Critical (VIP)
         queue.enqueue(create_test_order("whale_user", 50000.0, 100.0)); // Critical (大额)
 
         // 验证出队顺序：Critical优先
@@ -348,7 +353,7 @@ mod tests {
 
     #[test]
     fn test_low_queue_limit() {
-        let queue = PriorityOrderQueue::new(2, 1_000_000.0);  // 限制2个
+        let queue = PriorityOrderQueue::new(2, 1_000_000.0); // 限制2个
 
         // 低优先级订单（价格×数量 < 阈值）
         // 使用 10.0 * 10.0 = 100 < 500 (low_amount_threshold)
@@ -369,13 +374,14 @@ mod tests {
 
         // 入队20个订单
         for i in 0..5 {
-            queue.enqueue(create_test_order("vip", 100.0, 10.0));  // Critical
+            queue.enqueue(create_test_order("vip", 100.0, 10.0)); // Critical
         }
         for i in 0..10 {
-            queue.enqueue(create_test_order(&format!("user{}", i), 100.0, 10.0));  // Normal
+            queue.enqueue(create_test_order(&format!("user{}", i), 100.0, 10.0));
+            // Normal
         }
         for i in 0..5 {
-            queue.enqueue(create_test_order(&format!("low{}", i), 10.0, 10.0));  // Low
+            queue.enqueue(create_test_order(&format!("low{}", i), 10.0, 10.0)); // Low
         }
 
         // 批量出队（最多10个）

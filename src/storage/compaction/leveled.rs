@@ -1,11 +1,11 @@
 //! Leveled Compaction 策略实现
 
 use super::{CompactionConfig, SSTableInfo};
-use crate::storage::sstable::oltp_rkyv::{RkyvSSTable, RkyvSSTableWriter};
 use crate::storage::memtable::types::{MemTableKey, MemTableValue};
-use std::sync::Arc;
-use std::path::{Path, PathBuf};
+use crate::storage::sstable::oltp_rkyv::{RkyvSSTable, RkyvSSTableWriter};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Compaction 任务
 #[derive(Debug, Clone)]
@@ -54,11 +54,16 @@ impl LeveledCompaction {
     }
 
     /// 检查是否需要触发 compaction
-    pub fn should_compact(&self, level_sstables: &HashMap<usize, Vec<SSTableInfo>>) -> Option<CompactionTask> {
+    pub fn should_compact(
+        &self,
+        level_sstables: &HashMap<usize, Vec<SSTableInfo>>,
+    ) -> Option<CompactionTask> {
         // 检查 Level 0 是否超过文件数限制
         if let Some(level0_files) = level_sstables.get(&0) {
             if level0_files.len() >= self.config.level0_max_files {
-                return Some(self.create_level0_compaction_task(level0_files, level_sstables.get(&1)));
+                return Some(
+                    self.create_level0_compaction_task(level0_files, level_sstables.get(&1)),
+                );
             }
         }
 
@@ -101,7 +106,8 @@ impl LeveledCompaction {
         }
 
         let timestamp = chrono::Utc::now().timestamp_millis();
-        let output_path = self.base_path
+        let output_path = self
+            .base_path
             .join("sstables")
             .join(format!("l1_{}.sst", timestamp))
             .to_string_lossy()
@@ -135,7 +141,8 @@ impl LeveledCompaction {
         }
 
         let timestamp = chrono::Utc::now().timestamp_millis();
-        let output_path = self.base_path
+        let output_path = self
+            .base_path
             .join("sstables")
             .join(format!("l{}_{}.sst", level + 1, timestamp))
             .to_string_lossy()
@@ -172,7 +179,8 @@ impl LeveledCompaction {
 
         for sst in &sstables {
             // 使用 range_query 获取所有记录
-            let sst_entries = sst.range_query(i64::MIN, i64::MAX)
+            let sst_entries = sst
+                .range_query(i64::MIN, i64::MAX)
                 .map_err(|e| format!("Range query failed: {}", e))?;
 
             for (timestamp, sequence, record) in sst_entries {
@@ -184,7 +192,8 @@ impl LeveledCompaction {
                 if let Some(&existing_ts) = seen_keys.get(&key_bytes) {
                     if timestamp > existing_ts {
                         // 更新为更新的值
-                        entries.retain(|e: &(MemTableKey, MemTableValue)| e.0.to_bytes() != key_bytes);
+                        entries
+                            .retain(|e: &(MemTableKey, MemTableValue)| e.0.to_bytes() != key_bytes);
                         entries.push((key.clone(), value.clone()));
                         seen_keys.insert(key_bytes.clone(), timestamp);
                     }
@@ -206,11 +215,13 @@ impl LeveledCompaction {
             .map_err(|e| format!("Failed to create SSTable writer: {}", e))?;
 
         for (key, value) in &entries {
-            writer.append(key.clone(), value.clone())
+            writer
+                .append(key.clone(), value.clone())
                 .map_err(|e| format!("Failed to append entry: {}", e))?;
         }
 
-        let metadata = writer.finish()
+        let metadata = writer
+            .finish()
             .map_err(|e| format!("Failed to finish SSTable: {}", e))?;
 
         // 生成新的 SSTableInfo
@@ -227,7 +238,9 @@ impl LeveledCompaction {
             max_timestamp: metadata.max_timestamp,
         };
 
-        let obsolete_sstables: Vec<String> = task.sstables.iter()
+        let obsolete_sstables: Vec<String> = task
+            .sstables
+            .iter()
             .map(|info| info.file_path.clone())
             .collect();
 

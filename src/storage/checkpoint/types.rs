@@ -1,7 +1,7 @@
 //! Checkpoint 类型定义
 
-use serde::{Serialize, Deserialize};
-use rkyv::{Archive, Serialize as RkyvSerialize, Deserialize as RkyvDeserialize};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use serde::{Deserialize, Serialize};
 
 /// Checkpoint 元数据
 #[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]

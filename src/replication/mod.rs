@@ -16,14 +16,14 @@
 //!   |<----- ACK ----------------------------|     |
 //! ```
 
+pub mod failover;
+pub mod heartbeat;
 pub mod protocol;
 pub mod replicator;
 pub mod role;
-pub mod heartbeat;
-pub mod failover;
 
-pub use protocol::{ReplicationMessage, LogEntry, ReplicationRequest, ReplicationResponse};
+pub use failover::FailoverCoordinator;
+pub use heartbeat::HeartbeatManager;
+pub use protocol::{LogEntry, ReplicationMessage, ReplicationRequest, ReplicationResponse};
 pub use replicator::{LogReplicator, ReplicationConfig};
 pub use role::{NodeRole, RoleManager};
-pub use heartbeat::HeartbeatManager;
-pub use failover::FailoverCoordinator;

@@ -2,12 +2,12 @@
 //!
 //! 从WAL恢复Tick和OrderBook数据到缓存
 
-use std::sync::Arc;
-use std::collections::HashMap;
-use crate::storage::wal::record::WalRecord;
+use crate::market::{MarketDataCache, OrderBookSnapshot, PriceLevel, TickData};
 use crate::storage::hybrid::OltpHybridStorage;
-use crate::market::{MarketDataCache, TickData, OrderBookSnapshot, PriceLevel};
+use crate::storage::wal::record::WalRecord;
 use crate::ExchangeError;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub type Result<T> = std::result::Result<T, ExchangeError>;
 
@@ -55,17 +55,30 @@ impl MarketDataRecovery {
         let mut stats = RecoveryStats::default();
 
         // 从WAL读取记录
-        let records = self.storage.range_query(start_ts, end_ts)
+        let records = self
+            .storage
+            .range_query(start_ts, end_ts)
             .map_err(|e| ExchangeError::InternalError(format!("Failed to query WAL: {}", e)))?;
 
-        log::info!("Recovering market data from {} records (ts range: {} - {})",
-                   records.len(), start_ts, end_ts);
+        log::info!(
+            "Recovering market data from {} records (ts range: {} - {})",
+            records.len(),
+            start_ts,
+            end_ts
+        );
 
         for (timestamp, _sequence, record) in records {
             stats.total_records += 1;
 
             match record {
-                WalRecord::TickData { instrument_id, last_price, bid_price, ask_price, volume, timestamp } => {
+                WalRecord::TickData {
+                    instrument_id,
+                    last_price,
+                    bid_price,
+                    ask_price,
+                    volume,
+                    timestamp,
+                } => {
                     stats.tick_records += 1;
 
                     let inst_str = WalRecord::from_fixed_array(&instrument_id);
@@ -73,38 +86,57 @@ impl MarketDataRecovery {
                         instrument_id: inst_str.clone(),
                         timestamp: timestamp / 1_000_000, // 纳秒转毫秒
                         last_price,
-                        bid_price: if bid_price > 0.0 { Some(bid_price) } else { None },
-                        ask_price: if ask_price > 0.0 { Some(ask_price) } else { None },
+                        bid_price: if bid_price > 0.0 {
+                            Some(bid_price)
+                        } else {
+                            None
+                        },
+                        ask_price: if ask_price > 0.0 {
+                            Some(ask_price)
+                        } else {
+                            None
+                        },
                         volume,
                     };
 
                     // 保留最新的Tick（按时间戳）
-                    ticks.entry(inst_str).and_modify(|existing| {
-                        if tick.timestamp > existing.timestamp {
-                            *existing = tick.clone();
-                        }
-                    }).or_insert(tick);
+                    ticks
+                        .entry(inst_str)
+                        .and_modify(|existing| {
+                            if tick.timestamp > existing.timestamp {
+                                *existing = tick.clone();
+                            }
+                        })
+                        .or_insert(tick);
                 }
 
-                WalRecord::OrderBookSnapshot { instrument_id, bids, asks, last_price, timestamp } => {
+                WalRecord::OrderBookSnapshot {
+                    instrument_id,
+                    bids,
+                    asks,
+                    last_price,
+                    timestamp,
+                } => {
                     stats.orderbook_records += 1;
 
                     let inst_str = WalRecord::from_fixed_array(&instrument_id);
 
                     // 转换固定数组为Vec
-                    let bids_vec: Vec<PriceLevel> = bids.iter()
+                    let bids_vec: Vec<PriceLevel> = bids
+                        .iter()
                         .filter(|(price, _)| *price > 0.0)
                         .map(|(price, volume)| PriceLevel {
                             price: *price,
-                            volume: *volume
+                            volume: *volume,
                         })
                         .collect();
 
-                    let asks_vec: Vec<PriceLevel> = asks.iter()
+                    let asks_vec: Vec<PriceLevel> = asks
+                        .iter()
                         .filter(|(price, _)| *price > 0.0)
                         .map(|(price, volume)| PriceLevel {
                             price: *price,
-                            volume: *volume
+                            volume: *volume,
                         })
                         .collect();
 
@@ -113,15 +145,22 @@ impl MarketDataRecovery {
                         timestamp: timestamp / 1_000_000, // 纳秒转毫秒
                         bids: bids_vec,
                         asks: asks_vec,
-                        last_price: if last_price > 0.0 { Some(last_price) } else { None },
+                        last_price: if last_price > 0.0 {
+                            Some(last_price)
+                        } else {
+                            None
+                        },
                     };
 
                     // 保留最新的快照
-                    orderbook_snapshots.entry(inst_str).and_modify(|existing| {
-                        if snapshot.timestamp > existing.timestamp {
-                            *existing = snapshot.clone();
-                        }
-                    }).or_insert(snapshot);
+                    orderbook_snapshots
+                        .entry(inst_str)
+                        .and_modify(|existing| {
+                            if snapshot.timestamp > existing.timestamp {
+                                *existing = snapshot.clone();
+                            }
+                        })
+                        .or_insert(snapshot);
                 }
 
                 WalRecord::OrderBookDelta { .. } => {
@@ -137,8 +176,12 @@ impl MarketDataRecovery {
 
         stats.recovery_time_ms = start_time.elapsed().as_millis();
 
-        log::info!("Market data recovery completed: {} ticks, {} orderbooks in {}ms",
-                   stats.tick_records, stats.orderbook_records, stats.recovery_time_ms);
+        log::info!(
+            "Market data recovery completed: {} ticks, {} orderbooks in {}ms",
+            stats.tick_records,
+            stats.orderbook_records,
+            stats.recovery_time_ms
+        );
 
         Ok(RecoveredMarketData {
             ticks,
@@ -161,8 +204,10 @@ impl MarketDataRecovery {
             self.cache.update_orderbook(instrument_id, snapshot);
         }
 
-        log::info!("Market data cache populated: {} instruments",
-                   recovered.stats.tick_records + recovered.stats.orderbook_records);
+        log::info!(
+            "Market data cache populated: {} instruments",
+            recovered.stats.tick_records + recovered.stats.orderbook_records
+        );
 
         Ok(recovered.stats)
     }

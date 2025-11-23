@@ -1,7 +1,7 @@
 //! 启动交易所示例
 
+use qaexchange::core::account_ext::{AccountType, OpenAccountRequest};
 use qaexchange::exchange::AccountManager;
-use qaexchange::core::account_ext::{OpenAccountRequest, AccountType};
 
 fn main() {
     env_logger::init();
@@ -13,9 +13,9 @@ fn main() {
 
     // 开户 (Phase 10: 使用user_id和account_id分离)
     let req = OpenAccountRequest {
-        user_id: "demo_user".to_string(),  // 用户ID（所有者）
-        account_id: None,  // 自动生成账户ID
-        account_name: "Demo User Account".to_string(),  // 账户名称
+        user_id: "demo_user".to_string(),              // 用户ID（所有者）
+        account_id: None,                              // 自动生成账户ID
+        account_name: "Demo User Account".to_string(), // 账户名称
         init_cash: 1000000.0,
         account_type: AccountType::Individual,
     };

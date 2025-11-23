@@ -10,14 +10,14 @@
 
 use super::metadata::{ConversionMetadata, ConversionRecord};
 use super::scheduler::ConversionTask;
-use crate::storage::memtable::types::MemTableKey;
 use crate::storage::memtable::olap::OlapMemTable;
+use crate::storage::memtable::types::MemTableKey;
 use crate::storage::sstable::olap_parquet::ParquetSSTableWriter;
 use crate::storage::sstable::oltp_rkyv::RkyvSSTable;
 use crate::storage::wal::record::WalRecord;
 use crossbeam::channel::Receiver;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Worker 配置
 #[derive(Debug, Clone)]
@@ -38,10 +38,10 @@ pub struct WorkerConfig {
 impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
-            worker_count: 4,                    // 4 个 worker
-            batch_read_size: 10000,             // 每批 10K 记录
-            delete_source_after_success: true,  // 转换成功后删除源文件
-            source_retention_secs: 3600,        // 保留 1 小时
+            worker_count: 4,                   // 4 个 worker
+            batch_read_size: 10000,            // 每批 10K 记录
+            delete_source_after_success: true, // 转换成功后删除源文件
+            source_retention_secs: 3600,       // 保留 1 小时
         }
     }
 }
@@ -78,7 +78,10 @@ impl ConversionWorker {
         log::info!("Conversion worker {} started", self.worker_id);
 
         while !self.shutdown.load(Ordering::Relaxed) {
-            match self.task_receiver.recv_timeout(std::time::Duration::from_secs(1)) {
+            match self
+                .task_receiver
+                .recv_timeout(std::time::Duration::from_secs(1))
+            {
                 Ok(task) => {
                     if let Err(e) = self.process_task(task) {
                         log::error!("Worker {} failed to process task: {}", self.worker_id, e);
@@ -194,7 +197,11 @@ impl ConversionWorker {
 
         // 3. 写入 Parquet（临时文件）
         let tmp_path = record.temp_file_path();
-        log::debug!("Worker {} writing Parquet to {:?}...", self.worker_id, tmp_path);
+        log::debug!(
+            "Worker {} writing Parquet to {:?}...",
+            self.worker_id,
+            tmp_path
+        );
 
         let schema = Arc::new(crate::storage::memtable::olap::create_olap_schema());
         let mut writer = ParquetSSTableWriter::create(&tmp_path, schema)?;
@@ -254,7 +261,10 @@ impl ConversionWorker {
 
             // 转换格式：(i64, u64, WalRecord) → (MemTableKey, WalRecord)
             for (timestamp, sequence, record) in records {
-                let key = MemTableKey { timestamp, sequence };
+                let key = MemTableKey {
+                    timestamp,
+                    sequence,
+                };
                 all_records.push((key, record));
             }
 
@@ -277,7 +287,11 @@ impl ConversionWorker {
         if self.config.source_retention_secs == 0 {
             // 立即删除
             for sstable_path in &record.oltp_sstables {
-                log::info!("Worker {} deleting source file {:?}", self.worker_id, sstable_path);
+                log::info!(
+                    "Worker {} deleting source file {:?}",
+                    self.worker_id,
+                    sstable_path
+                );
                 if let Err(e) = std::fs::remove_file(sstable_path) {
                     log::warn!("Failed to remove source file {:?}: {}", sstable_path, e);
                 }
@@ -378,7 +392,11 @@ mod tests {
     use crate::storage::wal::record::WalRecord;
     use tempfile::tempdir;
 
-    fn create_test_sstable(path: &std::path::Path, count: usize, timestamp_offset: i64) -> Result<(), String> {
+    fn create_test_sstable(
+        path: &std::path::Path,
+        count: usize,
+        timestamp_offset: i64,
+    ) -> Result<(), String> {
         use crate::storage::sstable::oltp_rkyv::RkyvSSTableWriter;
 
         // 创建 SSTable Writer
@@ -422,8 +440,8 @@ mod tests {
         let sstable1_path = tmp_dir.path().join("sstable_1.rkyv");
         let sstable2_path = tmp_dir.path().join("sstable_2.rkyv");
 
-        create_test_sstable(&sstable1_path, 50, 0).unwrap();   // timestamps 1000-1049
-        create_test_sstable(&sstable2_path, 50, 50).unwrap();  // timestamps 1050-1099
+        create_test_sstable(&sstable1_path, 50, 0).unwrap(); // timestamps 1000-1049
+        create_test_sstable(&sstable2_path, 50, 50).unwrap(); // timestamps 1050-1099
 
         // 创建转换记录
         let metadata_path = tmp_dir.path().join("metadata.json");

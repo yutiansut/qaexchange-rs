@@ -172,7 +172,10 @@ impl PerInstrumentWalManager {
     ///
     /// # Arguments
     /// * `sequences` - 每个品种的截断点
-    pub fn checkpoint_all(&self, sequences: &std::collections::HashMap<String, u64>) -> Result<(), String> {
+    pub fn checkpoint_all(
+        &self,
+        sequences: &std::collections::HashMap<String, u64>,
+    ) -> Result<(), String> {
         for (instrument_id, sequence) in sequences {
             self.checkpoint(instrument_id, *sequence)?;
         }
@@ -186,16 +189,16 @@ impl PerInstrumentWalManager {
 
     /// 获取指定品种的当前序列号
     pub fn current_sequence(&self, instrument_id: &str) -> Option<u64> {
-        self.managers.get(instrument_id).map(|mgr| {
-            mgr.get_current_sequence()
-        })
+        self.managers
+            .get(instrument_id)
+            .map(|mgr| mgr.get_current_sequence())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::record::WalRecord;
+    use super::*;
 
     #[test]
     fn test_per_instrument_wal() {
@@ -203,30 +206,40 @@ mod tests {
         let mgr = PerInstrumentWalManager::new(tmp_dir.path().to_str().unwrap());
 
         // 写入不同品种的数据
-        let seq1 = mgr.append("IF2501", WalRecord::OrderInsert {
-            order_id: 1,
-            user_id: [1u8; 32],
-            instrument_id: [1u8; 16],
-            direction: 0,
-            offset: 0,
-            price: 4000.0,
-            volume: 10.0,
-            timestamp: 12345,
-        }).unwrap();
+        let seq1 = mgr
+            .append(
+                "IF2501",
+                WalRecord::OrderInsert {
+                    order_id: 1,
+                    user_id: [1u8; 32],
+                    instrument_id: [1u8; 16],
+                    direction: 0,
+                    offset: 0,
+                    price: 4000.0,
+                    volume: 10.0,
+                    timestamp: 12345,
+                },
+            )
+            .unwrap();
 
-        let seq2 = mgr.append("IC2501", WalRecord::OrderInsert {
-            order_id: 1,  // 不同品种可以有相同的 order_id
-            user_id: [2u8; 32],
-            instrument_id: [2u8; 16],
-            direction: 0,
-            offset: 0,
-            price: 6000.0,
-            volume: 10.0,
-            timestamp: 12345,
-        }).unwrap();
+        let seq2 = mgr
+            .append(
+                "IC2501",
+                WalRecord::OrderInsert {
+                    order_id: 1, // 不同品种可以有相同的 order_id
+                    user_id: [2u8; 32],
+                    instrument_id: [2u8; 16],
+                    direction: 0,
+                    offset: 0,
+                    price: 6000.0,
+                    volume: 10.0,
+                    timestamp: 12345,
+                },
+            )
+            .unwrap();
 
         assert_eq!(seq1, 1);
-        assert_eq!(seq2, 1);  // 每个品种独立计数
+        assert_eq!(seq2, 1); // 每个品种独立计数
 
         // 验证活跃品种列表
         let instruments = mgr.active_instruments();
@@ -266,29 +279,37 @@ mod tests {
 
         // 写入多个品种的数据
         for i in 0..10 {
-            mgr.append("IF2501", WalRecord::OrderInsert {
-                order_id: i,
-                user_id: [0u8; 32],
-                instrument_id: [0u8; 16],
-                direction: 0,
-                offset: 0,
-                price: 4000.0 + i as f64,
-                volume: 10.0,
-                timestamp: 12345,
-            }).unwrap();
+            mgr.append(
+                "IF2501",
+                WalRecord::OrderInsert {
+                    order_id: i,
+                    user_id: [0u8; 32],
+                    instrument_id: [0u8; 16],
+                    direction: 0,
+                    offset: 0,
+                    price: 4000.0 + i as f64,
+                    volume: 10.0,
+                    timestamp: 12345,
+                },
+            )
+            .unwrap();
         }
 
         for i in 0..5 {
-            mgr.append("IC2501", WalRecord::OrderInsert {
-                order_id: i,
-                user_id: [0u8; 32],
-                instrument_id: [0u8; 16],
-                direction: 0,
-                offset: 0,
-                price: 6000.0 + i as f64,
-                volume: 10.0,
-                timestamp: 12345,
-            }).unwrap();
+            mgr.append(
+                "IC2501",
+                WalRecord::OrderInsert {
+                    order_id: i,
+                    user_id: [0u8; 32],
+                    instrument_id: [0u8; 16],
+                    direction: 0,
+                    offset: 0,
+                    price: 6000.0 + i as f64,
+                    volume: 10.0,
+                    timestamp: 12345,
+                },
+            )
+            .unwrap();
         }
 
         // 回放 IF2501
@@ -296,7 +317,8 @@ mod tests {
         mgr.replay("IF2501", |_entry| {
             count_if += 1;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(count_if, 10);
 
         // 回放 IC2501
@@ -304,7 +326,8 @@ mod tests {
         mgr.replay("IC2501", |_entry| {
             count_ic += 1;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(count_ic, 5);
 
         // 回放所有品种
@@ -312,7 +335,8 @@ mod tests {
         mgr.replay_all(|_inst, _entry| {
             total_count += 1;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(total_count, 15);
     }
 
@@ -321,28 +345,37 @@ mod tests {
         use std::thread;
 
         let tmp_dir = tempfile::tempdir().unwrap();
-        let mgr = Arc::new(PerInstrumentWalManager::new(tmp_dir.path().to_str().unwrap()));
+        let mgr = Arc::new(PerInstrumentWalManager::new(
+            tmp_dir.path().to_str().unwrap(),
+        ));
 
         // 并发写入不同品种
-        let handles: Vec<_> = (0..4).map(|inst_idx| {
-            let mgr_clone = mgr.clone();
-            let inst_id = format!("INST{}", inst_idx);
+        let handles: Vec<_> = (0..4)
+            .map(|inst_idx| {
+                let mgr_clone = mgr.clone();
+                let inst_id = format!("INST{}", inst_idx);
 
-            thread::spawn(move || {
-                for i in 0..100 {
-                    mgr_clone.append(&inst_id, WalRecord::OrderInsert {
-                        order_id: i,
-                        user_id: [inst_idx as u8; 32],
-                        instrument_id: [0u8; 16],
-                        direction: 0,
-                        offset: 0,
-                        price: 100.0 + i as f64,
-                        volume: 10.0,
-                        timestamp: 12345,
-                    }).unwrap();
-                }
+                thread::spawn(move || {
+                    for i in 0..100 {
+                        mgr_clone
+                            .append(
+                                &inst_id,
+                                WalRecord::OrderInsert {
+                                    order_id: i,
+                                    user_id: [inst_idx as u8; 32],
+                                    instrument_id: [0u8; 16],
+                                    direction: 0,
+                                    offset: 0,
+                                    price: 100.0 + i as f64,
+                                    volume: 10.0,
+                                    timestamp: 12345,
+                                },
+                            )
+                            .unwrap();
+                    }
+                })
             })
-        }).collect();
+            .collect();
 
         for handle in handles {
             handle.join().unwrap();

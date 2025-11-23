@@ -6,11 +6,11 @@
 // 3. 支持重试机制
 // 4. 原子性操作：临时文件 + rename
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use chrono::Utc;
+use std::path::PathBuf;
 
 /// 转换状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,15 +165,15 @@ impl ConversionMetadata {
             return Ok(Self::new(metadata_path));
         }
 
-        let mut file = File::open(&metadata_path)
-            .map_err(|e| format!("Open metadata file failed: {}", e))?;
+        let mut file =
+            File::open(&metadata_path).map_err(|e| format!("Open metadata file failed: {}", e))?;
 
         let mut content = String::new();
         file.read_to_string(&mut content)
             .map_err(|e| format!("Read metadata file failed: {}", e))?;
 
-        let mut metadata: ConversionMetadata = serde_json::from_str(&content)
-            .map_err(|e| format!("Parse metadata failed: {}", e))?;
+        let mut metadata: ConversionMetadata =
+            serde_json::from_str(&content).map_err(|e| format!("Parse metadata failed: {}", e))?;
 
         metadata.metadata_path = metadata_path;
         Ok(metadata)
@@ -272,7 +272,8 @@ impl ConversionMetadata {
 
     /// 清理旧的成功记录（保留最近 N 条）
     pub fn cleanup_success_records(&mut self, keep_recent: usize) -> Result<(), String> {
-        let mut success_records: Vec<_> = self.records
+        let mut success_records: Vec<_> = self
+            .records
             .iter()
             .enumerate()
             .filter(|(_, r)| r.status == ConversionStatus::Success)
@@ -347,7 +348,9 @@ mod tests {
         let mut record = ConversionRecord::new(
             1,
             "rb2501".to_string(),
-            vec![PathBuf::from("/home/quantaxis/qaexchange-rs/output//sstable_1.rkyv")],
+            vec![PathBuf::from(
+                "/home/quantaxis/qaexchange-rs/output//sstable_1.rkyv",
+            )],
             PathBuf::from("/home/quantaxis/qaexchange-rs/output//olap_1.parquet"),
         );
 
@@ -371,7 +374,9 @@ mod tests {
         let mut record = ConversionRecord::new(
             1,
             "rb2501".to_string(),
-            vec![PathBuf::from("/home/quantaxis/qaexchange-rs/output//sstable_1.rkyv")],
+            vec![PathBuf::from(
+                "/home/quantaxis/qaexchange-rs/output//sstable_1.rkyv",
+            )],
             PathBuf::from("/home/quantaxis/qaexchange-rs/output//olap_1.parquet"),
         );
 
@@ -404,7 +409,9 @@ mod tests {
             let record = ConversionRecord::new(
                 metadata.allocate_id(),
                 "rb2501".to_string(),
-                vec![PathBuf::from("/home/quantaxis/qaexchange-rs/output//sstable_1.rkyv")],
+                vec![PathBuf::from(
+                    "/home/quantaxis/qaexchange-rs/output//sstable_1.rkyv",
+                )],
                 PathBuf::from("/home/quantaxis/qaexchange-rs/output//olap_1.parquet"),
             );
 

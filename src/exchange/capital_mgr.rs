@@ -4,9 +4,9 @@
 
 use crate::exchange::AccountManager;
 use crate::ExchangeError;
-use std::sync::Arc;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// 交易类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,7 +84,9 @@ impl CapitalManager {
 
     /// 生成交易ID
     fn generate_transaction_id(&self) -> String {
-        let seq = self.transaction_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let seq = self
+            .transaction_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let now = chrono::Local::now();
         format!("TXN{}{:08}", now.format("%Y%m%d"), seq)
     }
@@ -100,13 +102,15 @@ impl CapitalManager {
     /// 入金 (新接口,带流水记录)
     pub fn deposit_with_record(
         &self,
-        account_id: String,  // Phase 10: 改为account_id
+        account_id: String, // Phase 10: 改为account_id
         amount: f64,
         method: Option<String>,
         remark: Option<String>,
     ) -> Result<FundTransaction, ExchangeError> {
         if amount <= 0.0 {
-            return Err(ExchangeError::InvalidParameter("存款金额必须大于0".to_string()));
+            return Err(ExchangeError::InvalidParameter(
+                "存款金额必须大于0".to_string(),
+            ));
         }
 
         // 获取账户当前余额（通过QIFI slice计算）
@@ -129,7 +133,7 @@ impl CapitalManager {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let transaction = FundTransaction {
             transaction_id: self.generate_transaction_id(),
-            user_id: account_id.clone(),  // Phase 10: 这里存储account_id
+            user_id: account_id.clone(), // Phase 10: 这里存储account_id
             transaction_type: TransactionType::Deposit,
             amount,
             balance_before,
@@ -147,8 +151,12 @@ impl CapitalManager {
             .or_insert_with(Vec::new)
             .push(transaction.clone());
 
-        log::info!("Deposit completed: account_id={}, amount={}, transaction_id={}",
-            account_id, amount, transaction.transaction_id);
+        log::info!(
+            "Deposit completed: account_id={}, amount={}, transaction_id={}",
+            account_id,
+            amount,
+            transaction.transaction_id
+        );
 
         Ok(transaction)
     }
@@ -159,7 +167,9 @@ impl CapitalManager {
         let mut acc = account.write();
 
         if acc.money < amount {
-            return Err(ExchangeError::AccountError("Insufficient funds".to_string()));
+            return Err(ExchangeError::AccountError(
+                "Insufficient funds".to_string(),
+            ));
         }
 
         acc.withdraw(amount);
@@ -170,13 +180,15 @@ impl CapitalManager {
     /// 出金 (新接口,带流水记录)
     pub fn withdraw_with_record(
         &self,
-        account_id: String,  // Phase 10: 改为account_id
+        account_id: String, // Phase 10: 改为account_id
         amount: f64,
         method: Option<String>,
         remark: Option<String>,
     ) -> Result<FundTransaction, ExchangeError> {
         if amount <= 0.0 {
-            return Err(ExchangeError::InvalidParameter("取款金额必须大于0".to_string()));
+            return Err(ExchangeError::InvalidParameter(
+                "取款金额必须大于0".to_string(),
+            ));
         }
 
         // 获取账户当前余额和可用资金（通过QIFI slice计算）
@@ -187,9 +199,10 @@ impl CapitalManager {
 
         // 检查可用资金
         if available < amount {
-            return Err(ExchangeError::InsufficientBalance(
-                format!("可用资金不足: 需要={}, 可用={}", amount, available)
-            ));
+            return Err(ExchangeError::InsufficientBalance(format!(
+                "可用资金不足: 需要={}, 可用={}",
+                amount, available
+            )));
         }
 
         // 执行出金
@@ -206,7 +219,7 @@ impl CapitalManager {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let transaction = FundTransaction {
             transaction_id: self.generate_transaction_id(),
-            user_id: account_id.clone(),  // Phase 10: 这里存储account_id
+            user_id: account_id.clone(), // Phase 10: 这里存储account_id
             transaction_type: TransactionType::Withdrawal,
             amount,
             balance_before,
@@ -224,8 +237,12 @@ impl CapitalManager {
             .or_insert_with(Vec::new)
             .push(transaction.clone());
 
-        log::info!("Withdrawal completed: account_id={}, amount={}, transaction_id={}",
-            account_id, amount, transaction.transaction_id);
+        log::info!(
+            "Withdrawal completed: account_id={}, amount={}, transaction_id={}",
+            account_id,
+            amount,
+            transaction.transaction_id
+        );
 
         Ok(transaction)
     }
@@ -255,7 +272,9 @@ impl CapitalManager {
     ) -> Vec<FundTransaction> {
         self.get_transactions(user_id)
             .into_iter()
-            .filter(|txn| txn.created_at.as_str() >= start_date && txn.created_at.as_str() <= end_date)
+            .filter(|txn| {
+                txn.created_at.as_str() >= start_date && txn.created_at.as_str() <= end_date
+            })
             .collect()
     }
 
@@ -274,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_deposit_and_withdraw_with_record() {
-        use crate::core::account_ext::{OpenAccountRequest, AccountType};
+        use crate::core::account_ext::{AccountType, OpenAccountRequest};
 
         // 创建账户管理器和资金管理器
         let account_mgr = Arc::new(AccountManager::new());
@@ -292,12 +311,14 @@ mod tests {
         assert_eq!(account_id, "test_user");
 
         // 测试入金
-        let deposit = capital_mgr.deposit_with_record(
-            account_id.clone(),
-            5000.0,
-            Some("bank_transfer".to_string()),
-            Some("初始入金".to_string()),
-        ).unwrap();
+        let deposit = capital_mgr
+            .deposit_with_record(
+                account_id.clone(),
+                5000.0,
+                Some("bank_transfer".to_string()),
+                Some("初始入金".to_string()),
+            )
+            .unwrap();
 
         assert_eq!(deposit.amount, 5000.0);
         assert_eq!(deposit.balance_before, 10000.0);
@@ -309,15 +330,20 @@ mod tests {
             let qifi = account_mgr.get_qifi_slice(&account_id).unwrap();
             qifi.accounts.balance
         };
-        assert_eq!(actual_balance, 15000.0, "Account balance should be updated after deposit");
+        assert_eq!(
+            actual_balance, 15000.0,
+            "Account balance should be updated after deposit"
+        );
 
         // 测试出金
-        let withdrawal = capital_mgr.withdraw_with_record(
-            account_id.clone(),
-            3000.0,
-            Some("bank_transfer".to_string()),
-            None,
-        ).unwrap();
+        let withdrawal = capital_mgr
+            .withdraw_with_record(
+                account_id.clone(),
+                3000.0,
+                Some("bank_transfer".to_string()),
+                None,
+            )
+            .unwrap();
 
         assert_eq!(withdrawal.amount, 3000.0);
         assert_eq!(withdrawal.balance_before, 15000.0);

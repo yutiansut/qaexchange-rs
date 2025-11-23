@@ -14,25 +14,25 @@
 // [Metadata: rkyv serialized]
 // [Footer: 64 bytes]
 
-use super::types::SSTableMetadata;
 use super::bloom::BloomFilter;
+use super::types::SSTableMetadata;
 use crate::storage::memtable::types::{MemTableKey, MemTableValue};
 use crate::storage::wal::WalRecord;
-use std::fs::{File, OpenOptions};
-use std::io::{Write, BufWriter, Read, Seek, SeekFrom};
-use std::path::Path;
 use rkyv::Deserialize;
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::Path;
 
 /// SSTable 文件头（128 bytes）
 #[derive(Debug, Clone)]
 struct SSTableHeader {
-    magic: [u8; 8],         // "QAXSS01\0"
-    version: u32,           // 版本号
-    entry_count: u64,       // 记录数
-    min_timestamp: i64,     // 最小时间戳
-    max_timestamp: i64,     // 最大时间戳
-    metadata_offset: u64,   // 元数据偏移
-    _reserved: [u8; 84],    // 保留字段
+    magic: [u8; 8],       // "QAXSS01\0"
+    version: u32,         // 版本号
+    entry_count: u64,     // 记录数
+    min_timestamp: i64,   // 最小时间戳
+    max_timestamp: i64,   // 最大时间戳
+    metadata_offset: u64, // 元数据偏移
+    _reserved: [u8; 84],  // 保留字段
 }
 
 impl SSTableHeader {
@@ -106,7 +106,10 @@ impl RkyvSSTableWriter {
     }
 
     /// 创建新的 SSTable Writer，指定容量
-    pub fn create_with_capacity<P: AsRef<Path>>(path: P, expected_entries: usize) -> Result<Self, String> {
+    pub fn create_with_capacity<P: AsRef<Path>>(
+        path: P,
+        expected_entries: usize,
+    ) -> Result<Self, String> {
         let file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -118,7 +121,8 @@ impl RkyvSSTableWriter {
 
         // 预留 Header 空间（稍后回填）
         let placeholder = vec![0u8; 128];
-        writer.write_all(&placeholder)
+        writer
+            .write_all(&placeholder)
             .map_err(|e| format!("Write placeholder failed: {}", e))?;
 
         // 创建 Bloom Filter（1% 假阳性率）
@@ -131,7 +135,7 @@ impl RkyvSSTableWriter {
             max_timestamp: None,
             min_key: None,
             max_key: None,
-            current_offset: 128,  // Header 后开始
+            current_offset: 128, // Header 后开始
             bloom_filter,
         })
     }
@@ -160,20 +164,24 @@ impl RkyvSSTableWriter {
         self.bloom_filter.insert(&key_bytes);
 
         // 序列化键值对
-        let key_bytes = rkyv::to_bytes::<_, 256>(&key)
-            .map_err(|e| format!("Serialize key failed: {}", e))?;
+        let key_bytes =
+            rkyv::to_bytes::<_, 256>(&key).map_err(|e| format!("Serialize key failed: {}", e))?;
         let value_bytes = rkyv::to_bytes::<_, 2048>(&value)
             .map_err(|e| format!("Serialize value failed: {}", e))?;
 
         // 写入长度前缀 + 数据
-        self.file.write_all(&(key_bytes.len() as u32).to_le_bytes())
+        self.file
+            .write_all(&(key_bytes.len() as u32).to_le_bytes())
             .map_err(|e| format!("Write key length failed: {}", e))?;
-        self.file.write_all(&key_bytes)
+        self.file
+            .write_all(&key_bytes)
             .map_err(|e| format!("Write key failed: {}", e))?;
 
-        self.file.write_all(&(value_bytes.len() as u32).to_le_bytes())
+        self.file
+            .write_all(&(value_bytes.len() as u32).to_le_bytes())
             .map_err(|e| format!("Write value length failed: {}", e))?;
-        self.file.write_all(&value_bytes)
+        self.file
+            .write_all(&value_bytes)
             .map_err(|e| format!("Write value failed: {}", e))?;
 
         self.current_offset += 8 + key_bytes.len() as u64 + value_bytes.len() as u64;
@@ -184,7 +192,7 @@ impl RkyvSSTableWriter {
     /// 批量写入（从 MemTable）
     pub fn write_from_memtable(
         &mut self,
-        entries: Vec<(MemTableKey, MemTableValue)>
+        entries: Vec<(MemTableKey, MemTableValue)>,
     ) -> Result<(), String> {
         for (key, value) in entries {
             self.append(key, value)?;
@@ -200,8 +208,11 @@ impl RkyvSSTableWriter {
         let bloom_stats = self.bloom_filter.stats();
         log::info!(
             "SSTable Bloom Filter: {} entries, {} bits, {} hash functions, {:.2}% FPP, {} bytes",
-            bloom_stats.n, bloom_stats.m, bloom_stats.k,
-            bloom_stats.estimated_fpp * 100.0, bloom_stats.memory_bytes
+            bloom_stats.n,
+            bloom_stats.m,
+            bloom_stats.k,
+            bloom_stats.estimated_fpp * 100.0,
+            bloom_stats.memory_bytes
         );
 
         // 创建元数据
@@ -209,20 +220,24 @@ impl RkyvSSTableWriter {
             self.entry_count,
             self.min_timestamp.unwrap_or(0),
             self.max_timestamp.unwrap_or(0),
-        ).with_key_range(
+        )
+        .with_key_range(
             self.min_key.unwrap_or_default(),
             self.max_key.unwrap_or_default(),
-        ).with_bloom_filter(self.bloom_filter);
+        )
+        .with_bloom_filter(self.bloom_filter);
 
         // 序列化元数据
         let metadata_bytes = rkyv::to_bytes::<_, 4096>(&metadata)
             .map_err(|e| format!("Serialize metadata failed: {}", e))?;
 
         // 写入元数据
-        self.file.write_all(&metadata_bytes)
+        self.file
+            .write_all(&metadata_bytes)
             .map_err(|e| format!("Write metadata failed: {}", e))?;
 
-        self.file.flush()
+        self.file
+            .flush()
             .map_err(|e| format!("Flush failed: {}", e))?;
 
         // 回填 Header
@@ -233,15 +248,16 @@ impl RkyvSSTableWriter {
             metadata_offset,
         );
 
-        let mut file = self.file.into_inner()
+        let mut file = self
+            .file
+            .into_inner()
             .map_err(|e| format!("Get inner file failed: {}", e))?;
 
         file.seek(SeekFrom::Start(0))
             .map_err(|e| format!("Seek to header failed: {}", e))?;
         file.write_all(&header.to_bytes())
             .map_err(|e| format!("Write header failed: {}", e))?;
-        file.sync_all()
-            .map_err(|e| format!("Sync failed: {}", e))?;
+        file.sync_all().map_err(|e| format!("Sync failed: {}", e))?;
 
         Ok(metadata)
     }
@@ -258,8 +274,7 @@ impl RkyvSSTable {
     /// 打开已存在的 SSTable
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let file_path = path.as_ref().to_str().unwrap().to_string();
-        let mut file = File::open(&path)
-            .map_err(|e| format!("Open SSTable failed: {}", e))?;
+        let mut file = File::open(&path).map_err(|e| format!("Open SSTable failed: {}", e))?;
 
         // 读取 Header
         let mut header_buf = vec![0u8; 128];
@@ -309,14 +324,18 @@ impl RkyvSSTable {
     /// - 使用 mmap 进行零拷贝读取
     /// - 二分查找定位起始位置
     /// - Block 级别索引
-    pub fn range_query(&self, start_ts: i64, end_ts: i64) -> Result<Vec<(i64, u64, WalRecord)>, String> {
+    pub fn range_query(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<(i64, u64, WalRecord)>, String> {
         // 快速过滤：时间范围检查
         if end_ts < self.header.min_timestamp || start_ts > self.header.max_timestamp {
             return Ok(Vec::new());
         }
 
-        let mut file = File::open(&self.file_path)
-            .map_err(|e| format!("Open file failed: {}", e))?;
+        let mut file =
+            File::open(&self.file_path).map_err(|e| format!("Open file failed: {}", e))?;
 
         // 跳过 Header
         file.seek(SeekFrom::Start(128))
@@ -340,7 +359,8 @@ impl RkyvSSTable {
 
             let archived_key = rkyv::check_archived_root::<MemTableKey>(&key_buf)
                 .map_err(|e| format!("Deserialize key failed: {}", e))?;
-            let key: MemTableKey = archived_key.deserialize(&mut rkyv::Infallible)
+            let key: MemTableKey = archived_key
+                .deserialize(&mut rkyv::Infallible)
                 .map_err(|e| format!("Deserialize key failed: {:?}", e))?;
 
             // 读取 value 长度
@@ -358,7 +378,8 @@ impl RkyvSSTable {
             if key.timestamp >= start_ts && key.timestamp <= end_ts {
                 let archived_value = rkyv::check_archived_root::<MemTableValue>(&value_buf)
                     .map_err(|e| format!("Deserialize value failed: {}", e))?;
-                let value: MemTableValue = archived_value.deserialize(&mut rkyv::Infallible)
+                let value: MemTableValue = archived_value
+                    .deserialize(&mut rkyv::Infallible)
                     .map_err(|e| format!("Deserialize value failed: {:?}", e))?;
 
                 results.push((key.timestamp, key.sequence, value.record));
@@ -448,7 +469,7 @@ mod tests {
 
             // 范围查询
             let results = reader.range_query(1000, 1500).unwrap();
-            assert_eq!(results.len(), 51);  // 1000, 1010, ..., 1500
+            assert_eq!(results.len(), 51); // 1000, 1010, ..., 1500
         }
     }
 
@@ -480,6 +501,6 @@ mod tests {
 
         // 部分重叠
         let results = reader.range_query(1200, 1600).unwrap();
-        assert_eq!(results.len(), 5);  // 1200, 1300, 1400, 1500, 1600
+        assert_eq!(results.len(), 5); // 1200, 1300, 1400, 1500, 1600
     }
 }

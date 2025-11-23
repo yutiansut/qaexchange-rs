@@ -2,12 +2,12 @@
 //!
 //! 负责用户注册、登录、认证等功能
 
+use crate::core::account_ext::{AccountType, OpenAccountRequest};
 use crate::exchange::AccountManager;
-use crate::core::account_ext::{OpenAccountRequest, AccountType};
 use crate::ExchangeError;
-use std::sync::Arc;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// 用户信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,7 +16,7 @@ pub struct UserInfo {
     pub username: String,
     pub email: String,
     pub phone: String,
-    pub password_hash: String,  // 实际应该使用bcrypt等加密
+    pub password_hash: String, // 实际应该使用bcrypt等加密
     pub is_admin: bool,
     pub created_at: String,
 }
@@ -71,7 +71,9 @@ impl UserManager {
 
     /// 生成用户ID
     fn generate_user_id(&self) -> String {
-        let seq = self.user_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let seq = self
+            .user_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         format!("user{:06}", seq)
     }
 
@@ -79,9 +81,10 @@ impl UserManager {
     pub fn register(&self, req: RegisterRequest) -> Result<String, ExchangeError> {
         // 1. 验证用户名唯一性
         if self.username_map.contains_key(&req.username) {
-            return Err(ExchangeError::AccountError(
-                format!("用户名已存在: {}", req.username)
-            ));
+            return Err(ExchangeError::AccountError(format!(
+                "用户名已存在: {}",
+                req.username
+            )));
         }
 
         // 2. 生成用户ID
@@ -117,9 +120,14 @@ impl UserManager {
 
         // 5. 保存用户信息
         self.users.insert(user_id.clone(), user_info);
-        self.username_map.insert(req.username.clone(), user_id.clone());
+        self.username_map
+            .insert(req.username.clone(), user_id.clone());
 
-        log::info!("用户注册成功: user_id={}, username={}", user_id, req.username);
+        log::info!(
+            "用户注册成功: user_id={}, username={}",
+            user_id,
+            req.username
+        );
 
         Ok(user_id)
     }
@@ -127,35 +135,37 @@ impl UserManager {
     /// 用户登录
     pub fn login(&self, req: LoginRequest) -> Result<LoginResponse, ExchangeError> {
         // 1. 根据用户名查找用户ID
-        let user_id = self.username_map
+        let user_id = self
+            .username_map
             .get(&req.username)
             .map(|r| r.value().clone())
-            .ok_or_else(|| ExchangeError::AccountError(
-                format!("用户不存在: {}", req.username)
-            ))?;
+            .ok_or_else(|| ExchangeError::AccountError(format!("用户不存在: {}", req.username)))?;
 
         // 2. 获取用户信息
-        let user = self.users
+        let user = self
+            .users
             .get(&user_id)
-            .ok_or_else(|| ExchangeError::AccountError(
-                format!("用户信息不存在: {}", user_id)
-            ))?;
+            .ok_or_else(|| ExchangeError::AccountError(format!("用户信息不存在: {}", user_id)))?;
 
         // 3. 验证密码，使用bcrypt verify
-        let password_valid = bcrypt::verify(&req.password, &user.password_hash)
-            .map_err(|e| ExchangeError::InternalError(format!("Password verification failed: {}", e)))?;
+        let password_valid = bcrypt::verify(&req.password, &user.password_hash).map_err(|e| {
+            ExchangeError::InternalError(format!("Password verification failed: {}", e))
+        })?;
 
         if !password_valid {
-            return Err(ExchangeError::AuthError(
-                "密码错误".to_string()
-            ));
+            return Err(ExchangeError::AuthError("密码错误".to_string()));
         }
 
         // 4. 生成JWT token
-        let token = crate::utils::jwt::generate_token(&user_id, &user.username)
-            .map_err(|e| ExchangeError::InternalError(format!("Failed to generate JWT token: {}", e)))?;
+        let token = crate::utils::jwt::generate_token(&user_id, &user.username).map_err(|e| {
+            ExchangeError::InternalError(format!("Failed to generate JWT token: {}", e))
+        })?;
 
-        log::info!("用户登录成功: user_id={}, username={}", user_id, req.username);
+        log::info!(
+            "用户登录成功: user_id={}, username={}",
+            user_id,
+            req.username
+        );
 
         Ok(LoginResponse {
             user_id: user_id.clone(),
@@ -170,9 +180,7 @@ impl UserManager {
         self.users
             .get(user_id)
             .map(|r| r.value().clone())
-            .ok_or_else(|| ExchangeError::AccountError(
-                format!("用户不存在: {}", user_id)
-            ))
+            .ok_or_else(|| ExchangeError::AccountError(format!("用户不存在: {}", user_id)))
     }
 
     /// 验证JWT token并返回用户ID
@@ -189,7 +197,11 @@ impl UserManager {
     }
 
     /// 创建管理员账户
-    pub fn create_admin(&self, username: String, password: String) -> Result<String, ExchangeError> {
+    pub fn create_admin(
+        &self,
+        username: String,
+        password: String,
+    ) -> Result<String, ExchangeError> {
         let user_id = self.generate_user_id();
 
         // 使用bcrypt加密密码

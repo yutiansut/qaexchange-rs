@@ -54,10 +54,7 @@ impl OrderStatus {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(
-            self,
-            OrderStatus::Accepted | OrderStatus::PartiallyFilled
-        )
+        matches!(self, OrderStatus::Accepted | OrderStatus::PartiallyFilled)
     }
 }
 
