@@ -274,17 +274,50 @@ pub struct GetKLines {
     pub count: usize,
 }
 
+/// 从合约ID中提取基础合约代码（去除交易所前缀）
+/// @yutiansut @quantaxis
+///
+/// 支持两种格式：
+/// - "CFFEX.IF2501" -> "IF2501"
+/// - "IF2501" -> "IF2501"
+fn extract_base_instrument_id(instrument_id: &str) -> &str {
+    if let Some(pos) = instrument_id.find('.') {
+        &instrument_id[pos + 1..]
+    } else {
+        instrument_id
+    }
+}
+
 impl Handler<GetKLines> for KLineActor {
     type Result = Vec<KLine>;
 
     fn handle(&mut self, msg: GetKLines, _ctx: &mut Context<Self>) -> Self::Result {
         let aggregators = self.aggregators.read();
 
+        // 首先尝试直接匹配
         if let Some(aggregator) = aggregators.get(&msg.instrument_id) {
-            aggregator.get_recent_klines(msg.period, msg.count)
-        } else {
-            Vec::new()
+            return aggregator.get_recent_klines(msg.period, msg.count);
         }
+
+        // 如果直接匹配失败，尝试用基础合约代码匹配
+        // @yutiansut @quantaxis
+        let base_id = extract_base_instrument_id(&msg.instrument_id);
+
+        // 遍历所有aggregator，找到匹配的
+        for (key, aggregator) in aggregators.iter() {
+            let key_base = extract_base_instrument_id(key);
+            if key_base == base_id {
+                log::debug!(
+                    "📊 [KLineActor] Found matching aggregator: {} -> {} for query {}",
+                    msg.instrument_id,
+                    key,
+                    base_id
+                );
+                return aggregator.get_recent_klines(msg.period, msg.count);
+            }
+        }
+
+        Vec::new()
     }
 }
 
@@ -302,10 +335,23 @@ impl Handler<GetCurrentKLine> for KLineActor {
     fn handle(&mut self, msg: GetCurrentKLine, _ctx: &mut Context<Self>) -> Self::Result {
         let aggregators = self.aggregators.read();
 
-        aggregators
-            .get(&msg.instrument_id)
-            .and_then(|agg| agg.get_current_kline(msg.period))
-            .cloned()
+        // 首先尝试直接匹配
+        if let Some(agg) = aggregators.get(&msg.instrument_id) {
+            return agg.get_current_kline(msg.period).cloned();
+        }
+
+        // 如果直接匹配失败，尝试用基础合约代码匹配
+        // @yutiansut @quantaxis
+        let base_id = extract_base_instrument_id(&msg.instrument_id);
+
+        for (key, aggregator) in aggregators.iter() {
+            let key_base = extract_base_instrument_id(key);
+            if key_base == base_id {
+                return aggregator.get_current_kline(msg.period).cloned();
+            }
+        }
+
+        None
     }
 }
 
