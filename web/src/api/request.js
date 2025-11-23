@@ -2,8 +2,10 @@ import axios from 'axios'
 import { Message } from 'element-ui'
 
 // 创建 axios 实例
+// @yutiansut @quantaxis
+// 使用环境变量配置 API 地址，支持开发和生产环境
 const service = axios.create({
-  baseURL: '/api',
+  baseURL: process.env.VUE_APP_API_BASE_URL || '/api',
   timeout: 30000
 })
 

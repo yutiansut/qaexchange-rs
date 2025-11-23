@@ -4,15 +4,20 @@
 // - 单条写入: P99 < 1ms
 // - 批量写入: > 100K entries/s
 // - 恢复速度: > 1GB/s
+// - 组提交延迟: < 5ms
+//
+// @author @yutiansut @quantaxis
 
 use super::record::{WalEntry, WalRecord};
 use parking_lot::Mutex;
 use rkyv::Deserialize;
+use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// WAL 文件 Header
 #[derive(Debug, Clone)]
@@ -74,6 +79,70 @@ impl WalFileHeader {
     }
 }
 
+/// WAL 统计信息
+#[derive(Debug, Default)]
+pub struct WalStats {
+    /// 写入计数
+    pub write_count: AtomicU64,
+    /// 写入字节数
+    pub write_bytes: AtomicU64,
+    /// fsync 次数
+    pub sync_count: AtomicU64,
+    /// 组提交次数
+    pub group_commit_count: AtomicU64,
+    /// 组提交平均大小
+    pub group_commit_total_size: AtomicU64,
+    /// 写入总耗时 (微秒)
+    pub total_write_time_us: AtomicU64,
+}
+
+impl WalStats {
+    pub fn avg_group_commit_size(&self) -> f64 {
+        let count = self.group_commit_count.load(Ordering::Relaxed);
+        if count == 0 {
+            0.0
+        } else {
+            self.group_commit_total_size.load(Ordering::Relaxed) as f64 / count as f64
+        }
+    }
+
+    pub fn avg_write_latency_us(&self) -> f64 {
+        let count = self.write_count.load(Ordering::Relaxed);
+        if count == 0 {
+            0.0
+        } else {
+            self.total_write_time_us.load(Ordering::Relaxed) as f64 / count as f64
+        }
+    }
+}
+
+/// 预序列化的 WAL 条目
+struct PreSerializedEntry {
+    sequence: u64,
+    bytes: Vec<u8>,
+}
+
+/// 组提交配置
+#[derive(Clone)]
+pub struct GroupCommitConfig {
+    /// 最大等待时间 (毫秒)
+    pub max_wait_ms: u64,
+    /// 最大批量大小
+    pub max_batch_size: usize,
+    /// 是否启用组提交
+    pub enabled: bool,
+}
+
+impl Default for GroupCommitConfig {
+    fn default() -> Self {
+        Self {
+            max_wait_ms: 5,       // 5ms 最大等待
+            max_batch_size: 1000, // 最多积累 1000 条
+            enabled: true,
+        }
+    }
+}
+
 /// WAL Manager
 pub struct WalManager {
     current_file: Arc<Mutex<BufWriter<File>>>,
@@ -82,6 +151,14 @@ pub struct WalManager {
     max_file_size: u64, // 单个 WAL 文件最大 1GB
     current_file_path: Arc<Mutex<String>>,
     current_file_size: Arc<AtomicU64>,
+    /// 统计信息
+    stats: Arc<WalStats>,
+    /// 组提交配置
+    group_commit_config: GroupCommitConfig,
+    /// 组提交缓冲区
+    group_commit_buffer: Arc<Mutex<VecDeque<PreSerializedEntry>>>,
+    /// 最后刷新时间
+    last_flush_time: Arc<Mutex<Instant>>,
 }
 
 impl WalManager {
@@ -121,7 +198,23 @@ impl WalManager {
             max_file_size: 1_000_000_000, // 1GB
             current_file_path: Arc::new(Mutex::new(file_path)),
             current_file_size: Arc::new(AtomicU64::new(current_size)),
+            stats: Arc::new(WalStats::default()),
+            group_commit_config: GroupCommitConfig::default(),
+            group_commit_buffer: Arc::new(Mutex::new(VecDeque::new())),
+            last_flush_time: Arc::new(Mutex::new(Instant::now())),
         }
+    }
+
+    /// 使用自定义配置创建 WAL Manager
+    pub fn with_config(base_path: &str, config: GroupCommitConfig) -> Self {
+        let mut manager = Self::new(base_path);
+        manager.group_commit_config = config;
+        manager
+    }
+
+    /// 获取统计信息
+    pub fn get_stats(&self) -> &WalStats {
+        &self.stats
     }
 
     /// 打开已存在的 WAL（用于恢复）
@@ -173,6 +266,10 @@ impl WalManager {
             max_file_size: 1_000_000_000,
             current_file_path: Arc::new(Mutex::new(latest_file.clone())),
             current_file_size: Arc::new(AtomicU64::new(current_size)),
+            stats: Arc::new(WalStats::default()),
+            group_commit_config: GroupCommitConfig::default(),
+            group_commit_buffer: Arc::new(Mutex::new(VecDeque::new())),
+            last_flush_time: Arc::new(Mutex::new(Instant::now())),
         }
     }
 
@@ -204,6 +301,7 @@ impl WalManager {
 
     /// 追加 WAL 记录（同步写入，确保持久化）
     pub fn append(&self, record: WalRecord) -> Result<u64, String> {
+        let start = Instant::now();
         let sequence = self.current_sequence.fetch_add(1, Ordering::SeqCst);
 
         let entry = WalEntry::new(sequence, record).with_crc32();
@@ -212,70 +310,235 @@ impl WalManager {
         let length = bytes.len() as u32;
 
         // 检查文件大小，是否需要滚动
-        let current_size = self
-            .current_file_size
-            .fetch_add((4 + length) as u64, Ordering::Relaxed);
-
-        if current_size > self.max_file_size {
+        let current_size = self.current_file_size.load(Ordering::Relaxed);
+        let new_size = current_size + (4 + length) as u64;
+        if new_size > self.max_file_size {
             self.rotate_file()?;
         }
+        self.current_file_size
+            .fetch_add((4 + length) as u64, Ordering::Relaxed);
 
-        let mut file = self.current_file.lock();
+        {
+            let mut file = self.current_file.lock();
 
-        // 写入长度前缀 (4 bytes)
-        file.write_all(&length.to_le_bytes())
-            .map_err(|e| format!("WAL write failed: {}", e))?;
+            // 写入长度前缀 (4 bytes)
+            file.write_all(&length.to_le_bytes())
+                .map_err(|e| format!("WAL write failed: {}", e))?;
 
-        // 写入数据
-        file.write_all(&bytes)
-            .map_err(|e| format!("WAL write failed: {}", e))?;
+            // 写入数据
+            file.write_all(&bytes)
+                .map_err(|e| format!("WAL write failed: {}", e))?;
 
-        // fsync 确保持久化（P99 < 1ms）
-        file.flush()
-            .map_err(|e| format!("WAL flush failed: {}", e))?;
+            // fsync 确保持久化（P99 < 1ms）
+            file.flush()
+                .map_err(|e| format!("WAL flush failed: {}", e))?;
 
-        file.get_mut()
-            .sync_all()
-            .map_err(|e| format!("WAL sync failed: {}", e))?;
+            file.get_mut()
+                .sync_all()
+                .map_err(|e| format!("WAL sync failed: {}", e))?;
+        }
+
+        // 更新统计
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        self.stats.write_count.fetch_add(1, Ordering::Relaxed);
+        self.stats.write_bytes.fetch_add(length as u64, Ordering::Relaxed);
+        self.stats.sync_count.fetch_add(1, Ordering::Relaxed);
+        self.stats.total_write_time_us.fetch_add(elapsed_us, Ordering::Relaxed);
 
         Ok(sequence)
     }
 
+    /// 异步追加（组提交模式）
+    ///
+    /// 将记录添加到组提交缓冲区，返回序列号。
+    /// 实际 fsync 延迟到缓冲区满或超时。
+    pub fn append_async(&self, record: WalRecord) -> Result<u64, String> {
+        if !self.group_commit_config.enabled {
+            // 回退到同步写入以保证持久化
+            return self.append(record);
+        }
+
+        let sequence = self.current_sequence.fetch_add(1, Ordering::SeqCst);
+        let entry = WalEntry::new(sequence, record).with_crc32();
+        let bytes = entry.to_bytes()?;
+
+        // 预序列化后加入缓冲区
+        {
+            let mut buffer = self.group_commit_buffer.lock();
+            buffer.push_back(PreSerializedEntry { sequence, bytes });
+        }
+
+        // 检查是否需要刷新
+        let should_flush = {
+            let buffer = self.group_commit_buffer.lock();
+            let last_flush = self.last_flush_time.lock();
+            buffer.len() >= self.group_commit_config.max_batch_size
+                || last_flush.elapsed().as_millis() as u64 >= self.group_commit_config.max_wait_ms
+        };
+
+        if should_flush {
+            self.flush_group_commit()?;
+        }
+
+        Ok(sequence)
+    }
+
+    /// 刷新组提交缓冲区
+    pub fn flush_group_commit(&self) -> Result<usize, String> {
+        let entries: Vec<PreSerializedEntry> = {
+            let mut buffer = self.group_commit_buffer.lock();
+            let entries: Vec<_> = buffer.drain(..).collect();
+            entries
+        };
+
+        if entries.is_empty() {
+            return Ok(0);
+        }
+
+        let start = Instant::now();
+        let count = entries.len();
+        let batch_bytes: u64 = entries
+            .iter()
+            .map(|entry| (4 + entry.bytes.len() as u32) as u64)
+            .sum();
+        let mut total_bytes = 0u64;
+
+        // 检查文件大小，必要时滚动
+        let current_size = self.current_file_size.load(Ordering::Relaxed);
+        if current_size + batch_bytes > self.max_file_size {
+            self.rotate_file()?;
+        }
+
+        {
+            let mut file = self.current_file.lock();
+
+            for entry in &entries {
+                let length = entry.bytes.len() as u32;
+
+                // 写入长度前缀
+                file.write_all(&length.to_le_bytes())
+                    .map_err(|e| format!("WAL group write failed: {}", e))?;
+
+                // 写入数据
+                file.write_all(&entry.bytes)
+                    .map_err(|e| format!("WAL group write failed: {}", e))?;
+
+                total_bytes += (4 + length) as u64;
+            }
+
+            // 单次 fsync
+            file.flush()
+                .map_err(|e| format!("WAL group flush failed: {}", e))?;
+            file.get_mut()
+                .sync_all()
+                .map_err(|e| format!("WAL group sync failed: {}", e))?;
+        }
+
+        // 更新文件大小
+        self.current_file_size.fetch_add(total_bytes, Ordering::Relaxed);
+
+        // 更新统计
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        self.stats.write_count.fetch_add(count as u64, Ordering::Relaxed);
+        self.stats.write_bytes.fetch_add(total_bytes, Ordering::Relaxed);
+        self.stats.sync_count.fetch_add(1, Ordering::Relaxed);
+        self.stats.group_commit_count.fetch_add(1, Ordering::Relaxed);
+        self.stats.group_commit_total_size.fetch_add(count as u64, Ordering::Relaxed);
+        self.stats.total_write_time_us.fetch_add(elapsed_us, Ordering::Relaxed);
+
+        // 更新最后刷新时间
+        *self.last_flush_time.lock() = Instant::now();
+
+        log::debug!(
+            "WAL group commit: {} entries, {} bytes, {} us",
+            count,
+            total_bytes,
+            elapsed_us
+        );
+
+        Ok(count)
+    }
+
     /// 异步批量追加（高吞吐场景）
+    ///
+    /// 优化点：
+    /// - 预序列化所有记录（减少锁持有时间）
+    /// - 单次 fsync（减少磁盘同步开销）
+    /// - 统计追踪（监控性能）
     pub fn append_batch(&self, records: Vec<WalRecord>) -> Result<Vec<u64>, String> {
         if records.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut sequences = Vec::with_capacity(records.len());
-        let mut file = self.current_file.lock();
+        let start = Instant::now();
+        let count = records.len();
 
+        // Phase 1: 预序列化（无锁）
+        let mut pre_serialized = Vec::with_capacity(count);
         for record in records {
             let sequence = self.current_sequence.fetch_add(1, Ordering::SeqCst);
-            sequences.push(sequence);
-
             let entry = WalEntry::new(sequence, record).with_crc32();
             let bytes = entry.to_bytes()?;
-            let length = bytes.len() as u32;
-
-            // 写入长度前缀
-            file.write_all(&length.to_le_bytes())
-                .map_err(|e| format!("WAL batch write failed: {}", e))?;
-
-            // 写入数据
-            file.write_all(&bytes)
-                .map_err(|e| format!("WAL batch write failed: {}", e))?;
-
-            self.current_file_size
-                .fetch_add((4 + length) as u64, Ordering::Relaxed);
+            pre_serialized.push((sequence, bytes));
         }
 
-        // 批量 fsync（只 fsync 一次）
-        file.flush()
-            .map_err(|e| format!("WAL batch flush failed: {}", e))?;
-        file.get_mut()
-            .sync_all()
-            .map_err(|e| format!("WAL batch sync failed: {}", e))?;
+        // Phase 2: 批量写入（持锁）
+        let mut total_bytes = 0u64;
+        let sequences: Vec<u64> = pre_serialized.iter().map(|(s, _)| *s).collect();
+
+        // 预估批量大小，必要时提前滚动文件
+        let batch_bytes: u64 = pre_serialized
+            .iter()
+            .map(|(_, bytes)| (4 + bytes.len() as u32) as u64)
+            .sum();
+        let current_size = self.current_file_size.load(Ordering::Relaxed);
+        if current_size + batch_bytes > self.max_file_size {
+            self.rotate_file()?;
+        }
+
+        {
+            let mut file = self.current_file.lock();
+
+            for (_sequence, bytes) in &pre_serialized {
+                let length = bytes.len() as u32;
+
+                // 写入长度前缀
+                file.write_all(&length.to_le_bytes())
+                    .map_err(|e| format!("WAL batch write failed: {}", e))?;
+
+                // 写入数据
+                file.write_all(bytes)
+                    .map_err(|e| format!("WAL batch write failed: {}", e))?;
+
+                total_bytes += (4 + length) as u64;
+            }
+
+            // 单次 fsync
+            file.flush()
+                .map_err(|e| format!("WAL batch flush failed: {}", e))?;
+            file.get_mut()
+                .sync_all()
+                .map_err(|e| format!("WAL batch sync failed: {}", e))?;
+        }
+
+        // 更新文件大小
+        self.current_file_size.fetch_add(total_bytes, Ordering::Relaxed);
+
+        // 更新统计
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        self.stats.write_count.fetch_add(count as u64, Ordering::Relaxed);
+        self.stats.write_bytes.fetch_add(total_bytes, Ordering::Relaxed);
+        self.stats.sync_count.fetch_add(1, Ordering::Relaxed);
+        self.stats.group_commit_count.fetch_add(1, Ordering::Relaxed);
+        self.stats.group_commit_total_size.fetch_add(count as u64, Ordering::Relaxed);
+        self.stats.total_write_time_us.fetch_add(elapsed_us, Ordering::Relaxed);
+
+        log::debug!(
+            "WAL batch write: {} records, {} bytes, {} us",
+            count,
+            total_bytes,
+            elapsed_us
+        );
 
         Ok(sequences)
     }
@@ -412,6 +675,16 @@ impl WalManager {
 
         // 如果文件的起始序列号小于 checkpoint，则可以删除
         Ok(header.start_sequence < checkpoint_seq)
+    }
+}
+
+impl Drop for WalManager {
+    fn drop(&mut self) {
+        if self.group_commit_config.enabled {
+            if let Err(e) = self.flush_group_commit() {
+                log::error!("Flush WAL group commit on drop failed: {}", e);
+            }
+        }
     }
 }
 

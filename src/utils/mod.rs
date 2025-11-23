@@ -3,3 +3,4 @@
 pub mod config;
 pub mod jwt;
 pub mod logger;
+pub mod metrics;

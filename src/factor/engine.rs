@@ -6,14 +6,20 @@
 //! - 流处理 (Stream): 使用增量算子，O(1) 更新
 //! - 批处理 (Batch): 使用 Polars，向量化计算
 //! - 统一接口: 同一套因子定义，自动选择执行路径
+//! - **并行 DAG**: 使用 Rayon 按层级并行计算因子
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
+use dashmap::DashMap;
+use parking_lot::RwLock;
 use polars::prelude::*;
+use rayon::prelude::*;
 
-use super::operators::rolling::*;
 use super::dag::{FactorDag, FactorId};
+use super::operators::rolling::*;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 因子定义 (统一的因子描述，不是 DSL)
@@ -623,6 +629,451 @@ impl Default for FactorEngine {
         Self::new()
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 并行 DAG 执行器
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 并行 DAG 执行器
+///
+/// 使用 Rayon 按层级并行计算因子：
+/// - Level 0: 源数据 (price, volume, etc.) - 无依赖，完全并行
+/// - Level 1: 一级因子 (ma5, ema12, rsi14) - 并行计算
+/// - Level 2: 二级因子 (macd_line, bollinger) - 并行计算
+/// - ...
+///
+/// 性能特性：
+/// - 同层因子完全并行
+/// - 层间按序执行，保证依赖关系
+/// - 使用 DashMap 存储中间结果，无锁读取
+pub struct ParallelDagExecutor {
+    /// 因子注册表
+    registry: Arc<FactorRegistry>,
+    /// DAG 结构
+    dag: Arc<FactorDag>,
+    /// 因子状态 (factor_id -> operator)
+    operators: Arc<DashMap<String, RwLock<Box<dyn StreamOperator + Send + Sync>>>>,
+    /// 当前因子值
+    values: Arc<DashMap<String, f64>>,
+    /// 统计：总计算次数
+    stats_compute_count: AtomicU64,
+    /// 统计：总计算时间 (微秒)
+    stats_compute_time_us: AtomicU64,
+}
+
+/// 并行执行结果
+#[derive(Debug, Clone)]
+pub struct ParallelExecutionResult {
+    /// 所有因子值
+    pub values: HashMap<String, f64>,
+    /// 执行耗时 (微秒)
+    pub elapsed_us: u64,
+    /// 执行层数
+    pub levels_executed: usize,
+    /// 计算的因子数量
+    pub factors_computed: usize,
+    /// 使用的线程数
+    pub parallelism: usize,
+}
+
+impl ParallelDagExecutor {
+    /// 创建并行执行器
+    pub fn new(registry: FactorRegistry, dag: FactorDag) -> Self {
+        Self {
+            registry: Arc::new(registry),
+            dag: Arc::new(dag),
+            operators: Arc::new(DashMap::new()),
+            values: Arc::new(DashMap::new()),
+            stats_compute_count: AtomicU64::new(0),
+            stats_compute_time_us: AtomicU64::new(0),
+        }
+    }
+
+    /// 创建带标准因子的执行器
+    pub fn with_standard_factors() -> Self {
+        let registry = FactorRegistry::with_standard_factors();
+        let dag = super::dag::create_standard_factor_dag()
+            .expect("Failed to create standard factor DAG");
+        Self::new(registry, dag)
+    }
+
+    /// 初始化所有因子的算子
+    pub fn init_all(&self) -> Result<(), String> {
+        for factor in self.registry.list() {
+            self.init_factor(&factor.id)?;
+        }
+        Ok(())
+    }
+
+    /// 初始化单个因子的算子
+    pub fn init_factor(&self, factor_id: &str) -> Result<(), String> {
+        let factor = self
+            .registry
+            .get(factor_id)
+            .ok_or_else(|| format!("Factor not found: {}", factor_id))?;
+
+        let operator: Box<dyn StreamOperator + Send + Sync> = match &factor.def {
+            FactorDef::Rolling { window, func, .. } => match func {
+                RollingFunc::Mean => Box::new(SyncRollingMean::new(*window)),
+                _ => return Err(format!("Rolling {:?} not supported in parallel mode", func)),
+            },
+            FactorDef::EMA { span, .. } => Box::new(SyncEMA::new(*span)),
+            FactorDef::RSI { period, .. } => Box::new(SyncRSI::new(*period)),
+            FactorDef::MACD {
+                fast,
+                slow,
+                signal,
+                ..
+            } => Box::new(SyncMACD::new(*fast, *slow, *signal)),
+            FactorDef::Source { .. } => {
+                // 源数据不需要算子
+                return Ok(());
+            }
+            _ => return Err(format!("Factor type not supported in parallel mode")),
+        };
+
+        self.operators
+            .insert(factor_id.to_string(), RwLock::new(operator));
+        Ok(())
+    }
+
+    /// 设置源数据值
+    pub fn set_source(&self, source_id: &str, value: f64) {
+        self.values.insert(source_id.to_string(), value);
+    }
+
+    /// 批量设置源数据
+    pub fn set_sources(&self, sources: &HashMap<String, f64>) {
+        for (id, value) in sources {
+            self.values.insert(id.clone(), *value);
+        }
+    }
+
+    /// 并行执行 DAG
+    ///
+    /// 按层级并行计算所有因子：
+    /// 1. 获取并行层级
+    /// 2. 对每层，使用 Rayon 并行计算所有因子
+    /// 3. 更新中间结果
+    pub fn execute(&self) -> ParallelExecutionResult {
+        let start_time = Instant::now();
+        let levels = self.dag.get_parallel_levels();
+        let parallelism = rayon::current_num_threads();
+
+        let mut factors_computed = 0;
+
+        for level in &levels {
+            // 对当前层的所有因子并行计算
+            let results: Vec<(String, f64)> = level
+                .par_iter()
+                .filter_map(|factor_id| {
+                    // 获取因子定义
+                    let factor = self.registry.get(factor_id)?;
+
+                    // 计算因子值（每次执行都覆盖旧值，避免缓存陈旧）
+                    let value = self.compute_factor(factor);
+                    Some((factor_id.clone(), value))
+                })
+                .collect();
+
+            // 更新结果
+            for (id, value) in results {
+                self.values.insert(id, value);
+                factors_computed += 1;
+            }
+        }
+
+        let elapsed = start_time.elapsed();
+        let elapsed_us = elapsed.as_micros() as u64;
+
+        // 更新统计
+        self.stats_compute_count.fetch_add(1, Ordering::Relaxed);
+        self.stats_compute_time_us
+            .fetch_add(elapsed_us, Ordering::Relaxed);
+
+        // 收集所有值
+        let values: HashMap<String, f64> = self
+            .values
+            .iter()
+            .map(|entry| (entry.key().clone(), *entry.value()))
+            .collect();
+
+        ParallelExecutionResult {
+            values,
+            elapsed_us,
+            levels_executed: levels.len(),
+            factors_computed,
+            parallelism,
+        }
+    }
+
+    /// 计算单个因子
+    fn compute_factor(&self, factor: &RegisteredFactor) -> f64 {
+        match &factor.def {
+            FactorDef::Source { name } => {
+                // 返回源数据值
+                self.values.get(name).map(|v| *v).unwrap_or(0.0)
+            }
+            FactorDef::Rolling { source, .. }
+            | FactorDef::EMA { source, .. }
+            | FactorDef::RSI { source, .. }
+            | FactorDef::MACD { source, .. } => {
+                // 获取源值
+                let source_value = self.values.get(source).map(|v| *v).unwrap_or(0.0);
+
+                // 获取算子并计算
+                if let Some(op) = self.operators.get(&factor.id) {
+                    let mut operator = op.write();
+                    operator.update(source_value)
+                } else {
+                    source_value
+                }
+            }
+            FactorDef::BinaryOp { left, right, op } => {
+                let left_val = self.compute_def(left);
+                let right_val = self.compute_def(right);
+                match op {
+                    BinaryOpType::Add => left_val + right_val,
+                    BinaryOpType::Sub => left_val - right_val,
+                    BinaryOpType::Mul => left_val * right_val,
+                    BinaryOpType::Div => {
+                        if right_val != 0.0 {
+                            left_val / right_val
+                        } else {
+                            0.0
+                        }
+                    }
+                }
+            }
+            FactorDef::Ref { factor_id } => self.values.get(factor_id).map(|v| *v).unwrap_or(0.0),
+            FactorDef::Bollinger {
+                source,
+                window,
+                num_std,
+            } => {
+                // 简化实现：使用均值 + std
+                let source_value = self.values.get(source).map(|v| *v).unwrap_or(0.0);
+                source_value + (*num_std * source_value * 0.02) // 简化
+            }
+            FactorDef::PolarsExpr { .. } => 0.0, // 不支持
+        }
+    }
+
+    /// 递归计算因子定义
+    fn compute_def(&self, def: &FactorDef) -> f64 {
+        match def {
+            FactorDef::Source { name } => self.values.get(name).map(|v| *v).unwrap_or(0.0),
+            FactorDef::Ref { factor_id } => self.values.get(factor_id).map(|v| *v).unwrap_or(0.0),
+            FactorDef::BinaryOp { left, right, op } => {
+                let l = self.compute_def(left);
+                let r = self.compute_def(right);
+                match op {
+                    BinaryOpType::Add => l + r,
+                    BinaryOpType::Sub => l - r,
+                    BinaryOpType::Mul => l * r,
+                    BinaryOpType::Div => if r != 0.0 { l / r } else { 0.0 },
+                }
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// 增量更新（单数据点）
+    ///
+    /// 只更新受影响的因子，而非全量计算
+    pub fn incremental_update(&self, source_id: &str, value: f64) -> ParallelExecutionResult {
+        let start_time = Instant::now();
+
+        // 设置源数据
+        self.values.insert(source_id.to_string(), value);
+
+        // 获取受影响的因子
+        let affected = self.dag.get_affected_nodes(source_id);
+
+        // 按拓扑序计算受影响的因子
+        let factors_computed = affected.len();
+        for factor_id in &affected {
+            if let Some(factor) = self.registry.get(factor_id) {
+                let new_value = self.compute_factor(factor);
+                self.values.insert(factor_id.clone(), new_value);
+            }
+        }
+
+        let elapsed_us = start_time.elapsed().as_micros() as u64;
+
+        let values: HashMap<String, f64> = self
+            .values
+            .iter()
+            .map(|entry| (entry.key().clone(), *entry.value()))
+            .collect();
+
+        ParallelExecutionResult {
+            values,
+            elapsed_us,
+            levels_executed: 1,
+            factors_computed,
+            parallelism: 1,
+        }
+    }
+
+    /// 获取因子值
+    pub fn get(&self, factor_id: &str) -> Option<f64> {
+        self.values.get(factor_id).map(|v| *v)
+    }
+
+    /// 获取所有因子值
+    pub fn get_all(&self) -> HashMap<String, f64> {
+        self.values
+            .iter()
+            .map(|entry| (entry.key().clone(), *entry.value()))
+            .collect()
+    }
+
+    /// 重置所有状态
+    pub fn reset(&self) {
+        self.values.clear();
+        for entry in self.operators.iter() {
+            entry.value().write().reset();
+        }
+    }
+
+    /// 获取统计信息
+    pub fn get_stats(&self) -> (u64, u64) {
+        (
+            self.stats_compute_count.load(Ordering::Relaxed),
+            self.stats_compute_time_us.load(Ordering::Relaxed),
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 线程安全的流式算子包装器
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct SyncRollingMean {
+    inner: RollingMean,
+    window: usize,
+}
+
+impl SyncRollingMean {
+    fn new(window: usize) -> Self {
+        Self {
+            inner: RollingMean::new(window),
+            window,
+        }
+    }
+}
+
+impl StreamOperator for SyncRollingMean {
+    fn update(&mut self, value: f64) -> f64 {
+        self.inner.update(value);
+        self.inner.value()
+    }
+    fn current(&self) -> f64 {
+        self.inner.value()
+    }
+    fn reset(&mut self) {
+        self.inner = RollingMean::new(self.window);
+    }
+}
+
+// Send + Sync 实现
+unsafe impl Send for SyncRollingMean {}
+unsafe impl Sync for SyncRollingMean {}
+
+struct SyncEMA {
+    inner: EMA,
+    span: usize,
+}
+
+impl SyncEMA {
+    fn new(span: usize) -> Self {
+        Self {
+            inner: EMA::new(span),
+            span,
+        }
+    }
+}
+
+impl StreamOperator for SyncEMA {
+    fn update(&mut self, value: f64) -> f64 {
+        self.inner.update(value);
+        self.inner.value().unwrap_or(value)
+    }
+    fn current(&self) -> f64 {
+        self.inner.value().unwrap_or(0.0)
+    }
+    fn reset(&mut self) {
+        self.inner = EMA::new(self.span);
+    }
+}
+
+unsafe impl Send for SyncEMA {}
+unsafe impl Sync for SyncEMA {}
+
+struct SyncRSI {
+    inner: RSI,
+    period: usize,
+}
+
+impl SyncRSI {
+    fn new(period: usize) -> Self {
+        Self {
+            inner: RSI::new(period),
+            period,
+        }
+    }
+}
+
+impl StreamOperator for SyncRSI {
+    fn update(&mut self, value: f64) -> f64 {
+        self.inner.update(value);
+        self.inner.value().unwrap_or(50.0)
+    }
+    fn current(&self) -> f64 {
+        self.inner.value().unwrap_or(50.0)
+    }
+    fn reset(&mut self) {
+        self.inner = RSI::new(self.period);
+    }
+}
+
+unsafe impl Send for SyncRSI {}
+unsafe impl Sync for SyncRSI {}
+
+struct SyncMACD {
+    inner: MACD,
+    fast: usize,
+    slow: usize,
+    signal: usize,
+}
+
+impl SyncMACD {
+    fn new(fast: usize, slow: usize, signal: usize) -> Self {
+        Self {
+            inner: MACD::new(fast, slow, signal),
+            fast,
+            slow,
+            signal,
+        }
+    }
+}
+
+impl StreamOperator for SyncMACD {
+    fn update(&mut self, value: f64) -> f64 {
+        self.inner.update(value);
+        self.inner.value().map(|v| v.macd).unwrap_or(0.0)
+    }
+    fn current(&self) -> f64 {
+        self.inner.value().map(|v| v.macd).unwrap_or(0.0)
+    }
+    fn reset(&mut self) {
+        self.inner = MACD::new(self.fast, self.slow, self.signal);
+    }
+}
+
+unsafe impl Send for SyncMACD {}
+unsafe impl Sync for SyncMACD {}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 测试

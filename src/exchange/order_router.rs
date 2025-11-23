@@ -303,10 +303,20 @@ impl OrderRouter {
         req: SubmitOrderRequest,
         opts: OrderSubmitOptions,
     ) -> SubmitOrderResponse {
-        // 1. 生成订单ID
+        // 1. 生成订单ID（无锁操作）
         let order_id = self.generate_order_id();
 
-        // 2. 风控检查
+        // 2. 预计算所需资金（无锁操作）
+        let estimated_commission = req.price * req.volume * 0.0003; // 万3手续费
+        let required_funds = if req.direction == "BUY" && req.offset == "OPEN" {
+            req.price * req.volume + estimated_commission
+        } else if req.direction == "SELL" && req.offset == "OPEN" {
+            req.price * req.volume * 0.2 + estimated_commission
+        } else {
+            estimated_commission
+        };
+
+        // 3. 风控检查（无锁操作，风控器内部使用 DashMap）
         if !opts.force {
             let risk_check_req = OrderCheckRequest {
                 account_id: req.account_id.clone(),
@@ -315,14 +325,12 @@ impl OrderRouter {
                 offset: req.offset.clone(),
                 volume: req.volume,
                 price: req.price,
-                limit_price: req.price, // ✅ price 作为 limit_price
-                price_type: req.order_type.clone(), // ✅ order_type 作为 price_type
+                limit_price: req.price,
+                price_type: req.order_type.clone(),
             };
 
             match self.risk_checker.check(&risk_check_req) {
-                Ok(RiskCheckResult::Pass) => {
-                    // 风控通过，继续处理
-                }
+                Ok(RiskCheckResult::Pass) => {}
                 Ok(RiskCheckResult::Reject { reason, code }) => {
                     log::warn!("Order rejected by risk check: {:?} - {}", code, reason);
                     return SubmitOrderResponse {
@@ -353,22 +361,7 @@ impl OrderRouter {
             );
         }
 
-        // 3. 创建订单 (复用 qars QAOrder)
-        let towards = self.calculate_towards(&req.direction, &req.offset);
-        let current_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
-        let order = QAOrder::new(
-            req.account_id.clone(), // QAOrder 的第一个参数是 account_id
-            req.instrument_id.clone(),
-            towards,
-            "EXCHANGE".to_string(), // exchange_id
-            current_time.clone(),
-            req.volume,
-            req.price,
-            order_id.clone(),
-        );
-
-        // 3.5. 冻结资金/保证金 (方案B：在订单提交时冻结)
+        // 4. 获取账户引用（无锁操作，DashMap get）
         let account = match self.account_mgr.get_account(&req.account_id) {
             Ok(acc) => acc,
             Err(e) => {
@@ -383,71 +376,97 @@ impl OrderRouter {
             }
         };
 
-        let mut acc = account.write();
-
-        // 3.6. 二次检查余额（在写锁内，避免竞态条件）
-        // 参考: todo/并发安全性分析.md - 方案A（双重检查锁模式）
-        let estimated_commission = req.price * req.volume * 0.0003; // 万3手续费
-        let required_funds = if req.direction == "BUY" && req.offset == "OPEN" {
-            // 买开仓需要全额资金
-            req.price * req.volume + estimated_commission
-        } else if req.direction == "SELL" && req.offset == "OPEN" {
-            // 卖开仓需要保证金（简化：20%）
-            req.price * req.volume * 0.2 + estimated_commission
-        } else {
-            // 平仓只需手续费
-            estimated_commission
-        };
-
-        if !opts.force && acc.money < required_funds {
-            log::warn!(
-                "Insufficient funds (double-check): account={}, available={:.2}, required={:.2}",
-                req.account_id,
-                acc.money,
-                required_funds
-            );
-            return SubmitOrderResponse {
-                success: false,
-                order_id: Some(order_id),
-                status: Some("rejected".to_string()),
-                error_message: Some(format!(
-                    "Insufficient funds: available={:.2}, required={:.2}",
-                    acc.money, required_funds
-                )),
-                error_code: Some(4001),
-            };
-        }
-
-        let qa_order_result = acc.send_order(
-            &req.instrument_id,
-            req.volume,
-            &current_time,
-            towards,
-            req.price,
-            "",
-            &req.order_type,
-        );
-
-        // 检查 send_order 是否成功（资金/保证金检查）
-        let qa_order_id = match qa_order_result {
-            Ok(ref qa_order) => qa_order.order_id.clone(),
-            Err(e) => {
+        // 5. 乐观读取检查余额（读锁，快速失败）
+        if !opts.force {
+            let available = account.read().money;
+            if available < required_funds {
                 log::warn!(
-                    "Order rejected - insufficient funds/margin for account {}: {:?}",
+                    "Insufficient funds (optimistic): account={}, available={:.2}, required={:.2}",
                     req.account_id,
-                    e
+                    available,
+                    required_funds
                 );
                 return SubmitOrderResponse {
                     success: false,
                     order_id: Some(order_id),
                     status: Some("rejected".to_string()),
-                    error_message: Some(format!("Insufficient funds/margin: {:?}", e)),
+                    error_message: Some(format!(
+                        "Insufficient funds: available={:.2}, required={:.2}",
+                        available, required_funds
+                    )),
                     error_code: Some(4001),
                 };
             }
-        };
+        }
 
-        drop(acc); // 释放账户锁
+        // 6. 预构建订单数据（无锁操作）
+        let towards = self.calculate_towards(&req.direction, &req.offset);
+        let current_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+        let order = QAOrder::new(
+            req.account_id.clone(),
+            req.instrument_id.clone(),
+            towards,
+            "EXCHANGE".to_string(),
+            current_time.clone(),
+            req.volume,
+            req.price,
+            order_id.clone(),
+        );
+
+        // 7. 短时写锁：仅用于冻结资金 + send_order
+        // 优化点：将锁范围缩小到最小必要操作
+        let qa_order_id = {
+            let mut acc = account.write();
+
+            // 7.1 二次验证（写锁内，避免竞态）
+            if !opts.force && acc.money < required_funds {
+                log::warn!(
+                    "Insufficient funds (double-check): account={}, available={:.2}, required={:.2}",
+                    req.account_id,
+                    acc.money,
+                    required_funds
+                );
+                return SubmitOrderResponse {
+                    success: false,
+                    order_id: Some(order_id),
+                    status: Some("rejected".to_string()),
+                    error_message: Some(format!(
+                        "Insufficient funds: available={:.2}, required={:.2}",
+                        acc.money, required_funds
+                    )),
+                    error_code: Some(4001),
+                };
+            }
+
+            // 7.2 执行 send_order（冻结资金）
+            match acc.send_order(
+                &req.instrument_id,
+                req.volume,
+                &current_time,
+                towards,
+                req.price,
+                "",
+                &req.order_type,
+            ) {
+                Ok(ref qa_order) => qa_order.order_id.clone(),
+                Err(e) => {
+                    log::warn!(
+                        "Order rejected - insufficient funds/margin for account {}: {:?}",
+                        req.account_id,
+                        e
+                    );
+                    return SubmitOrderResponse {
+                        success: false,
+                        order_id: Some(order_id),
+                        status: Some("rejected".to_string()),
+                        error_message: Some(format!("Insufficient funds/margin: {:?}", e)),
+                        error_code: Some(4001),
+                    };
+                }
+            }
+            // 写锁在此自动释放（RAII）
+        };
 
         log::debug!(
             "Funds frozen for order {}, qars order_id: {}",

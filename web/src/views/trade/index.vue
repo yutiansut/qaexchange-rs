@@ -323,10 +323,39 @@ export default {
 
       try {
         const data = await getOrderBook(this.selectedInstrument, this.depth)
-        this.orderbook = data
+        // @yutiansut @quantaxis
+        // 合并同价格的订单（将相同价格的volume累加）
+        this.orderbook = {
+          bids: this.mergePriceLevels(data.bids || [], 'desc'),  // 买盘：价格从高到低
+          asks: this.mergePriceLevels(data.asks || [], 'asc')    // 卖盘：价格从低到高
+        }
       } catch (error) {
         console.error('Failed to load orderbook:', error)
       }
+    },
+
+    // 合并同价格档位的订单
+    // @yutiansut @quantaxis
+    mergePriceLevels(orders, sortOrder = 'desc') {
+      if (!orders || orders.length === 0) return []
+
+      // 使用 Map 合并同价格订单
+      const priceMap = new Map()
+      for (const order of orders) {
+        const price = order.price
+        if (priceMap.has(price)) {
+          priceMap.get(price).volume += order.volume
+        } else {
+          priceMap.set(price, { price: price, volume: order.volume })
+        }
+      }
+
+      // 转为数组并排序
+      const merged = Array.from(priceMap.values())
+      merged.sort((a, b) => sortOrder === 'desc' ? b.price - a.price : a.price - b.price)
+
+      // 只返回前 depth 档
+      return merged.slice(0, this.depth)
     },
 
     async loadTick() {
