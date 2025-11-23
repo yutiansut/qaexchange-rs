@@ -1,12 +1,34 @@
 //! QAExchange 完整交易所服务
 //!
+//! @yutiansut @quantaxis
+//!
 //! 集成功能：
 //! 1. 交易所核心引擎（撮合、风控、账户管理）
 //! 2. HTTP API（REST 接口）
 //! 3. WebSocket API（实时推送）
 //! 4. 解耦存储层（异步持久化）
 //!
+//! 性能优化：
+//! - mimalloc 高性能内存分配器
+//! - 零拷贝序列化 (rkyv)
+//! - 无锁并发数据结构 (DashMap)
+//!
 //! 运行: cargo run --bin qaexchange-server
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 全局内存分配器 - 使用 mimalloc 替代默认分配器
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// mimalloc 优势：
+// - 多线程场景下 2-3 倍性能提升
+// - 更低的内存碎片
+// - 更好的缓存局部性
+// - 适合高频交易场景的低延迟分配
+
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 use qaexchange::exchange::instrument_registry::{InstrumentInfo, InstrumentStatus, InstrumentType};
 use qaexchange::exchange::{
@@ -327,6 +349,10 @@ impl ExchangeServer {
 
             // 设置存储（用于市场数据恢复）
             service = service.with_storage(market_data_storage.clone());
+
+            // 注入账户管理器和广播器
+            service = service.with_account_manager(account_mgr.clone());
+            service = service.with_broadcaster(market_broadcaster.clone());
 
             // 设置 iceoryx2（如果启用）
             if let Some(ref iceoryx_mgr) = iceoryx_manager {

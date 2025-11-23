@@ -1,0 +1,230 @@
+// 主从复制 gRPC 协议定义
+//
+// @yutiansut @quantaxis
+//
+// QAExchange 分布式复制服务
+
+syntax = "proto3";
+
+package qaexchange.replication;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 复制服务
+// ═══════════════════════════════════════════════════════════════════════════
+
+service ReplicationService {
+    // 日志复制 (Master → Slave)
+    rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+
+    // 心跳检测
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+    // 快照传输
+    rpc InstallSnapshot(stream SnapshotChunk) returns (SnapshotResponse);
+
+    // 请求投票 (选举)
+    rpc RequestVote(VoteRequest) returns (VoteResponse);
+
+    // 流式日志复制 (高性能批量复制)
+    rpc StreamAppendEntries(stream AppendEntriesRequest) returns (stream AppendEntriesResponse);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 日志复制
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 日志复制请求
+message AppendEntriesRequest {
+    // Leader term
+    uint64 term = 1;
+
+    // Leader ID
+    string leader_id = 2;
+
+    // 前一条日志的序列号
+    uint64 prev_log_sequence = 3;
+
+    // 前一条日志的 term
+    uint64 prev_log_term = 4;
+
+    // 要复制的日志条目
+    repeated LogEntry entries = 5;
+
+    // Leader 的 commit 序列号
+    uint64 leader_commit = 6;
+}
+
+// 日志复制响应
+message AppendEntriesResponse {
+    // Follower term
+    uint64 term = 1;
+
+    // 是否成功
+    bool success = 2;
+
+    // 当前匹配的序列号
+    uint64 match_sequence = 3;
+
+    // 错误信息
+    string error = 4;
+}
+
+// 日志条目
+message LogEntry {
+    // 序列号
+    uint64 sequence = 1;
+
+    // Term
+    uint64 term = 2;
+
+    // WAL 记录 (rkyv 序列化后的字节)
+    bytes record_data = 3;
+
+    // 时间戳 (纳秒)
+    int64 timestamp = 4;
+
+    // 记录类型
+    RecordType record_type = 5;
+}
+
+// 记录类型
+enum RecordType {
+    RECORD_TYPE_UNKNOWN = 0;
+    RECORD_TYPE_ORDER_INSERT = 1;
+    RECORD_TYPE_ORDER_CANCEL = 2;
+    RECORD_TYPE_TRADE_EXECUTED = 3;
+    RECORD_TYPE_ACCOUNT_UPDATE = 4;
+    RECORD_TYPE_POSITION_UPDATE = 5;
+    RECORD_TYPE_TICK_DATA = 6;
+    RECORD_TYPE_ORDERBOOK_SNAPSHOT = 7;
+    RECORD_TYPE_CHECKPOINT = 8;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 心跳检测
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 心跳请求
+message HeartbeatRequest {
+    // Leader term
+    uint64 term = 1;
+
+    // Leader ID
+    string leader_id = 2;
+
+    // Leader commit 序列号
+    uint64 leader_commit = 3;
+
+    // 时间戳
+    int64 timestamp = 4;
+}
+
+// 心跳响应
+message HeartbeatResponse {
+    // Follower term
+    uint64 term = 1;
+
+    // 节点 ID
+    string node_id = 2;
+
+    // 最后日志序列号
+    uint64 last_log_sequence = 3;
+
+    // 是否健康
+    bool healthy = 4;
+
+    // 节点状态
+    NodeStatus status = 5;
+}
+
+// 节点状态
+message NodeStatus {
+    // CPU 使用率 (0-100)
+    float cpu_usage = 1;
+
+    // 内存使用率 (0-100)
+    float memory_usage = 2;
+
+    // 磁盘使用率 (0-100)
+    float disk_usage = 3;
+
+    // 待复制日志数量
+    uint64 pending_logs = 4;
+
+    // 复制延迟 (毫秒)
+    uint64 replication_lag_ms = 5;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 快照传输
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 快照块 (流式传输)
+message SnapshotChunk {
+    // Leader term
+    uint64 term = 1;
+
+    // 快照包含的最后序列号
+    uint64 last_included_sequence = 2;
+
+    // 快照包含的最后 term
+    uint64 last_included_term = 3;
+
+    // 块索引
+    uint64 chunk_index = 4;
+
+    // 总块数
+    uint64 total_chunks = 5;
+
+    // 数据
+    bytes data = 6;
+
+    // 是否是最后一块
+    bool is_last = 7;
+}
+
+// 快照响应
+message SnapshotResponse {
+    // Follower term
+    uint64 term = 1;
+
+    // 是否成功
+    bool success = 2;
+
+    // 错误信息
+    string error = 3;
+
+    // 接收的字节数
+    uint64 bytes_received = 4;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 选举
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 投票请求
+message VoteRequest {
+    // Candidate term
+    uint64 term = 1;
+
+    // Candidate ID
+    string candidate_id = 2;
+
+    // Candidate 的最后日志序列号
+    uint64 last_log_sequence = 3;
+
+    // Candidate 的最后日志 term
+    uint64 last_log_term = 4;
+}
+
+// 投票响应
+message VoteResponse {
+    // Follower term
+    uint64 term = 1;
+
+    // 是否投票给该 Candidate
+    bool vote_granted = 2;
+
+    // 节点 ID
+    string voter_id = 3;
+}

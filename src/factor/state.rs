@@ -238,8 +238,8 @@ impl StateStore {
         let checkpoint_id = self.next_checkpoint_id();
         let path = self.checkpoint_path(checkpoint_id);
 
-        // 序列化
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(snapshot)
+        // 序列化 (rkyv 0.7 API)
+        let bytes = rkyv::to_bytes::<_, 256>(snapshot)
             .map_err(|e| StateStoreError::SerializationError(e.to_string()))?;
 
         // 写入文件
@@ -282,13 +282,12 @@ impl StateStore {
             reader.read_to_end(&mut bytes)?;
         }
 
-        // 反序列化
-        let archived = rkyv::access::<rkyv::Archived<GlobalStateSnapshot>, rkyv::rancor::Error>(&bytes)
-            .map_err(|e| StateStoreError::DeserializationError(e.to_string()))?;
+        // 反序列化 (rkyv 0.7 API)
+        let archived = unsafe { rkyv::archived_root::<GlobalStateSnapshot>(&bytes) };
 
-        let snapshot: GlobalStateSnapshot =
-            rkyv::deserialize::<GlobalStateSnapshot, rkyv::rancor::Error>(archived)
-                .map_err(|e| StateStoreError::DeserializationError(e.to_string()))?;
+        let snapshot: GlobalStateSnapshot = archived
+            .deserialize(&mut rkyv::Infallible)
+            .map_err(|_| StateStoreError::DeserializationError("Deserialization failed".to_string()))?;
 
         // 版本检查
         if snapshot.version != GlobalStateSnapshot::CURRENT_VERSION {

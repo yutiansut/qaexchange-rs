@@ -325,6 +325,23 @@ impl AccountManager {
         Ok(())
     }
 
+    /// 统计指定合约的总持仓量（多空取最大值，避免重复计数）
+    pub fn get_instrument_open_interest(&self, instrument_id: &str) -> i64 {
+        self.accounts
+            .iter()
+            .map(|entry| {
+                let acc = entry.value().read();
+                if let Some(pos) = acc.get_position_unmut(instrument_id) {
+                    let long_total = pos.volume_long_today + pos.volume_long_his;
+                    let short_total = pos.volume_short_today + pos.volume_short_his;
+                    long_total.max(short_total)
+                } else {
+                    0.0
+                }
+            })
+            .sum::<f64>() as i64
+    }
+
     /// 查询账户 QIFI 格式（实时 - 仅账户信息）
     /// 直接使用 qars 的 get_accountmessage() 方法获取实时账户数据
     pub fn get_account_qifi(&self, account_id: &str) -> Result<Account, ExchangeError> {

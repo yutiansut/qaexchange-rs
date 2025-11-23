@@ -33,6 +33,7 @@ actix-cors = "0.7"
 # 异步运行时
 tokio = { version = "1.35", features = ["full"] }
 futures = "0.3"
+async-trait = "0.1"
 
 # 并发数据结构
 dashmap = "5.5"

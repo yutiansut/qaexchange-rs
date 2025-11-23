@@ -10,9 +10,9 @@
 ## 待处理事项
 
 ### 1. TradeGateway → 账户推送链路
-- [ ] 在 `handle_order_accepted_new / handle_order_rejected_new / handle_trade_new / handle_cancel_*_new` 中补全推送逻辑：
-  - 通过 `NotificationBroker` 或回退通道将 `ExchangeResponse` 推到 `Notification::OrderStatus` / `Notification::Trade`，并同步触发 DIFF Snapshot（当前均停留在 `// TODO: 推送回报给账户`，见 `src/exchange/trade_gateway.rs:598,630,735,764,795`）。
-  - 引入统一的 `emit_exchange_response()` 工具函数，避免在每个 handler 内重复序列化逻辑。
+- [x] 在 `handle_order_accepted_new / handle_order_rejected_new / handle_trade_new / handle_cancel_*_new` 中补全推送逻辑：
+  - [x] 通过 `NotificationBroker` 或回退通道将 `ExchangeResponse` 推到 `Notification::OrderStatus` / `Notification::Trade`，并同步触发 DIFF Snapshot（`src/exchange/trade_gateway.rs`）。
+  - [x] 引入统一的 `emit_order_status()` / `emit_trade_notification()` 工具函数，避免在 handler 内重复序列化逻辑。
 - [ ] 落地账户侧 `ExchangeResponseRecord` replay：重启时从 `__ACCOUNT__/{user_id}` WAL 读取回报，恢复订阅端最新状态。
 
 ### 2. 移除旧的账户判定逻辑

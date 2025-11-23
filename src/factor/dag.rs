@@ -392,7 +392,7 @@ impl FactorDag {
             }
         }
 
-        let mut result: Vec<Vec<FactorId>> = levels.into_iter().collect();
+        let mut result: Vec<(usize, Vec<FactorId>)> = levels.into_iter().collect();
         result.sort_by_key(|(level, _)| *level);
         result.into_iter().map(|(_, nodes)| nodes).collect()
     }

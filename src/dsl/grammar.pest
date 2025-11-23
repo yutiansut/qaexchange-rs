@@ -1,0 +1,113 @@
+// 因子 DSL 语法定义
+//
+// @yutiansut @quantaxis
+//
+// 支持的函数 (MVP 10个):
+// 1. ma(source, period) - 移动平均
+// 2. ema(source, period) - 指数移动平均
+// 3. std(source, period) - 标准差
+// 4. sum(source, period) - 求和
+// 5. max(source, period) - 最大值
+// 6. min(source, period) - 最小值
+// 7. rsi(source, period) - RSI
+// 8. macd(source, fast, slow, signal) - MACD
+// 9. rank(source) - 横截面排名
+// 10. delay(source, period) - 延迟
+
+// 入口规则
+program = { SOI ~ statement* ~ EOI }
+
+// 语句
+statement = {
+    factor_def |
+    assignment |
+    expression
+}
+
+// 因子定义: factor my_factor = ma(close, 20)
+factor_def = {
+    "factor" ~ identifier ~ "=" ~ expression
+}
+
+// 赋值: let x = 10
+assignment = {
+    "let" ~ identifier ~ "=" ~ expression
+}
+
+// 表达式
+expression = { term ~ (binary_op ~ term)* }
+
+term = {
+    unary_op? ~ (
+        function_call |
+        parenthesized |
+        literal |
+        identifier
+    )
+}
+
+// 括号表达式
+parenthesized = { "(" ~ expression ~ ")" }
+
+// 函数调用
+function_call = {
+    func_name ~ "(" ~ arg_list? ~ ")"
+}
+
+func_name = {
+    "ma" | "ema" | "std" | "sum" | "max" | "min" |
+    "rsi" | "macd" | "rank" | "delay" |
+    "corr" | "cov" | "zscore" | "diff" |
+    "abs" | "log" | "sqrt" | "pow" | "exp" |
+    "if" | "isnull" | "fillna"
+}
+
+// 参数列表
+arg_list = { expression ~ ("," ~ expression)* }
+
+// 二元运算符
+binary_op = {
+    add_op | mul_op | cmp_op | logic_op
+}
+
+add_op = { "+" | "-" }
+mul_op = { "*" | "/" | "%" }
+cmp_op = { ">=" | "<=" | "!=" | "==" | ">" | "<" }
+logic_op = { "&&" | "||" }
+
+// 一元运算符
+unary_op = { "-" | "!" }
+
+// 标识符
+identifier = @{
+    (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*
+}
+
+// 字面量
+literal = {
+    float |
+    integer |
+    string |
+    boolean
+}
+
+float = @{
+    "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+
+integer = @{
+    "-"? ~ ASCII_DIGIT+
+}
+
+string = @{
+    "\"" ~ (!"\"" ~ ANY)* ~ "\""
+}
+
+boolean = { "true" | "false" }
+
+// 空白和注释
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT = _{
+    "//" ~ (!"\n" ~ ANY)* |
+    "/*" ~ (!"*/" ~ ANY)* ~ "*/"
+}

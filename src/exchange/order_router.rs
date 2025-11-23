@@ -714,9 +714,15 @@ impl OrderRouter {
                     // Phase 6: 使用新的 handle_order_rejected_new (交易所推送REJECTED回报)
                     let reason = format!("{:?}", failed);
                     let _ = self.trade_gateway.handle_order_rejected_new(
+                        &order.exchange_id,
                         &order.instrument_id,
                         &order.user_id,
                         order_id,
+                        &order.direction,
+                        &order.offset,
+                        &order.price_type,
+                        order.limit_price,
+                        order.volume_orign,
                         &reason,
                     );
 
@@ -870,6 +876,7 @@ impl OrderRouter {
                     &order.user_id,
                     order_id,
                     &order.direction,
+                    &order.offset,
                     volume,
                     price,
                     Some(opposite_order_id as i64),
@@ -955,6 +962,7 @@ impl OrderRouter {
                     &order.user_id,
                     order_id,
                     &order.direction,
+                    &order.offset,
                     volume,
                     price,
                     Some(opposite_order_id as i64),
@@ -979,12 +987,25 @@ impl OrderRouter {
                     info.update_time = ts;
                 }
 
+                let remaining_volume = if let Some(order_info) = self.orders.get(order_id) {
+                    let info = order_info.read();
+                    info.order.volume_orign - info.filled_volume
+                } else {
+                    order.volume_orign
+                };
+
                 // Phase 6: 使用新的 handle_cancel_accepted_new (交易所推送CANCEL_ACCEPTED回报)
                 self.trade_gateway.handle_cancel_accepted_new(
+                    &order.exchange_id,
                     &order.instrument_id,
                     id as i64, // 使用撮合引擎返回的ID作为exchange_order_id
                     &order.user_id,
                     order_id,
+                    &order.direction,
+                    &order.offset,
+                    &order.price_type,
+                    order.limit_price,
+                    remaining_volume,
                 )?;
 
                 log::debug!(

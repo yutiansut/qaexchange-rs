@@ -32,6 +32,9 @@ pub struct ExchangeMatchingEngine {
     /// 成交记录器
     trade_recorder: Arc<TradeRecorder>,
 
+    /// 合约昨收盘价
+    prev_close_map: DashMap<String, f64>,
+
     /// 当前交易日
     trading_day: Arc<RwLock<String>>,
 }
@@ -41,6 +44,7 @@ impl ExchangeMatchingEngine {
         Self {
             orderbooks: DashMap::new(),
             trade_recorder: Arc::new(TradeRecorder::new()),
+            prev_close_map: DashMap::new(),
             trading_day: Arc::new(RwLock::new(String::new())),
         }
     }
@@ -55,6 +59,8 @@ impl ExchangeMatchingEngine {
         let orderbook = Orderbook::new(asset, prev_close);
         self.orderbooks
             .insert(instrument_id.clone(), Arc::new(RwLock::new(orderbook)));
+        self.prev_close_map
+            .insert(instrument_id.clone(), prev_close);
         log::info!(
             "Registered instrument: {} with prev_close: {}",
             instrument_id,
@@ -91,6 +97,13 @@ impl ExchangeMatchingEngine {
     /// 获取成交记录器
     pub fn get_trade_recorder(&self) -> Arc<TradeRecorder> {
         self.trade_recorder.clone()
+    }
+
+    /// 获取合约的昨收盘价
+    pub fn get_prev_close(&self, instrument_id: &str) -> Option<f64> {
+        self.prev_close_map
+            .get(instrument_id)
+            .map(|entry| *entry.value())
     }
 
     /// 设置交易状态 (TODO: 需要 qars Orderbook 支持此方法)

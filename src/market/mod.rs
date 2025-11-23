@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::exchange::AccountManager;
 use crate::matching::engine::ExchangeMatchingEngine;
 use crate::utils::config::InstrumentConfig;
 use crate::ExchangeError;
@@ -86,6 +87,10 @@ pub struct MarketDataService {
     snapshot_generator: Option<Arc<snapshot_generator::MarketSnapshotGenerator>>,
     /// K线管理器（实时K线聚合）
     kline_manager: Arc<kline::KLineManager>,
+    /// 账户管理器（用于快照统计）
+    account_manager: Option<Arc<AccountManager>>,
+    /// 市场数据广播器
+    market_broadcaster: Option<Arc<MarketDataBroadcaster>>,
 }
 
 impl MarketDataService {
@@ -99,6 +104,8 @@ impl MarketDataService {
             iceoryx_manager: None,
             snapshot_generator: None,
             kline_manager: Arc::new(kline::KLineManager::new()),
+            account_manager: None,
+            market_broadcaster: None,
         }
     }
 
@@ -114,10 +121,23 @@ impl MarketDataService {
         self
     }
 
+    /// 注入账户管理器（用于快照统计）
+    pub fn with_account_manager(mut self, account_manager: Arc<AccountManager>) -> Self {
+        self.account_manager = Some(account_manager);
+        self
+    }
+
     /// 设置 iceoryx2 管理器（零拷贝 IPC）
     pub fn with_iceoryx(mut self, manager: Arc<RwLock<crate::ipc::IceoryxManager>>) -> Self {
         self.iceoryx_manager = Some(manager);
         log::info!("✅ Market data service: iceoryx2 enabled");
+        self
+    }
+
+    /// 设置市场数据广播器
+    pub fn with_broadcaster(mut self, broadcaster: Arc<MarketDataBroadcaster>) -> Self {
+        self.market_broadcaster = Some(broadcaster);
+        log::info!("✅ Market data service: broadcaster connected");
         self
     }
 
@@ -129,10 +149,14 @@ impl MarketDataService {
             instruments,
         };
 
-        let generator = Arc::new(snapshot_generator::MarketSnapshotGenerator::new(
-            self.matching_engine.clone(),
-            config,
-        ));
+        let mut generator =
+            snapshot_generator::MarketSnapshotGenerator::new(self.matching_engine.clone(), config);
+
+        if let Some(account_manager) = &self.account_manager {
+            generator = generator.with_account_manager(account_manager.clone());
+        }
+
+        let generator = Arc::new(generator);
 
         self.snapshot_generator = Some(generator);
         log::info!(
@@ -226,6 +250,8 @@ impl MarketDataService {
             iceoryx_manager: None,
             snapshot_generator: None,
             kline_manager: Arc::new(kline::KLineManager::new()),
+            account_manager: None,
+            market_broadcaster: None,
         }
     }
 
@@ -468,8 +494,12 @@ impl MarketDataService {
             .get_sorted_orders()
             .and_then(|orders| orders.first().map(|o| o.price));
 
-        // TODO: 从成交记录获取成交量
-        let volume = 0;
+        let trade_recorder = self.matching_engine.get_trade_recorder();
+        let volume = trade_recorder
+            .get_trades_by_instrument(instrument_id)
+            .last()
+            .map(|trade| trade.volume as i64)
+            .unwrap_or(0);
 
         let tick = TickData {
             instrument_id: instrument_id.to_string(),
@@ -713,7 +743,14 @@ impl MarketDataService {
                 kline.volume
             );
 
-            // TODO: 发送到 WebSocket DIFF 协议
+            if let Some(broadcaster) = &self.market_broadcaster {
+                broadcaster.broadcast(MarketDataEvent::KLineFinished {
+                    instrument_id: instrument_id.to_string(),
+                    period: period.to_int(),
+                    kline: kline.clone(),
+                    timestamp: timestamp_ms,
+                });
+            }
         }
     }
 

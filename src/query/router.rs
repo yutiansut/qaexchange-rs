@@ -20,7 +20,7 @@ use parking_lot::RwLock;
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// 查询类型
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryType {
     /// 点查询 (按主键)
     PointLookup,
@@ -253,7 +253,7 @@ pub struct TableStats {
 }
 
 /// 查询历史
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct QueryHistory {
     pub total_queries: u64,
     pub oltp_queries: u64,
@@ -479,9 +479,8 @@ impl QueryRouter {
 
     /// 清理过期缓存
     pub fn cleanup_cache(&self) {
-        self.routing_cache.retain(|_, (_, created_at)| {
-            created_at.elapsed() < self.config.cache_ttl
-        });
+        self.routing_cache
+            .retain(|_, (_, created_at)| created_at.elapsed() < self.config.cache_ttl);
     }
 }
 
@@ -522,15 +521,13 @@ mod tests {
         let router = QueryRouter::with_defaults();
 
         // 短时间跨度
-        let request = QueryRequest::new("ticks")
-            .with_time_range(1000, 2000); // 1000 秒
+        let request = QueryRequest::new("ticks").with_time_range(1000, 2000); // 1000 秒
 
         let decision = router.route(&request);
         assert_eq!(decision.target, QueryTarget::Hybrid);
 
         // 长时间跨度
-        let request = QueryRequest::new("ticks")
-            .with_time_range(1000, 10000); // 9000 秒
+        let request = QueryRequest::new("ticks").with_time_range(1000, 10000); // 9000 秒
 
         let decision = router.route(&request);
         assert_eq!(decision.target, QueryTarget::OLAP);
@@ -541,16 +538,19 @@ mod tests {
         let router = QueryRouter::with_defaults();
 
         // 更新表统计
-        router.update_table_stats("trades", TableStats {
-            row_count: 1_000_000,
-            avg_row_size: 100,
-            index_columns: vec!["trade_id".to_string()],
-            time_column: Some("timestamp".to_string()),
-            last_updated: Some(Instant::now()),
-        });
+        router.update_table_stats(
+            "trades",
+            TableStats {
+                row_count: 1_000_000,
+                avg_row_size: 100,
+                index_columns: vec!["trade_id".to_string()],
+                time_column: Some("timestamp".to_string()),
+                last_updated: Some(Instant::now()),
+            },
+        );
 
-        let request = QueryRequest::new("trades")
-            .with_aggregation(AggregationOp::Sum("volume".to_string()));
+        let request =
+            QueryRequest::new("trades").with_aggregation(AggregationOp::Sum("volume".to_string()));
 
         let decision = router.route(&request);
 
@@ -562,11 +562,9 @@ mod tests {
     fn test_cache_key() {
         let router = QueryRouter::with_defaults();
 
-        let request1 = QueryRequest::new("orders")
-            .with_type(QueryType::PointLookup);
+        let request1 = QueryRequest::new("orders").with_type(QueryType::PointLookup);
 
-        let request2 = QueryRequest::new("orders")
-            .with_type(QueryType::PointLookup);
+        let request2 = QueryRequest::new("orders").with_type(QueryType::PointLookup);
 
         // 相同查询应该产生相同的缓存键
         let key1 = router.compute_cache_key(&request1);

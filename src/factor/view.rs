@@ -357,7 +357,7 @@ impl MaterializedViewManager {
             (inst2.to_string(), inst1.to_string())
         };
 
-        self.global_correlations.get(&key).map(|c| c.value())
+        self.global_correlations.get(&key).map(|c| c.value().value())
     }
 
     /// 获取所有合约 ID

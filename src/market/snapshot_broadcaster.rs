@@ -21,7 +21,10 @@ impl SnapshotBroadcastService {
         matching_engine: Arc<ExchangeMatchingEngine>,
         market_broadcaster: Arc<MarketDataBroadcaster>,
     ) -> Self {
-        let market_data_service = Arc::new(MarketDataService::new(matching_engine.clone()));
+        let market_data_service = Arc::new(
+            MarketDataService::new(matching_engine.clone())
+                .with_broadcaster(market_broadcaster.clone()),
+        );
 
         Self {
             market_data_service,

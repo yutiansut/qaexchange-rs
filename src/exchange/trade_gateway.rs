@@ -4,14 +4,14 @@
 
 use crate::core::{Order, QA_Account, Trade};
 use crate::exchange::{
-    AccountManager, ExchangeIdGenerator, ExchangeOrderRecord, ExchangeResponse, ExchangeTradeRecord,
+    AccountManager, ExchangeIdGenerator, ExchangeOrderRecord, ExchangeTradeRecord,
 };
 use crate::matching::{Failed, Success};
 use crate::notification::broker::NotificationBroker;
 use crate::notification::message::{
     AccountUpdateNotify, Notification as NewNotification, NotificationPayload, NotificationType,
     OrderAcceptedNotify, OrderCanceledNotify, OrderFilledNotify, OrderPartiallyFilledNotify,
-    TradeExecutedNotify,
+    OrderRejectedNotify, TradeExecutedNotify,
 };
 use crate::protocol::diff::snapshot::SnapshotManager;
 use crate::protocol::diff::types::{DiffAccount, DiffTrade};
@@ -73,6 +73,9 @@ pub struct OrderStatusNotification {
     // 内部映射字段（通过 exchange_order_id 查找得到）
     pub order_id: String, // 内部订单ID
     pub user_id: String,  // 用户ID
+
+    /// 附加原因（用于拒绝/撤单失败等场景）
+    pub reason: Option<String>,
 }
 
 /// 通知类型
@@ -275,6 +278,7 @@ impl TradeGateway {
             timestamp: Utc::now().timestamp_nanos_opt().unwrap_or(0),
             order_id: order_id.to_string(),
             user_id: user_id.to_string(),
+            reason: None,
         };
         self.send_notification(Notification::OrderStatus(order_status_notification.clone()))?;
 
@@ -387,6 +391,7 @@ impl TradeGateway {
             timestamp: Utc::now().timestamp_nanos_opt().unwrap_or(0),
             order_id: order_id.to_string(),
             user_id: user_id.to_string(),
+            reason: None,
         };
         self.send_notification(Notification::OrderStatus(order_status_notification.clone()))?;
 
@@ -498,6 +503,7 @@ impl TradeGateway {
             // 内部映射字段
             order_id: order_id.to_string(),
             user_id: user_id.to_string(),
+            reason: None,
         };
 
         self.send_notification(Notification::OrderStatus(order_status))?;
@@ -535,6 +541,7 @@ impl TradeGateway {
             // 内部映射字段
             order_id: order_id.to_string(),
             user_id: user_id.to_string(),
+            reason: None,
         };
 
         self.send_notification(Notification::OrderStatus(order_status))?;
@@ -630,7 +637,23 @@ impl TradeGateway {
             ExchangeError::StorageError(format!("Failed to append ExchangeResponseRecord: {}", e))
         })?;
 
-        // TODO: 推送回报给账户 (Phase 4)
+        let order_status = OrderStatusNotification {
+            exchange_id: exchange.to_string(),
+            instrument_id: instrument_id.to_string(),
+            exchange_order_id: exchange_order_id.to_string(),
+            direction: direction.to_string(),
+            offset: offset.to_string(),
+            price_type: price_type.to_string(),
+            volume,
+            price,
+            status: "ACCEPTED".to_string(),
+            timestamp,
+            order_id: order_id.to_string(),
+            user_id: user_id.to_string(),
+            reason: None,
+        };
+
+        self.emit_order_status(order_status)?;
 
         log::info!(
             "Order accepted: exchange_order_id={}, instrument={}, user={}, order_id={}",
@@ -648,24 +671,38 @@ impl TradeGateway {
     /// 交易所拒绝订单，推送OrderRejected回报给账户
     pub fn handle_order_rejected_new(
         &self,
+        exchange: &str,
         instrument_id: &str,
         user_id: &str,
         order_id: &str,
+        direction: &str,
+        offset: &str,
+        price_type: &str,
+        price: f64,
+        volume: f64,
         reason: &str,
     ) -> Result<i64, ExchangeError> {
         // 生成交易所订单号（统一事件序列）
         let exchange_order_id = self.id_generator.next_sequence(instrument_id);
         let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
 
-        // 创建交易所回报
-        let response = ExchangeResponse::OrderRejected {
-            exchange_order_id,
+        let order_status = OrderStatusNotification {
+            exchange_id: exchange.to_string(),
             instrument_id: instrument_id.to_string(),
-            reason: reason.to_string(),
+            exchange_order_id: exchange_order_id.to_string(),
+            direction: direction.to_string(),
+            offset: offset.to_string(),
+            price_type: price_type.to_string(),
+            volume,
+            price,
+            status: "REJECTED".to_string(),
             timestamp,
+            order_id: order_id.to_string(),
+            user_id: user_id.to_string(),
+            reason: Some(reason.to_string()),
         };
 
-        // TODO: 推送回报给账户 (Phase 4)
+        self.emit_order_status(order_status)?;
 
         log::warn!(
             "Order rejected: exchange_order_id={}, instrument={}, user={}, order_id={}, reason={}",
@@ -691,6 +728,7 @@ impl TradeGateway {
         user_id: &str,
         order_id: &str,
         direction: &str, // BUY/SELL (用于确定买卖方)
+        offset: &str,
         volume: f64,
         price: f64,
         opposite_order_id: Option<i64>, // 对手方订单号（如果可用）
@@ -773,6 +811,7 @@ impl TradeGateway {
         if let Some(mds) = &self.market_data_service {
             let turnover = price * volume;
             mds.update_trade_stats(instrument_id, volume as i64, turnover);
+            mds.on_trade(instrument_id, price, volume as i64);
             log::trace!(
                 "Updated snapshot stats: {} volume={}, turnover={:.2}",
                 instrument_id,
@@ -781,7 +820,18 @@ impl TradeGateway {
             );
         }
 
-        // TODO: 推送回报给账户 (Phase 4)
+        let trade_notification = self.create_trade_notification(
+            order_id,
+            user_id,
+            instrument_id,
+            direction,
+            offset,
+            price,
+            volume,
+        );
+
+        self.emit_trade_notification(trade_notification)?;
+        self.push_account_update(user_id)?;
 
         log::info!(
             "Trade executed: trade_id={}, exchange_order_id={}, instrument={}, volume={}, price={}",
@@ -800,21 +850,36 @@ impl TradeGateway {
     /// 交易所撤单成功，推送CancelAccepted回报给账户
     pub fn handle_cancel_accepted_new(
         &self,
+        exchange: &str,
         instrument_id: &str,
         exchange_order_id: i64,
         user_id: &str,
         order_id: &str,
+        direction: &str,
+        offset: &str,
+        price_type: &str,
+        price: f64,
+        remaining_volume: f64,
     ) -> Result<(), ExchangeError> {
         let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
 
-        // 创建交易所回报
-        let response = ExchangeResponse::CancelAccepted {
-            exchange_order_id,
+        let order_status = OrderStatusNotification {
+            exchange_id: exchange.to_string(),
             instrument_id: instrument_id.to_string(),
+            exchange_order_id: exchange_order_id.to_string(),
+            direction: direction.to_string(),
+            offset: offset.to_string(),
+            price_type: price_type.to_string(),
+            volume: remaining_volume,
+            price,
+            status: "CANCELLED".to_string(),
             timestamp,
+            order_id: order_id.to_string(),
+            user_id: user_id.to_string(),
+            reason: None,
         };
 
-        // TODO: 推送回报给账户 (Phase 4)
+        self.emit_order_status(order_status)?;
 
         log::info!(
             "Cancel accepted: exchange_order_id={}, instrument={}, user={}, order_id={}",
@@ -832,6 +897,7 @@ impl TradeGateway {
     /// 交易所撤单失败，推送CancelRejected回报给账户
     pub fn handle_cancel_rejected_new(
         &self,
+        exchange: &str,
         instrument_id: &str,
         exchange_order_id: i64,
         user_id: &str,
@@ -840,15 +906,23 @@ impl TradeGateway {
     ) -> Result<(), ExchangeError> {
         let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
 
-        // 创建交易所回报
-        let response = ExchangeResponse::CancelRejected {
-            exchange_order_id,
+        let order_status = OrderStatusNotification {
+            exchange_id: exchange.to_string(),
             instrument_id: instrument_id.to_string(),
-            reason: reason.to_string(),
+            exchange_order_id: exchange_order_id.to_string(),
+            direction: "".to_string(),
+            offset: "".to_string(),
+            price_type: String::new(),
+            volume: 0.0,
+            price: 0.0,
+            status: "CANCEL_REJECTED".to_string(),
             timestamp,
+            order_id: order_id.to_string(),
+            user_id: user_id.to_string(),
+            reason: Some(reason.to_string()),
         };
 
-        // TODO: 推送回报给账户 (Phase 4)
+        self.emit_order_status(order_status)?;
 
         log::warn!(
             "Cancel rejected: exchange_order_id={}, instrument={}, user={}, order_id={}, reason={}",
@@ -1109,6 +1183,71 @@ impl TradeGateway {
         Ok(())
     }
 
+    /// 推送订单状态通知并同步 DIFF 快照
+    fn emit_order_status(&self, status: OrderStatusNotification) -> Result<(), ExchangeError> {
+        self.send_notification(Notification::OrderStatus(status.clone()))?;
+
+        if let Some(snapshot_mgr) = &self.snapshot_mgr {
+            let patch = serde_json::json!({
+                "orders": {
+                    status.order_id.clone(): {
+                        "status": status.status,
+                        "exchange_id": status.exchange_id,
+                        "exchange_order_id": status.exchange_order_id,
+                        "instrument_id": status.instrument_id,
+                        "direction": status.direction,
+                        "offset": status.offset,
+                        "price_type": status.price_type,
+                        "price": status.price,
+                        "volume": status.volume,
+                        "reason": status.reason,
+                        "update_time": status.timestamp,
+                    }
+                }
+            });
+
+            let snapshot_mgr = snapshot_mgr.clone();
+            let user_id = status.user_id.clone();
+            tokio::spawn(async move {
+                snapshot_mgr.push_patch(&user_id, patch).await;
+            });
+        }
+
+        Ok(())
+    }
+
+    /// 推发送成交通知并同步 DIFF 快照
+    fn emit_trade_notification(&self, trade: TradeNotification) -> Result<(), ExchangeError> {
+        self.send_notification(Notification::Trade(trade.clone()))?;
+
+        if let Some(snapshot_mgr) = &self.snapshot_mgr {
+            let patch = serde_json::json!({
+                "trades": {
+                    trade.trade_id.clone(): {
+                        "trade_id": trade.trade_id,
+                        "user_id": trade.user_id,
+                        "order_id": trade.order_id,
+                        "instrument_id": trade.instrument_id,
+                        "direction": trade.direction,
+                        "offset": trade.offset,
+                        "price": trade.price,
+                        "volume": trade.volume,
+                        "commission": trade.commission,
+                        "timestamp": trade.timestamp,
+                    }
+                }
+            });
+
+            let snapshot_mgr = snapshot_mgr.clone();
+            let user_id = trade.user_id.clone();
+            tokio::spawn(async move {
+                snapshot_mgr.push_patch(&user_id, patch).await;
+            });
+        }
+
+        Ok(())
+    }
+
     /// 发送通知
     fn send_notification(&self, notification: Notification) -> Result<(), ExchangeError> {
         // 发送到全局通道
@@ -1238,7 +1377,36 @@ impl TradeGateway {
                             order_id: order.order_id.clone(),
                             exchange_order_id: order.exchange_order_id.clone(),
                             instrument_id: order.instrument_id.clone(),
-                            reason: "User cancelled".to_string(),
+                            reason: order
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| "User cancelled".to_string()),
+                            timestamp: order.timestamp,
+                        }),
+                    ),
+                    "REJECTED" => (
+                        NotificationType::OrderRejected,
+                        NotificationPayload::OrderRejected(OrderRejectedNotify {
+                            order_id: order.order_id.clone(),
+                            instrument_id: order.instrument_id.clone(),
+                            reason: order
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| "Order rejected".to_string()),
+                            error_code: 0,
+                            timestamp: order.timestamp,
+                        }),
+                    ),
+                    "CANCEL_REJECTED" => (
+                        NotificationType::OrderRejected,
+                        NotificationPayload::OrderRejected(OrderRejectedNotify {
+                            order_id: order.order_id.clone(),
+                            instrument_id: order.instrument_id.clone(),
+                            reason: order
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| "Cancel rejected".to_string()),
+                            error_code: 0,
                             timestamp: order.timestamp,
                         }),
                     ),
@@ -1548,7 +1716,18 @@ mod tests {
         let reason = "Insufficient margin";
 
         let exchange_order_id = gateway
-            .handle_order_rejected_new(instrument_id, &account_id, order_id, reason)
+            .handle_order_rejected_new(
+                "SHFE",
+                instrument_id,
+                &account_id,
+                order_id,
+                "BUY",
+                "OPEN",
+                "LIMIT",
+                50000.0,
+                10.0,
+                reason,
+            )
             .unwrap();
 
         // 验证 exchange_order_id 是递增的
@@ -1573,6 +1752,7 @@ mod tests {
                 &account_id,
                 order_id,
                 "BUY",
+                "OPEN",
                 volume,
                 price,
                 Some(2i64),
@@ -1591,6 +1771,7 @@ mod tests {
                 &account_id,
                 order_id,
                 "BUY",
+                "OPEN",
                 5.0,
                 50100.0,
                 Some(3i64),
@@ -1610,10 +1791,16 @@ mod tests {
         let order_id = "O001";
 
         let result = gateway.handle_cancel_accepted_new(
+            "SHFE",
             instrument_id,
             exchange_order_id,
             &account_id,
             order_id,
+            "BUY",
+            "OPEN",
+            "LIMIT",
+            50000.0,
+            5.0,
         );
 
         assert!(result.is_ok());
@@ -1629,6 +1816,7 @@ mod tests {
         let reason = "Order already filled";
 
         let result = gateway.handle_cancel_rejected_new(
+            "SHFE",
             instrument_id,
             exchange_order_id,
             &account_id,
@@ -1670,6 +1858,7 @@ mod tests {
                 &account_id,
                 "O001",
                 "BUY",
+                "OPEN",
                 10.0,
                 50000.0,
                 Some(exchange_order_id + 1),
