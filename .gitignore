@@ -1,7 +1,7 @@
 # Build artifacts
 target/
 output/
-book/  # mdbook output
+book/
 
 # Test data
 data/
