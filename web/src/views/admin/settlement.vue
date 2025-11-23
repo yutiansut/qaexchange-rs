@@ -187,10 +187,19 @@
             </div>
           </el-col>
         </el-row>
-
-        <!-- TODO: 添加图表展示月度结算趋势 -->
+        <el-card class="chart-wrapper" shadow="never">
+          <div id="settlement-chart" style="height:360px;"></div>
+        </el-card>
       </el-tab-pane>
     </el-tabs>
+
+    <input
+      type="file"
+      ref="priceFileInput"
+      accept=".csv,.txt"
+      style="display: none;"
+      @change="handlePriceFileUpload"
+    />
 
     <!-- 设置结算价对话框 -->
     <el-dialog
@@ -225,16 +234,76 @@
         <el-button type="primary" @click="addSettlementPrice">确定</el-button>
       </div>
     </el-dialog>
+
+    <!-- 结算详情对话框 -->
+    <el-dialog
+      title="结算详情"
+      :visible.sync="detailDialogVisible"
+      width="780px"
+    >
+      <div v-loading="detailLoading">
+        <el-descriptions :column="2" border v-if="detailData">
+          <el-descriptions-item label="结算日期">{{ detailData.settlement_date }}</el-descriptions-item>
+          <el-descriptions-item label="账户数">{{ detailData.account_count }}</el-descriptions-item>
+          <el-descriptions-item label="总盈亏">{{ formatCurrency(detailData.total_profit) }}</el-descriptions-item>
+          <el-descriptions-item label="总手续费">{{ formatCurrency(detailData.total_commission) }}</el-descriptions-item>
+        </el-descriptions>
+
+        <el-tabs v-model="detailTab" style="margin-top: 16px;">
+          <el-tab-pane label="账户明细" name="accounts">
+            <el-table
+              :data="detailData && detailData.accounts || []"
+              height="240"
+              border
+              size="mini"
+            >
+              <el-table-column prop="user_id" label="账户" width="160" />
+              <el-table-column prop="balance" label="结算后权益" width="140" align="right">
+                <template slot-scope="{ row }">{{ formatCurrency(row.balance) }}</template>
+              </el-table-column>
+              <el-table-column prop="close_profit" label="平仓盈亏" width="120" align="right">
+                <template slot-scope="{ row }">{{ formatCurrency(row.close_profit) }}</template>
+              </el-table-column>
+              <el-table-column prop="position_profit" label="持仓盈亏" width="120" align="right">
+                <template slot-scope="{ row }">{{ formatCurrency(row.position_profit) }}</template>
+              </el-table-column>
+              <el-table-column prop="commission" label="手续费" width="100" align="right">
+                <template slot-scope="{ row }">{{ formatCurrency(row.commission) }}</template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane label="结算价" name="prices">
+            <el-table
+              :data="detailData && detailData.prices || []"
+              height="240"
+              border
+              size="mini"
+            >
+              <el-table-column prop="instrument_id" label="合约" width="140" />
+              <el-table-column prop="settlement_price" label="结算价" width="120" align="right" />
+              <el-table-column prop="last_price" label="最新价" width="120" align="right" />
+              <el-table-column prop="change_rate" label="涨跌幅" width="120" align="right">
+                <template slot-scope="{ row }">
+                  {{ ((row.change_rate || 0) * 100).toFixed(2) }}%
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script>
 import dayjs from 'dayjs'
+import * as echarts from 'echarts'
 import {
   getSettlementHistory,
   setSettlementPrice,
   batchSetSettlementPrices,
-  executeSettlement
+  executeSettlement,
+  getSettlementDetail
 } from '@/api'
 
 export default {
@@ -272,12 +341,25 @@ export default {
           // 禁止选择未来日期
           return time.getTime() > Date.now()
         }
-      }
+      },
+      chartInstance: null,
+      detailDialogVisible: false,
+      detailLoading: false,
+      detailData: null,
+      detailTab: 'accounts'
     }
   },
   mounted() {
     this.loadHistory()
-    this.loadStatistics()
+    this.initChart()
+  },
+  beforeDestroy() {
+    if (this._resizeHandler) {
+      window.removeEventListener('resize', this._resizeHandler)
+    }
+    if (this.chartInstance) {
+      this.chartInstance.dispose()
+    }
   },
   methods: {
     // 加载结算历史
@@ -290,13 +372,10 @@ export default {
           params.end_date = this.historyDateRange[1]
         }
 
-        const response = await getSettlementHistory(params)
-        if (response.data && response.data.success) {
-          this.historyList = response.data.data || []
-        } else {
-          const errorMsg = (response.data && response.data.error && response.data.error.message) || '加载结算历史失败'
-          this.$message.error(errorMsg)
-        }
+        const records = await getSettlementHistory(params)
+        this.historyList = records || []
+        this.updateStatisticsFromHistory()
+        this.updateChart()
       } catch (error) {
         this.$message.error('加载结算历史失败')
         console.error(error)
@@ -307,19 +386,7 @@ export default {
 
     // 加载统计数据（从历史记录中计算）
     async loadStatistics() {
-      try {
-        // 从最近的结算历史中计算统计数据
-        if (this.historyList.length > 0) {
-          this.statistics = {
-            monthSettlementCount: this.historyList.length,
-            profitAccountsCount: this.historyList.reduce((sum, item) => sum + (item.profit_accounts || 0), 0),
-            lossAccountsCount: this.historyList.reduce((sum, item) => sum + (item.loss_accounts || 0), 0),
-            totalCommission: this.historyList.reduce((sum, item) => sum + (item.total_commission || 0), 0)
-          }
-        }
-      } catch (error) {
-        console.error('加载统计数据失败', error)
-      }
+      this.updateStatisticsFromHistory()
     },
 
     // 显示设置结算价对话框
@@ -370,8 +437,40 @@ export default {
 
     // 批量导入
     importPrices() {
-      this.$message.info('批量导入功能开发中...')
-      // TODO: 实现 CSV/Excel 导入功能
+      if (this.$refs.priceFileInput) {
+        this.$refs.priceFileInput.click()
+      }
+    },
+
+    handlePriceFileUpload(event) {
+      const file = event.target.files && event.target.files[0]
+      if (!file) return
+      const reader = new FileReader()
+      reader.onload = e => {
+        const lines = (e.target.result || '').split(/\r?\n/)
+        lines.forEach(line => {
+          const [instrument, price] = line.split(',').map(item => item && item.trim())
+          const value = parseFloat(price)
+          if (instrument && !isNaN(value)) {
+            const existingIndex = this.settlementPrices.findIndex(p => p.instrument_id === instrument)
+            const payload = {
+              instrument_id: instrument,
+              settlement_price: value,
+              last_price: value,
+              change_rate: 0
+            }
+            if (existingIndex >= 0) {
+              this.settlementPrices.splice(existingIndex, 1, payload)
+            } else {
+              this.settlementPrices.push(payload)
+            }
+          }
+        })
+        this.$message.success('已导入结算价')
+      }
+      reader.onerror = () => this.$message.error('读取文件失败')
+      reader.readAsText(file)
+      event.target.value = ''
     },
 
     // 执行结算
@@ -430,9 +529,20 @@ export default {
     },
 
     // 查看详情
-    viewDetail(row) {
-      this.$message.info('查看详情功能开发中...')
-      // TODO: 打开详情对话框，显示各账户的结算结果
+    async viewDetail(row) {
+      this.detailDialogVisible = true
+      this.detailTab = 'accounts'
+      this.detailLoading = true
+      try {
+        const detail = await getSettlementDetail(row.settlement_date)
+        this.detailData = detail || {}
+      } catch (error) {
+        this.$message.error('加载结算详情失败')
+        console.error(error)
+        this.detailData = null
+      } finally {
+        this.detailLoading = false
+      }
     },
 
     // 获取状态标签颜色
@@ -453,6 +563,64 @@ export default {
         'partial': '部分成功'
       }
       return statusMap[status] || status
+    },
+
+    initChart() {
+      this.$nextTick(() => {
+        const dom = document.getElementById('settlement-chart')
+        if (dom) {
+          this.chartInstance = echarts.init(dom)
+          this.updateChart()
+          this._resizeHandler = () => {
+            this.chartInstance && this.chartInstance.resize()
+          }
+          window.addEventListener('resize', this._resizeHandler)
+        }
+      })
+    },
+
+    updateChart() {
+      if (!this.chartInstance) return
+      const dates = this.historyList.map(item => item.settlement_date)
+      const profits = this.historyList.map(item => item.total_profit || 0)
+      const option = {
+        tooltip: { trigger: 'axis' },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: dates },
+        yAxis: { type: 'value' },
+        series: [
+          {
+            name: '总盈亏',
+            type: 'line',
+            smooth: true,
+            data: profits,
+            areaStyle: { opacity: 0.1 }
+          }
+        ]
+      }
+      this.chartInstance.setOption(option)
+    },
+
+    updateStatisticsFromHistory() {
+      if (!this.historyList.length) {
+        this.statistics = {
+          monthSettlementCount: 0,
+          profitAccountsCount: 0,
+          lossAccountsCount: 0,
+          totalCommission: 0
+        }
+        return
+      }
+      this.statistics = {
+        monthSettlementCount: this.historyList.length,
+        profitAccountsCount: this.historyList.reduce((sum, item) => sum + (item.profit_accounts || 0), 0),
+        lossAccountsCount: this.historyList.reduce((sum, item) => sum + (item.loss_accounts || 0), 0),
+        totalCommission: this.historyList.reduce((sum, item) => sum + (item.total_commission || 0), 0)
+      }
+    },
+
+    formatCurrency(value) {
+      return Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
     }
   }
 }

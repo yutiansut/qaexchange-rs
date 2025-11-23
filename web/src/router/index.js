@@ -82,6 +82,12 @@ const routes = [
         meta: { title: '我的账户', icon: 'el-icon-wallet', group: 'user' }
       },
       {
+        path: 'account/:accountId',
+        name: 'AccountDetail',
+        component: () => import('@/views/user/account-detail.vue'),
+        meta: { title: '账户详情', group: 'user', hidden: true }
+      },
+      {
         path: 'monitoring',
         name: 'Monitoring',
         component: () => import('@/views/monitoring/index.vue'),

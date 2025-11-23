@@ -132,6 +132,7 @@
 </template>
 
 <script>
+import dayjs from 'dayjs'
 import { getTransactions } from '@/api'
 
 export default {
@@ -282,8 +283,25 @@ export default {
         this.$message.warning('暂无数据可导出')
         return
       }
-      this.$message.info('导出功能开发中...')
-      // TODO: 实现Excel导出功能
+      const headers = ['时间', '账户', '类型', '金额', '状态', '方式', '备注']
+      const rows = this.transactions.map(item => [
+        item.timestamp || item.created_at || '',
+        item.user_id || '',
+        this.getTypeName(item.transaction_type || item.type || ''),
+        Number(item.amount || 0).toFixed(2),
+        this.getStatusName(item.status || ''),
+        this.getMethodName(item.method || ''),
+        item.remark || ''
+      ])
+
+      const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+      const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `transactions_${dayjs().format('YYYYMMDD_HHmmss')}.csv`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
     }
   }
 }

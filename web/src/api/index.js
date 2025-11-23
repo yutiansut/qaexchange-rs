@@ -429,6 +429,17 @@ export function getLiquidationRecords(params) {
   })
 }
 
+/**
+ * 触发强平
+ */
+export function forceLiquidateAccount(data) {
+  return request({
+    url: '/management/risk/force-liquidate',
+    method: 'post',
+    data
+  })
+}
+
 // ============= 管理端 - 合约管理 API =============
 
 /**

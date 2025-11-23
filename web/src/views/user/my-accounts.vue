@@ -410,7 +410,6 @@ export default {
     },
 
     handleViewAccount(account) {
-      // TODO: 跳转到账户详情页
       this.$router.push({
         name: 'AccountDetail',
         params: { accountId: account.account_id }

@@ -1,5 +1,5 @@
 <template>
-  <div class="close-form">
+  <div class="close-form" v-loading="loadingPositions">
     <el-alert
       title="平仓说明"
       type="info"
@@ -47,6 +47,9 @@
         <el-input :value="availableVolume" disabled>
           <template slot="append">手</template>
         </el-input>
+        <p v-if="availableVolume === 0" class="available-hint">
+          当前账户在该方向没有可平仓位
+        </p>
       </el-form-item>
 
       <el-form-item label="平仓类型" prop="order_type">
@@ -99,6 +102,7 @@
           type="warning"
           style="width: 100%"
           size="large"
+          :disabled="availableVolume === 0"
           @click="handleSubmit"
           :loading="submitting"
         >
@@ -110,7 +114,7 @@
 </template>
 
 <script>
-import { getUserAccounts } from '@/api'
+import { getUserAccounts, queryAccountPosition } from '@/api'
 import { mapGetters } from 'vuex'
 
 export default {
@@ -128,9 +132,11 @@ export default {
   data() {
     return {
       submitting: false,
-      availableVolume: 10,  // TODO: 从持仓数据获取
+      availableVolume: 0,
+      loadingPositions: false,
       accounts: [],
       selectedAccount: null,
+      positions: [],
       form: {
         account_id: '',
         direction: 'LONG',
@@ -156,6 +162,12 @@ export default {
     this.loadAccounts()
   },
   watch: {
+    instrumentId() {
+      this.calculateAvailableVolume()
+    },
+    'form.direction'() {
+      this.calculateAvailableVolume()
+    },
     currentPrice: {
       immediate: true,
       handler(val) {
@@ -180,18 +192,37 @@ export default {
         if (this.accounts.length > 0 && !this.form.account_id) {
           this.form.account_id = this.accounts[0].account_id
           this.selectedAccount = this.accounts[0]
-          // 通知父组件初始账户选择
           this.$emit('account-change', this.form.account_id)
+          await this.fetchPositions(this.form.account_id)
         }
       } catch (error) {
         this.$message.error('加载账户列表失败: ' + (error.message || '未知错误'))
       }
     },
 
-    handleAccountChange(accountId) {
+    async fetchPositions(accountId) {
+      if (!accountId) {
+        this.positions = []
+        this.availableVolume = 0
+        return
+      }
+      this.loadingPositions = true
+      try {
+        const res = await queryAccountPosition(accountId)
+        this.positions = res || []
+      } catch (error) {
+        this.positions = []
+        console.error('加载账户持仓失败', error)
+      } finally {
+        this.loadingPositions = false
+        this.calculateAvailableVolume()
+      }
+    },
+
+    async handleAccountChange(accountId) {
       this.selectedAccount = this.accounts.find(acc => acc.account_id === accountId)
-      // 通知父组件账户选择变化
       this.$emit('account-change', accountId)
+      await this.fetchPositions(accountId)
     },
 
     handleTypeChange() {
@@ -209,34 +240,64 @@ export default {
     },
 
     setVolume(volume) {
-      this.form.volume = Math.min(volume, this.availableVolume)
+      this.form.volume = Math.min(volume, this.availableVolume || 0)
     },
 
     setVolumePercent(percent) {
+      if (!this.availableVolume) {
+        this.form.volume = 0
+        return
+      }
       this.form.volume = Math.max(1, Math.floor(this.availableVolume * percent))
+    },
+
+    calculateAvailableVolume() {
+      if (!this.instrumentId) {
+        this.availableVolume = 0
+        this.form.volume = 0
+        return
+      }
+      const position = this.positions.find(p => p.instrument_id === this.instrumentId)
+      if (!position) {
+        this.availableVolume = 0
+        this.form.volume = 0
+        return
+      }
+      const volume = this.form.direction === 'LONG' ? position.volume_long : position.volume_short
+      this.availableVolume = Math.max(0, Math.floor(volume))
+      if (this.availableVolume === 0) {
+        this.form.volume = 0
+      } else if (this.form.volume > this.availableVolume) {
+        this.form.volume = this.availableVolume
+      }
     },
 
     handleSubmit() {
       this.$refs.form.validate(valid => {
-        if (valid) {
-          this.submitting = true
-
-          const orderData = {
-            user_id: this.currentUser,      // 用户ID（用于验证）
-            account_id: this.form.account_id,  // 交易账户ID（必需）✨
-            direction: this.form.direction === 'LONG' ? 'SELL' : 'BUY',
-            offset: 'CLOSE',
-            order_type: this.form.order_type,
-            price: this.form.order_type === 'LIMIT' ? this.form.price : 0,
-            volume: this.form.volume
+        if (!valid || this.availableVolume === 0) {
+          if (this.availableVolume === 0) {
+            this.$message.warning('当前没有可平仓位')
           }
-
-          this.$emit('submit', orderData)
-
-          setTimeout(() => {
-            this.submitting = false
-          }, 1000)
+          return
         }
+
+        this.submitting = true
+
+        const orderData = {
+          user_id: this.currentUser,
+          account_id: this.form.account_id,
+          direction: this.form.direction === 'LONG' ? 'SELL' : 'BUY',
+          offset: 'CLOSE',
+          order_type: this.form.order_type,
+          price: this.form.order_type === 'LIMIT' ? this.form.price : 0,
+          volume: this.form.volume
+        }
+
+        this.$emit('submit', orderData)
+
+        setTimeout(() => {
+          this.submitting = false
+        }, 1000)
       })
     }
   }
@@ -252,6 +313,12 @@ export default {
     margin-top: 10px;
     display: flex;
     gap: 5px;
+  }
+
+  .available-hint {
+    margin-top: 6px;
+    color: #f56c6c;
+    font-size: 12px;
   }
 
   ::v-deep .el-input-number {

@@ -164,7 +164,7 @@
 </template>
 
 <script>
-import { queryPosition, submitOrder } from '@/api'
+import { queryPosition, submitOrder, getTick } from '@/api'
 import { mapGetters } from 'vuex'
 
 export default {
@@ -221,14 +221,28 @@ export default {
         // queryPosition 通过 axios 拦截器已经返回 res.data，直接就是数组
         const rawPositions = await queryPosition(this.currentUser) || []
 
+        const uniqueInstruments = [...new Set(rawPositions.map(pos => pos.instrument_id))]
+        const priceMap = {}
+        await Promise.all(uniqueInstruments.map(async instrument => {
+          try {
+            const tick = await getTick(instrument)
+            priceMap[instrument] = tick.last_price || tick.bid_price || tick.ask_price || 0
+          } catch (error) {
+            priceMap[instrument] = 0
+          }
+        }))
+
         // 将后台返回的多空合并格式转换为前端需要的格式
         // 后台格式：{ instrument_id, volume_long, volume_short, cost_long, cost_short, profit_long, profit_short }
         // 前端格式：{ instrument_id, direction, volume, available, open_price, last_price, position_value, profit, profit_ratio, margin }
         const positions = []
 
         rawPositions.forEach(pos => {
+          const lastPrice = priceMap[pos.instrument_id] || pos.cost_long || pos.cost_short || 0
+
           // 如果有多头持仓
           if (pos.volume_long > 0) {
+            const positionValue = pos.volume_long * lastPrice * 300
             positions.push({
               account_id: pos.account_id,  // 保存account_id（用于平仓）
               instrument_id: pos.instrument_id,
@@ -236,16 +250,17 @@ export default {
               volume: pos.volume_long,
               available: pos.volume_long, // 假设全部可平
               open_price: pos.cost_long,
-              last_price: pos.cost_long, // TODO: 需要从行情获取最新价
-              position_value: pos.volume_long * pos.cost_long * 300, // 合约乘数300
+              last_price: lastPrice,
+              position_value: positionValue,
               profit: pos.profit_long,
-              profit_ratio: pos.cost_long > 0 ? pos.profit_long / (pos.volume_long * pos.cost_long * 300) : 0,
+              profit_ratio: positionValue > 0 ? pos.profit_long / positionValue : 0,
               margin: pos.volume_long * pos.cost_long * 300 * 0.15 // 假设保证金率15%
             })
           }
 
           // 如果有空头持仓
           if (pos.volume_short > 0) {
+            const positionValue = pos.volume_short * lastPrice * 300
             positions.push({
               account_id: pos.account_id,  // 保存account_id（用于平仓）
               instrument_id: pos.instrument_id,
@@ -253,10 +268,10 @@ export default {
               volume: pos.volume_short,
               available: pos.volume_short, // 假设全部可平
               open_price: pos.cost_short,
-              last_price: pos.cost_short, // TODO: 需要从行情获取最新价
-              position_value: pos.volume_short * pos.cost_short * 300, // 合约乘数300
+              last_price: lastPrice,
+              position_value: positionValue,
               profit: pos.profit_short,
-              profit_ratio: pos.cost_short > 0 ? pos.profit_short / (pos.volume_short * pos.cost_short * 300) : 0,
+              profit_ratio: positionValue > 0 ? pos.profit_short / positionValue : 0,
               margin: pos.volume_short * pos.cost_short * 300 * 0.15 // 假设保证金率15%
             })
           }

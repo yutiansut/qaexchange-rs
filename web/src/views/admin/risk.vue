@@ -95,16 +95,15 @@
           :sort-config="{ trigger: 'cell', defaultSort: { field: 'risk_ratio', order: 'desc' } }"
           height="500"
         >
-          <vxe-table-column field="user_id" title="用户ID" width="150" sortable></vxe-table-column>
-          <vxe-table-column field="user_name" title="用户名" width="150"></vxe-table-column>
+          <vxe-table-column field="user_id" title="账户ID" width="180" sortable></vxe-table-column>
           <vxe-table-column field="balance" title="总权益" width="130" align="right" sortable>
             <template slot-scope="scope">
               {{ scope.row.balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
             </template>
           </vxe-table-column>
-          <vxe-table-column field="margin" title="占用保证金" width="130" align="right" sortable>
+          <vxe-table-column field="margin_used" title="占用保证金" width="130" align="right" sortable>
             <template slot-scope="scope">
-              {{ scope.row.margin.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+              {{ scope.row.margin_used.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
             </template>
           </vxe-table-column>
           <vxe-table-column field="available" title="可用资金" width="130" align="right" sortable>
@@ -119,6 +118,7 @@
               </span>
             </template>
           </vxe-table-column>
+          <vxe-table-column field="position_count" title="持仓数" width="90" align="center" sortable></vxe-table-column>
           <vxe-table-column field="risk_ratio" title="风险率" width="120" align="right" sortable>
             <template slot-scope="scope">
               <el-tag :type="getRiskTagType(scope.row.risk_ratio)" size="small">
@@ -212,18 +212,17 @@
     <el-dialog
       title="账户详情"
       :visible.sync="detailDialogVisible"
-      width="800px"
+      width="900px"
     >
-      <div v-if="currentAccount">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="用户ID">{{ currentAccount.user_id }}</el-descriptions-item>
-          <el-descriptions-item label="用户名">{{ currentAccount.user_name }}</el-descriptions-item>
-          <el-descriptions-item label="总权益">{{ currentAccount.balance.toLocaleString() }}</el-descriptions-item>
-          <el-descriptions-item label="可用资金">{{ currentAccount.available.toLocaleString() }}</el-descriptions-item>
-          <el-descriptions-item label="占用保证金">{{ currentAccount.margin.toLocaleString() }}</el-descriptions-item>
+      <div v-if="currentAccount" v-loading="detailLoading">
+        <el-descriptions :column="2" border class="detail-summary">
+          <el-descriptions-item label="账户ID">{{ currentAccount.user_id }}</el-descriptions-item>
+          <el-descriptions-item label="总权益">{{ formatNumber(accountDetail.info && accountDetail.info.balance || currentAccount.balance) }}</el-descriptions-item>
+          <el-descriptions-item label="可用资金">{{ formatNumber(accountDetail.info && accountDetail.info.available || currentAccount.available) }}</el-descriptions-item>
+          <el-descriptions-item label="占用保证金">{{ formatNumber(accountDetail.info && accountDetail.info.margin || currentAccount.margin_used || 0) }}</el-descriptions-item>
           <el-descriptions-item label="浮动盈亏">
-            <span :style="{ color: currentAccount.float_profit >= 0 ? '#F56C6C' : '#67C23A' }">
-              {{ currentAccount.float_profit.toLocaleString() }}
+            <span :style="{ color: (accountDetail.info && accountDetail.info.float_profit || currentAccount.float_profit) >= 0 ? '#F56C6C' : '#67C23A' }">
+              {{ formatNumber(accountDetail.info && accountDetail.info.float_profit || currentAccount.float_profit || 0) }}
             </span>
           </el-descriptions-item>
           <el-descriptions-item label="风险率">
@@ -231,10 +230,49 @@
               {{ (currentAccount.risk_ratio * 100).toFixed(1) }}%
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="持仓品种数">{{ currentAccount.position_count }}</el-descriptions-item>
         </el-descriptions>
 
-        <!-- TODO: 显示持仓明细、订单明细等 -->
+        <el-tabs v-model="detailTab">
+          <el-tab-pane label="持仓明细" name="positions">
+            <el-table
+              :data="accountDetail.positions"
+              border
+              stripe
+              size="mini"
+              empty-text="暂无持仓"
+            >
+              <el-table-column prop="instrument_id" label="合约" width="140" />
+              <el-table-column prop="volume_long" label="多头" width="100" align="right" />
+              <el-table-column prop="volume_short" label="空头" width="100" align="right" />
+              <el-table-column prop="cost_long" label="多头均价" width="120" align="right" />
+              <el-table-column prop="cost_short" label="空头均价" width="120" align="right" />
+              <el-table-column prop="float_profit" label="浮动盈亏" width="140" align="right">
+                <template slot-scope="{ row }">
+                  <span :style="{ color: (row.float_profit || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
+                    {{ formatNumber(row.float_profit || 0) }}
+                  </span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane label="订单明细" name="orders">
+            <el-table
+              :data="accountDetail.orders"
+              border
+              stripe
+              size="mini"
+              empty-text="暂无订单"
+            >
+              <el-table-column prop="order_id" label="订单号" width="160" />
+              <el-table-column prop="instrument_id" label="合约" width="120" />
+              <el-table-column prop="direction" label="方向" width="80" align="center" />
+              <el-table-column prop="offset" label="开平" width="80" align="center" />
+              <el-table-column prop="price" label="价格" width="100" align="right" />
+              <el-table-column prop="volume" label="数量" width="80" align="right" />
+              <el-table-column prop="status" label="状态" width="120" />
+            </el-table>
+          </el-tab-pane>
+        </el-tabs>
       </div>
     </el-dialog>
   </div>
@@ -244,7 +282,9 @@
 import {
   getRiskAccounts,
   getMarginSummary,
-  getLiquidationRecords
+  getLiquidationRecords,
+  getAccountDetail,
+  forceLiquidateAccount
 } from '@/api'
 
 export default {
@@ -267,7 +307,13 @@ export default {
         averageRiskRatio: 0
       },
       detailDialogVisible: false,
-      currentAccount: null
+      detailLoading: false,
+      currentAccount: null,
+      accountDetail: {
+        info: null,
+        positions: [],
+        orders: []
+      }
     }
   },
   computed: {
@@ -305,12 +351,8 @@ export default {
         }
 
         const response = await getRiskAccounts(params)
-        if (response.data && response.data.success) {
-          this.accounts = response.data.data || []
-        } else {
-          const errorMsg = (response.data && response.data.error && response.data.error.message) || '加载账户数据失败'
-          this.$message.error(errorMsg)
-        }
+        const rows = (response || []).map(item => this.normalizeRiskAccount(item))
+        this.accounts = rows
       } catch (error) {
         this.$message.error('加载账户数据失败')
         console.error(error)
@@ -381,6 +423,19 @@ export default {
       }
     },
 
+    normalizeRiskAccount(item) {
+      return {
+        user_id: item.user_id,
+        balance: item.balance || 0,
+        available: item.available || 0,
+        margin_used: item.margin_used || 0,
+        float_profit: item.unrealized_pnl || 0,
+        risk_ratio: item.risk_ratio || 0,
+        position_count: item.position_count || 0,
+        risk_level: item.risk_level || 'low'
+      }
+    },
+
     // 获取风险标签颜色
     getRiskTagType(ratio) {
       if (ratio >= 0.9) return 'danger'
@@ -390,35 +445,59 @@ export default {
     },
 
     // 查看账户详情
-    viewAccountDetail(account) {
+    async viewAccountDetail(account) {
       this.currentAccount = account
       this.detailDialogVisible = true
+      this.detailLoading = true
+      try {
+        const detail = await getAccountDetail(account.user_id)
+        this.accountDetail = {
+          info: detail.account_info || account,
+          positions: detail.positions || [],
+          orders: detail.orders || []
+        }
+      } catch (error) {
+        this.$message.error('加载账户详情失败')
+        console.error(error)
+        this.accountDetail = {
+          info: account,
+          positions: [],
+          orders: []
+        }
+      } finally {
+        this.detailLoading = false
+      }
     },
 
     // 强平操作
     async forceLiquidate(account) {
       try {
         await this.$confirm(
-          `确定要强制平仓 ${account.user_id} (${account.user_name}) 的所有持仓吗？当前风险率：${(account.risk_ratio * 100).toFixed(1)}%`,
+          `确定要强制平仓账户 ${account.user_id} 吗？当前风险率：${(account.risk_ratio * 100).toFixed(1)}%`,
           '强制平仓确认',
           {
-            type: 'error',
+            type: 'warning',
             confirmButtonText: '确定强平',
             cancelButtonText: '取消'
           }
         )
 
-        // TODO: 调用强平 API
-        // await forceLiquidate(account.user_id)
-
-        this.$message.success('强平操作已提交')
+        await forceLiquidateAccount({
+          account_id: account.user_id,
+          reason: 'Manual force liquidation from admin UI'
+        })
+        this.$message.success('强平任务已提交')
         this.loadData()
       } catch (error) {
         if (error !== 'cancel') {
-          this.$message.error('强平操作失败')
-          console.error(error)
+          const msg = (error.response && error.response.data && error.response.data.error && error.response.data.error.message) || error.message
+          this.$message.error('强平失败：' + msg)
         }
       }
+    },
+
+    formatNumber(val) {
+      return Number(val || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
     },
 
     // 切换自动刷新

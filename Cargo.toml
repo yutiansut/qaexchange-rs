@@ -9,6 +9,7 @@ license = "MIT"
 [features]
 default = []
 iceoryx2 = ["dep:iceoryx2"]
+io_uring = ["dep:tokio-uring"]
 
 [lib]
 name = "qaexchange"
@@ -80,6 +81,24 @@ config = "0.13"
 
 # 指标监控
 prometheus = "0.13"
+lazy_static = "1.4"
+
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+
+# DSL解析
+pest = "2.7"
+pest_derive = "2.7"
+
+# 高性能分配器
+mimalloc = { version = "0.1", default-features = false }
+
+# io_uring (Linux 5.1+)
+tokio-uring = { version = "0.5", optional = true }
+
+# 一致性哈希
+hashring = "0.3"
 
 # 存储相关
 crc32fast = "1.5.0"
