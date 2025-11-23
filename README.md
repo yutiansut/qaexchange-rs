@@ -10,7 +10,7 @@
 
 高性能量化交易所系统 - 基于 QARS 核心架构构建
 
-[pic](docs/pics/orderbook.png)
+![pic](docs/pics/orderbook.png)
 ---
 
 ## 🆕 最近更新
