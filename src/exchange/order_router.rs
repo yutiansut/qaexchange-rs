@@ -1094,7 +1094,7 @@ impl OrderRouter {
             ExchangeError::OrderError(format!("Order not found: {}", req.order_id))
         })?;
 
-        let mut info = order_info.write();
+        let info = order_info.write();
 
         // 2. 验证订单所有权
         if info.order.user_id != req.account_id {

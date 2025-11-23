@@ -154,7 +154,7 @@ impl RecoveryManager {
                 available,
                 frozen,
                 margin,
-                timestamp,
+                timestamp: _,
             } => {
                 let user_id_str = String::from_utf8_lossy(&user_id)
                     .trim_end_matches('\0')

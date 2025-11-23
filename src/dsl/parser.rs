@@ -53,10 +53,16 @@ pub struct AstBuilder;
 impl AstBuilder {
     /// 解析程序
     pub fn parse(input: &str) -> ParseResult<Program> {
-        let pairs = FactorParser::parse(Rule::program, input).map_err(|e| ParseError {
-            message: e.to_string(),
-            line: e.line().unwrap_or(0),
-            column: e.line().unwrap_or(0), // pest 不直接提供 column
+        let pairs = FactorParser::parse(Rule::program, input).map_err(|e| {
+            let (line, column) = match e.line_col {
+                pest::error::LineColLocation::Pos((l, c)) => (l, c),
+                pest::error::LineColLocation::Span((l, c), _) => (l, c),
+            };
+            ParseError {
+                message: e.to_string(),
+                line,
+                column,
+            }
         })?;
 
         let mut statements = Vec::new();
@@ -78,10 +84,16 @@ impl AstBuilder {
 
     /// 解析单个表达式
     pub fn parse_expression(input: &str) -> ParseResult<Expression> {
-        let pairs = FactorParser::parse(Rule::expression, input).map_err(|e| ParseError {
-            message: e.to_string(),
-            line: e.line().unwrap_or(0),
-            column: e.line().unwrap_or(0),
+        let pairs = FactorParser::parse(Rule::expression, input).map_err(|e| {
+            let (line, column) = match e.line_col {
+                pest::error::LineColLocation::Pos((l, c)) => (l, c),
+                pest::error::LineColLocation::Span((l, c), _) => (l, c),
+            };
+            ParseError {
+                message: e.to_string(),
+                line,
+                column,
+            }
         })?;
 
         for pair in pairs {

@@ -1156,7 +1156,7 @@ impl DiffHandler {
                 instrument_id,
                 period,
                 kline,
-                timestamp,
+                timestamp: _,
             } => {
                 // 转换为 DIFF klines 格式（增量推送新K线）
                 let duration_ns = crate::market::kline::KLinePeriod::from_int(*period)

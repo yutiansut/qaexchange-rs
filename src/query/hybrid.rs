@@ -411,8 +411,8 @@ impl HybridQueryEngine {
     }
 
     /// 执行流式订阅
-    pub fn subscribe(&self, key: String) -> mpsc::Receiver<Record> {
-        let (tx, rx) = mpsc::channel(1000);
+    pub fn subscribe(&self, _key: String) -> mpsc::Receiver<Record> {
+        let (_tx, rx) = mpsc::channel(1000);
 
         // TODO: 实现订阅逻辑
         // 这里简化为立即返回 receiver

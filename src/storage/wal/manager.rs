@@ -138,7 +138,7 @@ impl WalManager {
                 Ok(mut f) => {
                     let mut header_buf = vec![0u8; 128];
                     if f.read_exact(&mut header_buf).is_ok() {
-                        if let Ok(header) = WalFileHeader::from_bytes(&header_buf) {
+                        if let Ok(_header) = WalFileHeader::from_bytes(&header_buf) {
                             let mut reader = BufReader::new(f);
                             loop {
                                 let mut len_buf = [0u8; 4];

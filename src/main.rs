@@ -16,19 +16,15 @@
 //! 运行: cargo run --bin qaexchange-server
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 全局内存分配器 - 使用 mimalloc 替代默认分配器
+// 全局内存分配器说明
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// mimalloc 优势：
+// 注意：qars_core3 已经定义了全局分配器，这里不再重复定义
+// mimalloc 优势（由 qars_core3 提供）：
 // - 多线程场景下 2-3 倍性能提升
 // - 更低的内存碎片
 // - 更好的缓存局部性
 // - 适合高频交易场景的低延迟分配
-
-use mimalloc::MiMalloc;
-
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
 
 use qaexchange::exchange::instrument_registry::{InstrumentInfo, InstrumentStatus, InstrumentType};
 use qaexchange::exchange::{

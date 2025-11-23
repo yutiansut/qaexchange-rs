@@ -304,7 +304,7 @@ impl MaterializedViewManager {
     }
 
     /// 获取或创建合约因子状态
-    pub fn get_or_create(&self, instrument_id: &str) -> dashmap::mapref::one::RefMut<String, InstrumentFactorState> {
+    pub fn get_or_create(&self, instrument_id: &str) -> dashmap::mapref::one::RefMut<'_, String, InstrumentFactorState> {
         self.states
             .entry(instrument_id.to_string())
             .or_insert_with(|| {

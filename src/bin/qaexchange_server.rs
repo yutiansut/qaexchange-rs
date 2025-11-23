@@ -69,6 +69,9 @@ struct ExchangeServer {
 
     /// 行情广播器
     market_broadcaster: Arc<MarketDataBroadcaster>,
+
+    /// 结算引擎
+    settlement_engine: Arc<SettlementEngine>,
 }
 
 impl ExchangeServer {

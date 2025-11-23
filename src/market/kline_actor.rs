@@ -79,7 +79,7 @@ impl KLineActor {
                 // 转换period
                 if let Some(kline_period) = super::kline::KLinePeriod::from_int(*period) {
                     // 重建K线数据
-                    let mut kline = super::kline::KLine {
+                    let kline = super::kline::KLine {
                         timestamp: *kline_timestamp,
                         open: *open,
                         high: *high,
