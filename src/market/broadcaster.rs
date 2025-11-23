@@ -21,6 +21,39 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+/// 从合约ID中提取基础合约代码（去除交易所前缀）
+/// @yutiansut @quantaxis
+///
+/// 支持两种格式：
+/// - "CFFEX.IF2501" -> "IF2501"
+/// - "IF2501" -> "IF2501"
+fn extract_base_instrument_id(instrument_id: &str) -> &str {
+    if let Some(pos) = instrument_id.find('.') {
+        &instrument_id[pos + 1..]
+    } else {
+        instrument_id
+    }
+}
+
+/// 检查两个合约ID是否匹配（支持带/不带交易所前缀的格式）
+/// @yutiansut @quantaxis
+///
+/// 匹配规则：
+/// - "IF2501" matches "IF2501" (精确匹配)
+/// - "CFFEX.IF2501" matches "IF2501" (带前缀匹配不带前缀)
+/// - "IF2501" matches "CFFEX.IF2501" (不带前缀匹配带前缀)
+/// - "CFFEX.IF2501" matches "CFFEX.IF2501" (精确匹配)
+fn instrument_matches(subscribed: &str, broadcast: &str) -> bool {
+    // 精确匹配
+    if subscribed == broadcast {
+        return true;
+    }
+    // 比较基础合约代码
+    let base_subscribed = extract_base_instrument_id(subscribed);
+    let base_broadcast = extract_base_instrument_id(broadcast);
+    base_subscribed == base_broadcast
+}
+
 /// 市场数据事件类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -433,13 +466,14 @@ impl MarketDataBroadcaster {
             let subscriber_id = entry.key();
             let info = entry.value();
 
-            // 检查是否订阅了该合约
+            // 检查是否订阅了该合约（支持带/不带交易所前缀的格式匹配）
+            // @yutiansut @quantaxis
             let subscribed_instrument = info.subscription.instruments.is_empty()
                 || info
                     .subscription
                     .instruments
                     .iter()
-                    .any(|id| id == instrument_id);
+                    .any(|id| instrument_matches(id, instrument_id));
 
             // 检查是否订阅了该频道
             let subscribed_channel = info.subscription.channels.is_empty()
@@ -530,9 +564,10 @@ impl MarketDataBroadcaster {
                 let mut to_cleanup = Vec::new();
 
                 for (instrument_id, events_for_instrument) in &events_by_instrument {
-                    // 检查订阅
+                    // 检查订阅（支持带/不带交易所前缀的格式匹配）
+                    // @yutiansut @quantaxis
                     let subscribed = instruments.is_empty()
-                        || instruments.iter().any(|id| id == instrument_id);
+                        || instruments.iter().any(|id| instrument_matches(id, instrument_id));
 
                     if !subscribed {
                         continue;
