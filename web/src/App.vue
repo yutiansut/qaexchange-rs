@@ -32,10 +32,9 @@ export default {
   },
 
   mounted() {
-    // 如果已登录，初始化 WebSocket
-    if (this.isLoggedIn) {
-      this.initializeWebSocket()
-    }
+    // ✨ 移除：由 watch.isLoggedIn (immediate: true) 处理
+    // 不再在 mounted 中重复调用，避免创建两个 WebSocket 连接
+    // @yutiansut @quantaxis
   },
 
   beforeDestroy() {

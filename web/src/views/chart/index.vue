@@ -86,16 +86,18 @@ export default {
 
   data() {
     return {
-      selectedInstrument: 'SHFE.cu2501',
+      // ✨ 修改默认合约为有K线数据的合约 @yutiansut @quantaxis
+      // 注意: 合约ID不带交易所前缀（后端注册的就是 IF2501 格式）
+      selectedInstrument: 'IF2501',
       klinePeriod: 5,  // 默认5分钟
       klineDataList: [],
 
-      // 可用合约列表
+      // 可用合约列表（与后端 instrument_id 一致，不带交易所前缀）
       availableInstruments: [
-        'SHFE.cu2501',
-        'SHFE.ag2506',
-        'CFFEX.IF2501',
-        'CFFEX.IH2501'
+        'IF2501',    // ✅ 默认有K线数据
+        'IF2502',
+        'IH2501',
+        'IC2501'
       ]
     }
   },
@@ -115,17 +117,47 @@ export default {
       }
     },
 
+    // ✨ 监听整个 snapshot 变化，调试 klines 数据 @yutiansut @quantaxis
+    snapshot: {
+      handler(newSnapshot) {
+        // 调试：打印完整快照的 klines 结构
+        if (newSnapshot && newSnapshot.klines) {
+          console.log('[ChartPage] 📊 snapshot.klines received:', JSON.stringify(newSnapshot.klines, null, 2))
+        }
+      },
+      deep: true
+    },
+
     // 监听K线数据更新（WebSocket实时推送）
     'snapshot.klines': {
       handler(newKlines) {
-        if (!newKlines || !this.selectedInstrument) return
+        console.log('[ChartPage] 📊 snapshot.klines watcher triggered:', {
+          hasKlines: !!newKlines,
+          instrument: this.selectedInstrument,
+          period: this.klinePeriod
+        })
+
+        if (!newKlines || !this.selectedInstrument) {
+          console.log('[ChartPage] ⚠️ No klines or no instrument selected')
+          return
+        }
+
+        console.log('[ChartPage] 📊 Available instruments in klines:', Object.keys(newKlines))
 
         const instrumentKlines = newKlines[this.selectedInstrument]
-        if (!instrumentKlines) return
+        if (!instrumentKlines) {
+          console.log('[ChartPage] ⚠️ No klines for instrument:', this.selectedInstrument)
+          return
+        }
 
         const durationNs = this.periodToNs(this.klinePeriod).toString()
+        console.log('[ChartPage] 📊 Looking for duration:', durationNs, 'Available:', Object.keys(instrumentKlines))
+
         const periodKlines = instrumentKlines[durationNs]
-        if (!periodKlines || !periodKlines.data) return
+        if (!periodKlines || !periodKlines.data) {
+          console.log('[ChartPage] ⚠️ No period klines for duration:', durationNs)
+          return
+        }
 
         // 转换为数组格式
         const klineArray = Object.values(periodKlines.data).map(k => ({
@@ -185,21 +217,33 @@ export default {
       }
     },
 
-    // 订阅K线数据
+    // ✨ 订阅K线数据（增强调试）@yutiansut @quantaxis
     subscribeKLine() {
+      console.log('[ChartPage] 📊 subscribeKLine called:', {
+        instrument: this.selectedInstrument,
+        isConnected: this.isConnected,
+        period: this.klinePeriod
+      })
+
       if (!this.selectedInstrument || !this.isConnected) {
-        console.warn('[ChartPage] Cannot subscribe K-line: not connected or no instrument selected')
+        console.warn('[ChartPage] ⚠️ Cannot subscribe K-line: not connected or no instrument selected')
         return
       }
 
-      console.log('[ChartPage] Subscribing K-line:', this.selectedInstrument, 'period:', this.klinePeriod)
-
-      this.setChart({
+      const durationNs = this.periodToNs(this.klinePeriod)
+      const chartConfig = {
         chart_id: 'chart_page',
         instrument_id: this.selectedInstrument,
         period: this.klinePeriod,
         count: 500
-      })
+      }
+
+      console.log('[ChartPage] 📊 Calling setChart with config:', chartConfig)
+      console.log('[ChartPage] 📊 Duration in ns:', durationNs)
+
+      this.setChart(chartConfig)
+
+      console.log('[ChartPage] ✅ setChart called successfully')
     },
 
     // 转换周期为纳秒

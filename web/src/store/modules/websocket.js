@@ -13,6 +13,9 @@ const state = {
   // 连接状态
   connectionState: 'DISCONNECTED',
 
+  // ✨ 防止并发初始化的标志 @yutiansut @quantaxis
+  isInitializing: false,
+
   // 业务截面（完整的实时数据）
   snapshot: {},
 
@@ -83,21 +86,34 @@ const mutations = {
   RESET_STATE(state) {
     state.ws = null
     state.connectionState = 'DISCONNECTED'
+    state.isInitializing = false         // ✨ 重置初始化标志 @yutiansut @quantaxis
     state.snapshot = {}
     state.currentAccountId = null        // ✨ Phase 10
     state.userAccounts = []              // ✨ Phase 10
     state.subscribedInstruments = []
     state.unsubscribers.forEach(unsubscribe => unsubscribe())
     state.unsubscribers = []
+  },
+
+  // ✨ 设置初始化标志 @yutiansut @quantaxis
+  SET_INITIALIZING(state, value) {
+    state.isInitializing = value
   }
 }
 
 const actions = {
   /**
    * 初始化 WebSocket
+   * ✨ 增加 isInitializing 标志防止并发初始化 @yutiansut @quantaxis
    */
   async initWebSocket({ state, commit, rootState, dispatch }) {
     console.log('[WebSocket] Initializing...')
+
+    // ✨ 防止并发初始化
+    if (state.isInitializing) {
+      console.warn('[WebSocket] Already initializing, skipping duplicate call')
+      return state.ws
+    }
 
     // ✅ 防止重复创建：如果已有连接，先销毁
     if (state.ws) {
@@ -105,10 +121,14 @@ const actions = {
       await dispatch('destroyWebSocket')
     }
 
+    // ✨ 设置初始化标志
+    commit('SET_INITIALIZING', true)
+
     // 获取当前用户 ID
     const userId = rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id)
     if (!userId) {
       console.error('[WebSocket] No user ID available')
+      commit('SET_INITIALIZING', false)  // ✨ 清除标志
       throw new Error('No user ID available')
     }
 
@@ -166,18 +186,33 @@ const actions = {
     // 保存 WebSocket 实例
     commit('SET_WS', ws)
 
+    // ✨ 清除初始化标志 @yutiansut @quantaxis
+    commit('SET_INITIALIZING', false)
+
     console.log('[WebSocket] Initialized')
     return ws
   },
 
   /**
    * 连接 WebSocket
+   * ✨ 增加 CONNECTING 状态检查，防止重复连接 @yutiansut @quantaxis
    */
   async connectWebSocket({ state, dispatch }) {
     console.log('[WebSocket] connectWebSocket called, current state:', {
       hasWs: !!state.ws,
       connectionState: state.connectionState
     })
+
+    // ✨ 如果正在连接或已连接，直接返回
+    if (state.connectionState === 'CONNECTED') {
+      console.log('[WebSocket] Already connected, skipping connection')
+      return
+    }
+
+    if (state.connectionState === 'CONNECTING') {
+      console.log('[WebSocket] Connection in progress, skipping duplicate connect call')
+      return
+    }
 
     if (!state.ws) {
       console.log('[WebSocket] No ws instance, initializing...')
@@ -193,8 +228,6 @@ const actions = {
         console.error('[WebSocket] Connection failed:', error)
         throw error
       }
-    } else if (state.connectionState === 'CONNECTED') {
-      console.log('[WebSocket] Already connected, skipping connection')
     }
   },
 
