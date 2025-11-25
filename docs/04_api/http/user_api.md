@@ -10,9 +10,14 @@
 ## 📋 目录
 
 - [通用说明](#通用说明)
+- [用户认证 API](#用户认证-api)
+- [用户账户管理 API](#用户账户管理-api)
 - [账户管理 API](#账户管理-api)
 - [订单管理 API](#订单管理-api)
 - [持仓查询 API](#持仓查询-api)
+- [成交记录 API](#成交记录-api)
+- [资金流水 API](#资金流水-api)
+- [权益曲线 API](#权益曲线-api)
 - [系统 API](#系统-api)
 - [错误处理](#错误处理)
 
@@ -69,9 +74,300 @@ Authorization: Bearer {token}  # 需要认证的接口
 
 ---
 
+## 用户认证 API
+
+### 1. 用户注册
+
+**POST** `/api/auth/register`
+
+注册新用户账号。
+
+**请求体**:
+```json
+{
+  "username": "zhangsan",
+  "password": "password123",
+  "phone": "13800138000",
+  "email": "zhangsan@example.com",
+  "real_name": "张三"
+}
+```
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "zhangsan",
+    "message": "注册成功"
+  },
+  "error": null
+}
+```
+
+**示例**:
+```bash
+curl -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "zhangsan",
+    "password": "password123",
+    "phone": "13800138000",
+    "email": "zhangsan@example.com",
+    "real_name": "张三"
+  }'
+```
+
+---
+
+### 2. 用户登录
+
+**POST** `/api/auth/login`
+
+用户登录认证。
+
+**请求体**:
+```json
+{
+  "username": "zhangsan",
+  "password": "password123"
+}
+```
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "success": true,
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "zhangsan",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "message": "登录成功"
+  },
+  "error": null
+}
+```
+
+**示例**:
+```javascript
+// JavaScript
+async function login(username, password) {
+  const response = await fetch('http://localhost:8080/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  });
+  const result = await response.json();
+
+  if (result.data.success) {
+    // 保存token
+    localStorage.setItem('token', result.data.token);
+    localStorage.setItem('user_id', result.data.user_id);
+  }
+
+  return result.data;
+}
+
+// 使用
+const loginResult = await login('zhangsan', 'password123');
+```
+
+---
+
+### 3. 获取用户信息
+
+**GET** `/api/auth/user/{user_id}`
+
+获取当前登录用户的详细信息。
+
+**路径参数**:
+- `user_id` (string, required): 用户ID
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "zhangsan",
+    "phone": "13800138000",
+    "email": "zhangsan@example.com",
+    "real_name": "张三",
+    "account_ids": ["ACC_xxx", "ACC_yyy"],
+    "created_at": 1704067200000,
+    "status": "Active"
+  },
+  "error": null
+}
+```
+
+**示例**:
+```javascript
+// JavaScript
+async function getUserInfo(userId) {
+  const response = await fetch(`http://localhost:8080/api/auth/user/${userId}`);
+  return await response.json();
+}
+```
+
+---
+
+### 4. 获取所有用户列表（管理员）
+
+**GET** `/api/auth/users`
+
+获取系统中所有用户的列表（仅管理员可用）。
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "users": [
+      {
+        "user_id": "550e8400-e29b-41d4-a716-446655440000",
+        "username": "zhangsan",
+        "phone": "13800138000",
+        "email": "zhangsan@example.com",
+        "real_name": "张三",
+        "account_ids": ["ACC_xxx", "ACC_yyy"],
+        "created_at": 1704067200000,
+        "status": "Active"
+      }
+    ],
+    "total": 100
+  },
+  "error": null
+}
+```
+
+**示例**:
+```bash
+curl http://localhost:8080/api/auth/users
+```
+
+---
+
+## 用户账户管理 API
+
+### 5. 为用户创建交易账户
+
+**POST** `/api/user/{user_id}/account/create`
+
+为指定用户创建新的交易账户。
+
+**路径参数**:
+- `user_id` (string, required): 用户ID
+
+**请求体**:
+```json
+{
+  "account_name": "主账户",
+  "init_cash": 1000000.0,
+  "account_type": "individual"
+}
+```
+
+**字段说明**:
+- `account_type`: 账户类型
+  - `individual`: 个人账户
+  - `institutional`: 机构账户
+  - `market_maker`: 做市商账户
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "account_id": "ACC_125d84fdfc2a4a2a906ac9f7fc2bf3b0",
+    "account_name": "主账户",
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "balance": 1000000.0,
+    "created_at": 1704067200000
+  },
+  "error": null
+}
+```
+
+**示例**:
+```javascript
+// JavaScript
+async function createAccount(userId, accountName, initCash) {
+  const response = await fetch(`http://localhost:8080/api/user/${userId}/account/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account_name: accountName,
+      init_cash: initCash,
+      account_type: 'individual'
+    })
+  });
+  return await response.json();
+}
+
+// 使用
+const result = await createAccount('user_uuid', '主账户', 1000000);
+```
+
+---
+
+### 6. 获取用户的所有账户
+
+**GET** `/api/user/{user_id}/accounts`
+
+获取指定用户的所有交易账户列表。
+
+**路径参数**:
+- `user_id` (string, required): 用户ID（支持UUID或账户ID）
+
+**支持两种模式**:
+- 传入 `user_id` (UUID格式) → 返回该用户的所有账户（经纪商模式）
+- 传入 `account_id` (ACC_xxx格式) → 返回该账户（交易所模式）
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "accounts": [
+      {
+        "account_id": "ACC_125d84fdfc2a4a2a906ac9f7fc2bf3b0",
+        "account_name": "主账户",
+        "balance": 1000000.0,
+        "available": 800000.0,
+        "margin": 200000.0,
+        "risk_ratio": 0.2,
+        "profit": 5000.0,
+        "account_type": "Individual",
+        "created_at": 1704067200000
+      }
+    ],
+    "total": 1
+  },
+  "error": null
+}
+```
+
+**示例**:
+```javascript
+// JavaScript
+async function getUserAccounts(userId) {
+  const response = await fetch(`http://localhost:8080/api/user/${userId}/accounts`);
+  return await response.json();
+}
+
+// 使用
+const result = await getUserAccounts('user_uuid');
+console.log(`用户共有 ${result.data.total} 个账户`);
+```
+
+---
+
 ## 账户管理 API
 
-### 1. 开户
+### 7. 开户
 
 **POST** `/api/account/open`
 
@@ -580,11 +876,11 @@ const pendingOrders = orders.filter(o =>
 
 ## 持仓查询 API
 
-### 9. 查询持仓
+### 9. 查询用户所有持仓
 
-**GET** `/api/position/{user_id}`
+**GET** `/api/position/user/{user_id}`
 
-查询用户持仓。
+查询用户所有账户的持仓（聚合查询）。
 
 **路径参数**:
 - `user_id` (string, required): 用户ID
@@ -595,20 +891,22 @@ const pendingOrders = orders.filter(o =>
   "success": true,
   "data": [
     {
-      "instrument_id": "IX2301",
+      "account_id": "ACC_xxx",
+      "instrument_id": "IF2501",
       "volume_long": 10.0,
       "volume_short": 0.0,
-      "cost_long": 120.0,
+      "cost_long": 3800.0,
       "cost_short": 0.0,
-      "profit_long": 500.0,
+      "profit_long": 5000.0,
       "profit_short": 0.0
     },
     {
-      "instrument_id": "IF2301",
+      "account_id": "ACC_yyy",
+      "instrument_id": "IC2501",
       "volume_long": 0.0,
       "volume_short": 5.0,
       "cost_long": 0.0,
-      "cost_short": 4500.0,
+      "cost_short": 6500.0,
       "profit_long": 0.0,
       "profit_short": -250.0
     }
@@ -618,6 +916,7 @@ const pendingOrders = orders.filter(o =>
 ```
 
 **字段说明**:
+- `account_id`: 账户ID（用于区分不同账户的持仓）
 - `volume_long`: 多头持仓量
 - `volume_short`: 空头持仓量
 - `cost_long`: 多头开仓成本
@@ -628,14 +927,14 @@ const pendingOrders = orders.filter(o =>
 **示例**:
 ```javascript
 // JavaScript
-async function getPositions(userId) {
-  const response = await fetch(`http://localhost:8080/api/position/${userId}`);
+async function getUserPositions(userId) {
+  const response = await fetch(`http://localhost:8080/api/position/user/${userId}`);
   const result = await response.json();
   return result.data;
 }
 
 // 使用
-const positions = await getPositions('user001');
+const positions = await getUserPositions('user001');
 
 // 计算总持仓盈亏
 const totalProfit = positions.reduce((sum, pos) =>
@@ -643,10 +942,320 @@ const totalProfit = positions.reduce((sum, pos) =>
 );
 console.log('总浮动盈亏:', totalProfit);
 
-// 筛选有持仓的合约
-const activePositions = positions.filter(pos =>
-  pos.volume_long > 0 || pos.volume_short > 0
+// 按账户分组持仓
+const positionsByAccount = positions.reduce((acc, pos) => {
+  if (!acc[pos.account_id]) acc[pos.account_id] = [];
+  acc[pos.account_id].push(pos);
+  return acc;
+}, {});
+```
+
+---
+
+### 10. 查询账户持仓
+
+**GET** `/api/position/account/{account_id}`
+
+查询指定账户的持仓。
+
+**路径参数**:
+- `account_id` (string, required): 账户ID
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "instrument_id": "IF2501",
+      "volume_long": 10.0,
+      "volume_short": 0.0,
+      "cost_long": 3800.0,
+      "cost_short": 0.0,
+      "profit_long": 5000.0,
+      "profit_short": 0.0
+    }
+  ],
+  "error": null
+}
+```
+
+**示例**:
+```javascript
+// JavaScript
+async function getAccountPositions(accountId) {
+  const response = await fetch(`http://localhost:8080/api/position/account/${accountId}`);
+  const result = await response.json();
+  return result.data;
+}
+```
+
+---
+
+## 成交记录 API
+
+### 11. 查询用户所有成交
+
+**GET** `/api/trades/user/{user_id}`
+
+查询用户所有账户的成交记录（聚合查询）。
+
+**路径参数**:
+- `user_id` (string, required): 用户ID
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "trades": [
+      {
+        "trade_id": "TRD_xxx",
+        "order_id": "ORD_xxx",
+        "account_id": "ACC_xxx",
+        "instrument_id": "IF2501",
+        "direction": "BUY",
+        "offset": "OPEN",
+        "volume": 5,
+        "price": 3800.0,
+        "trade_time": 1704067300000,
+        "commission": 10.5
+      }
+    ],
+    "total": 200
+  },
+  "error": null
+}
+```
+
+**字段说明**:
+- `trade_id`: 成交ID
+- `order_id`: 关联的订单ID
+- `account_id`: 账户ID
+- `direction`: 买卖方向（BUY/SELL）
+- `offset`: 开平标志（OPEN/CLOSE）
+- `commission`: 手续费
+
+**示例**:
+```javascript
+// JavaScript
+async function getUserTrades(userId) {
+  const response = await fetch(`http://localhost:8080/api/trades/user/${userId}`);
+  const result = await response.json();
+  return result.data;
+}
+
+// 使用
+const { trades, total } = await getUserTrades('user001');
+console.log(`用户共有 ${total} 条成交记录`);
+
+// 计算总手续费
+const totalCommission = trades.reduce((sum, trade) =>
+  sum + trade.commission, 0
 );
+console.log('总手续费:', totalCommission);
+```
+
+---
+
+### 12. 查询账户成交
+
+**GET** `/api/trades/account/{account_id}`
+
+查询指定账户的成交记录。
+
+**路径参数**:
+- `account_id` (string, required): 账户ID
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "trades": [
+      {
+        "trade_id": "TRD_xxx",
+        "order_id": "ORD_xxx",
+        "instrument_id": "IF2501",
+        "direction": "BUY",
+        "offset": "OPEN",
+        "volume": 5,
+        "price": 3800.0,
+        "trade_time": 1704067300000,
+        "commission": 10.5
+      }
+    ],
+    "total": 100
+  },
+  "error": null
+}
+```
+
+**示例**:
+```javascript
+// JavaScript
+async function getAccountTrades(accountId) {
+  const response = await fetch(`http://localhost:8080/api/trades/account/${accountId}`);
+  const result = await response.json();
+  return result.data;
+}
+```
+
+---
+
+## 资金流水 API
+
+### 13. 查询资金流水（管理端）
+
+**GET** `/api/management/transactions/{user_id}`
+
+查询用户的资金流水记录（仅管理员可用）。
+
+**路径参数**:
+- `user_id` (string, required): 用户ID或账户ID
+
+**查询参数**:
+- `start_date` (string, optional): 开始日期（格式：2024-01-01）
+- `end_date` (string, optional): 结束日期（格式：2024-12-31）
+- `limit` (number, optional): 最多返回条数
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "transaction_id": "TXN_xxx",
+      "user_id": "ACC_xxx",
+      "type": "DEPOSIT",
+      "amount": 100000.0,
+      "method": "银行转账",
+      "balance_before": 900000.0,
+      "balance_after": 1000000.0,
+      "timestamp": 1704067200000,
+      "remark": "初始入金"
+    },
+    {
+      "transaction_id": "TXN_yyy",
+      "user_id": "ACC_xxx",
+      "type": "WITHDRAW",
+      "amount": 50000.0,
+      "method": "银行转账",
+      "balance_before": 1000000.0,
+      "balance_after": 950000.0,
+      "timestamp": 1704153600000,
+      "remark": "客户提现"
+    }
+  ],
+  "error": null
+}
+```
+
+**字段说明**:
+- `type`: 交易类型（DEPOSIT: 入金, WITHDRAW: 出金）
+- `method`: 入金/出金方式（如：银行转账、第三方支付等）
+- `balance_before`: 交易前余额
+- `balance_after`: 交易后余额
+
+**示例**:
+```javascript
+// JavaScript
+async function getTransactions(userId, startDate, endDate, limit) {
+  const params = new URLSearchParams();
+  if (startDate) params.append('start_date', startDate);
+  if (endDate) params.append('end_date', endDate);
+  if (limit) params.append('limit', limit);
+
+  const url = `http://localhost:8080/api/management/transactions/${userId}?${params}`;
+  const response = await fetch(url);
+  return await response.json();
+}
+
+// 使用 - 查询最近100条
+const result = await getTransactions('user001', null, null, 100);
+
+// 使用 - 按日期范围查询
+const result = await getTransactions('user001', '2024-01-01', '2024-12-31');
+```
+
+---
+
+## 权益曲线 API
+
+### 14. 获取账户权益曲线
+
+**GET** `/api/account/{user_id}/equity-curve`
+
+获取账户的权益曲线数据（每日结算数据）。
+
+**路径参数**:
+- `user_id` (string, required): 用户ID
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "account_id": "ACC_xxx",
+      "account_name": "主账户",
+      "balance": 1000000.0,
+      "available": 800000.0,
+      "margin": 200000.0,
+      "settlements": [
+        {
+          "date": "2024-01-01",
+          "equity": 1000000.0,
+          "profit": 0.0,
+          "return_rate": 0.0
+        },
+        {
+          "date": "2024-01-02",
+          "equity": 1005000.0,
+          "profit": 5000.0,
+          "return_rate": 0.005
+        }
+      ]
+    }
+  ],
+  "error": null
+}
+```
+
+**字段说明**:
+- `settlements`: 每日结算记录数组
+  - `date`: 日期
+  - `equity`: 账户权益
+  - `profit`: 当日盈亏
+  - `return_rate`: 收益率
+
+**示例**:
+```javascript
+// JavaScript
+async function getEquityCurve(userId) {
+  const response = await fetch(`http://localhost:8080/api/account/${userId}/equity-curve`);
+  const result = await response.json();
+  return result.data;
+}
+
+// 使用
+const accounts = await getEquityCurve('user001');
+
+// 绘制权益曲线
+accounts.forEach(account => {
+  const dates = account.settlements.map(s => s.date);
+  const equities = account.settlements.map(s => s.equity);
+
+  console.log(`账户 ${account.account_name} 权益曲线:`);
+  console.log('日期:', dates);
+  console.log('权益:', equities);
+
+  // 计算总收益率
+  const initialEquity = account.settlements[0]?.equity || 0;
+  const currentEquity = account.balance;
+  const totalReturn = (currentEquity - initialEquity) / initialEquity;
+  console.log(`总收益率: ${(totalReturn * 100).toFixed(2)}%`);
+});
 ```
 
 ---
@@ -858,20 +1467,61 @@ export default TradingApp;
 
 ## API 速查表
 
-| 功能 | Method | Endpoint | 说明 |
-|------|--------|----------|------|
-| 开户 | POST | `/api/account/open` | 创建新账户 |
-| 查询账户 | GET | `/api/account/{user_id}` | 查询账户信息 |
-| 入金 | POST | `/api/account/deposit` | 账户充值 |
-| 出金 | POST | `/api/account/withdraw` | 账户提现 |
-| 提交订单 | POST | `/api/order/submit` | 下单 |
-| 撤单 | POST | `/api/order/cancel` | 撤销订单 |
-| 查询订单 | GET | `/api/order/{order_id}` | 订单详情 |
-| 查询用户订单 | GET | `/api/order/user/{user_id}` | 用户订单列表 |
-| 查询持仓 | GET | `/api/position/{user_id}` | 持仓信息 |
-| 健康检查 | GET | `/health` | 服务状态 |
+### 用户认证
+| 功能 | Method | Endpoint |
+|------|--------|----------|
+| 用户注册 | POST | `/api/auth/register` |
+| 用户登录 | POST | `/api/auth/login` |
+| 获取用户信息 | GET | `/api/auth/user/{user_id}` |
+| 获取用户列表（管理员） | GET | `/api/auth/users` |
+
+### 用户账户管理
+| 功能 | Method | Endpoint |
+|------|--------|----------|
+| 创建交易账户 | POST | `/api/user/{user_id}/account/create` |
+| 获取用户所有账户 | GET | `/api/user/{user_id}/accounts` |
+
+### 账户管理
+| 功能 | Method | Endpoint |
+|------|--------|----------|
+| 开户 | POST | `/api/account/open` |
+| 查询账户 | GET | `/api/account/{account_id}` |
+| 入金 | POST | `/api/account/deposit` |
+| 出金 | POST | `/api/account/withdraw` |
+| 权益曲线 | GET | `/api/account/{user_id}/equity-curve` |
+
+### 订单管理
+| 功能 | Method | Endpoint |
+|------|--------|----------|
+| 提交订单 | POST | `/api/order/submit` |
+| 撤单 | POST | `/api/order/cancel` |
+| 查询订单 | GET | `/api/order/{order_id}` |
+| 查询用户订单 | GET | `/api/order/user/{user_id}` |
+
+### 持仓查询
+| 功能 | Method | Endpoint |
+|------|--------|----------|
+| 查询用户所有持仓 | GET | `/api/position/user/{user_id}` |
+| 查询账户持仓 | GET | `/api/position/account/{account_id}` |
+
+### 成交记录
+| 功能 | Method | Endpoint |
+|------|--------|----------|
+| 查询用户所有成交 | GET | `/api/trades/user/{user_id}` |
+| 查询账户成交 | GET | `/api/trades/account/{account_id}` |
+
+### 资金流水（管理端）
+| 功能 | Method | Endpoint |
+|------|--------|----------|
+| 查询资金流水 | GET | `/api/management/transactions/{user_id}` |
+
+### 系统
+| 功能 | Method | Endpoint |
+|------|--------|----------|
+| 健康检查 | GET | `/health` |
 
 ---
 
-**文档版本**: v1.0
-**最后更新**: 2025-10-03
+**文档版本**: v1.1
+**最后更新**: 2025-11-25
+**Base URL**: `http://localhost:8080` (默认端口可能是8094)
