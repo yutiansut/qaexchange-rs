@@ -888,6 +888,7 @@ impl OrderRouter {
                 // Phase 6: 使用新的 handle_trade_new (交易所只推送TRADE回报，不判断FILLED/PARTIAL)
                 // 注意：这里假设我们使用已生成的exchange_order_id（从Accepted事件保存）
                 // 简化实现：使用match_order_id作为exchange_order_id
+                // ✨ 修复：传递qa_order_id用于调用receive_deal_sim @yutiansut @quantaxis
                 let trade_id = self.trade_gateway.handle_trade_new(
                     &order.exchange_id,
                     &order.instrument_id,
@@ -899,6 +900,7 @@ impl OrderRouter {
                     volume,
                     price,
                     Some(opposite_order_id as i64),
+                    &qa_order_id, // ✨ 传递qars订单ID
                 )?;
 
                 log::debug!(
@@ -974,6 +976,7 @@ impl OrderRouter {
                 };
 
                 // Phase 6: 使用新的 handle_trade_new (交易所不区分FILLED/PARTIAL，只推送TRADE)
+                // ✨ 修复：传递qa_order_id用于调用receive_deal_sim @yutiansut @quantaxis
                 let trade_id = self.trade_gateway.handle_trade_new(
                     &order.exchange_id,
                     &order.instrument_id,
@@ -985,6 +988,7 @@ impl OrderRouter {
                     volume,
                     price,
                     Some(opposite_order_id as i64),
+                    &qa_order_id, // ✨ 传递qars订单ID
                 )?;
 
                 log::debug!(

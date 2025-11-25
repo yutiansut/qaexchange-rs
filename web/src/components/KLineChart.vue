@@ -5,7 +5,13 @@
 </template>
 
 <script>
-import JSCommon from 'hqchart'
+// ✨ 修复：HQChart导出格式为 module.exports.Chart，需要解构导入 @yutiansut @quantaxis
+import { Chart as JSChart } from 'hqchart'
+
+// 创建全局 JSCommon 对象以兼容 HQChart API
+const JSCommon = {
+  JSChart: JSChart
+}
 
 /**
  * K线图表组件
@@ -48,7 +54,8 @@ export default {
     return {
       jsChart: null,
       option: null,
-      isChartReady: false
+      isChartReady: false,
+      initRetryCount: 0  // ✨ 初始化重试计数器 @yutiansut @quantaxis
     }
   },
 
@@ -80,8 +87,11 @@ export default {
   },
 
   mounted() {
+    // ✨ 延迟初始化，确保父容器已渲染完成 @yutiansut @quantaxis
     this.$nextTick(() => {
-      this.initChart()
+      setTimeout(() => {
+        this.initChart()
+      }, 500)  // 延迟500ms，确保CSS已应用
     })
   },
 
@@ -103,8 +113,9 @@ export default {
       }
 
       console.log('[KLineChart] Converting', data.length, 'bars, period:', this.period)
+      console.log('[KLineChart] 📊 First input data:', data[0])
 
-      return data.map(k => {
+      return data.map((k, index) => {
         const date = new Date(k.datetime)
 
         let dateNum
@@ -127,7 +138,7 @@ export default {
         // HQChart K线数据格式：
         // [日期, 前收, 开, 高, 低, 收, 量, 额]
         // 注意：我们没有前收价，用开盘价代替
-        return [
+        const hqBar = [
           dateNum,           // 日期（日线YYYYMMDD，分钟线YYYYMMDDHHMMSS）
           k.open,            // 前收（用开盘价代替）
           k.open,            // 开盘价
@@ -137,6 +148,17 @@ export default {
           k.volume || 0,     // 成交量
           k.amount || 0      // 成交额
         ]
+
+        if (index === 0) {
+          console.log('[KLineChart] 📊 First HQChart bar:', hqBar)
+          console.log('[KLineChart] 📊 Date conversion:', {
+            datetime_ms: k.datetime,
+            date_object: date.toLocaleString(),
+            dateNum: dateNum
+          })
+        }
+
+        return hqBar
       })
     },
 
@@ -156,10 +178,38 @@ export default {
       }
       console.log('[KLineChart] Container size:', container.offsetWidth, 'x', container.offsetHeight)
       console.log('[KLineChart] Chart element size:', chartEl.offsetWidth, 'x', chartEl.offsetHeight)
+      console.log('[KLineChart] Container computed height:', window.getComputedStyle(container).height)
+
+      const parent = container.parentElement
+      if (parent) {
+        console.log('[KLineChart] Parent element:', parent.className, parent.offsetWidth, 'x', parent.offsetHeight)
+      }
 
       if (container.offsetWidth === 0 || container.offsetHeight === 0) {
-        console.warn('[KLineChart] Container has zero dimensions, delaying initialization')
-        setTimeout(() => this.initChart(), 100)
+        console.error('[KLineChart] ❌ Container has zero dimensions!')
+
+        // 打印父元素链
+        const parentChain = []
+        let el = container
+        for (let i = 0; i < 3; i++) {
+          el = el.parentElement
+          if (el) {
+            parentChain.push(el.className + ' (' + el.offsetWidth + 'x' + el.offsetHeight + ')')
+          } else {
+            parentChain.push('null')
+          }
+        }
+        console.error('[KLineChart] Parent chain:', parentChain)
+
+        // ⚠️ 最多重试10次，避免无限循环
+        if (!this.initRetryCount) this.initRetryCount = 0
+        this.initRetryCount++
+        if (this.initRetryCount < 10) {
+          console.warn('[KLineChart] Retry', this.initRetryCount, '/10 in 200ms')
+          setTimeout(() => this.initChart(), 200)
+        } else {
+          console.error('[KLineChart] ❌ Initialization failed after 10 retries!')
+        }
         return
       }
 
@@ -245,8 +295,9 @@ export default {
         this.jsChart = JSCommon.JSChart.Init(this.$refs.chart)
         this.jsChart.SetOption(this.option)
         this.isChartReady = true
+        this.initRetryCount = 0  // ✨ 重置重试计数器
 
-        console.log('[KLineChart] Chart initialized successfully')
+        console.log('[KLineChart] ✅ Chart initialized successfully!')
 
         // 如果已有数据，触发更新
         if (this.klineData && this.klineData.length > 0) {

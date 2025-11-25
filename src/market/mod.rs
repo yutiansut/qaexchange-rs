@@ -722,8 +722,25 @@ impl MarketDataService {
     }
 
     /// 处理Tick数据并更新K线（成交时调用）
+    /// @yutiansut @quantaxis
     pub fn on_trade(&self, instrument_id: &str, price: f64, volume: i64) {
         let timestamp_ms = chrono::Utc::now().timestamp_millis();
+
+        // ✨ Phase 10: 广播 Tick 事件给 KLineActor
+        // KLineActor 订阅了这个事件来聚合 K 线数据
+        if let Some(broadcaster) = &self.market_broadcaster {
+            log::debug!(
+                "📊 [MarketData] Broadcasting tick: {} price={:.2} vol={}",
+                instrument_id, price, volume
+            );
+            broadcaster.broadcast(MarketDataEvent::Tick {
+                instrument_id: instrument_id.to_string(),
+                price,
+                volume: volume as f64,
+                direction: "".to_string(),
+                timestamp: timestamp_ms,
+            });
+        }
 
         // 更新K线
         let finished_klines =

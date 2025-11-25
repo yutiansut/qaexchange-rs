@@ -732,6 +732,7 @@ impl TradeGateway {
         volume: f64,
         price: f64,
         opposite_order_id: Option<i64>, // 对手方订单号（如果可用）
+        qa_order_id: &str, // ✨ qars内部订单ID，用于调用receive_deal_sim @yutiansut @quantaxis
     ) -> Result<i64, ExchangeError> {
         // 生成成交ID（统一事件序列）
         let trade_id = self.id_generator.next_sequence(instrument_id);
@@ -819,6 +820,23 @@ impl TradeGateway {
                 turnover
             );
         }
+
+        // ✨ 关键修复：调用receive_deal_sim更新账户持仓和资金 @yutiansut @quantaxis
+        log::debug!("🔧 Updating account for trade: user={}, instrument={}, {} {}, price={}, volume={}, qa_order_id={}",
+            user_id, instrument_id, direction, offset, price, volume, qa_order_id);
+
+        let (order_status, volume_left, _volume_orign) = self.update_account(
+            user_id,
+            instrument_id,
+            direction,
+            offset,
+            price,
+            volume,
+            qa_order_id,
+        )?;
+
+        log::info!("✅ Account updated after trade: order_id={}, status={}, volume_left={}",
+            order_id, order_status, volume_left);
 
         let trade_notification = self.create_trade_notification(
             order_id,

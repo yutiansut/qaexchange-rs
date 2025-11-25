@@ -184,6 +184,10 @@ impl Actor for KLineActor {
                             ..
                         } = event
                         {
+                            log::debug!(
+                                "📊 [KLineActor] Received tick event: instrument={}, price={}, volume={}, ts={}",
+                                instrument_id, price, volume, timestamp
+                            );
                             let mut agg_map = aggregators.write();
                             let aggregator = agg_map
                                 .entry(instrument_id.clone())
@@ -291,32 +295,57 @@ fn extract_base_instrument_id(instrument_id: &str) -> &str {
 impl Handler<GetKLines> for KLineActor {
     type Result = Vec<KLine>;
 
+    /// ✨ 增强调试日志 @yutiansut @quantaxis
     fn handle(&mut self, msg: GetKLines, _ctx: &mut Context<Self>) -> Self::Result {
         let aggregators = self.aggregators.read();
 
+        log::info!(
+            "📊 [KLineActor GetKLines] Query received: instrument={}, period={:?}, count={}, available_instruments={:?}",
+            msg.instrument_id, msg.period, msg.count,
+            aggregators.keys().collect::<Vec<_>>()
+        );
+
         // 首先尝试直接匹配
         if let Some(aggregator) = aggregators.get(&msg.instrument_id) {
-            return aggregator.get_recent_klines(msg.period, msg.count);
+            let klines = aggregator.get_recent_klines(msg.period, msg.count);
+            log::info!(
+                "📊 [KLineActor GetKLines] Direct match found for {}, returning {} K-lines",
+                msg.instrument_id, klines.len()
+            );
+            return klines;
         }
 
         // 如果直接匹配失败，尝试用基础合约代码匹配
         // @yutiansut @quantaxis
         let base_id = extract_base_instrument_id(&msg.instrument_id);
+        log::info!(
+            "📊 [KLineActor GetKLines] Direct match failed, trying base_id: {}",
+            base_id
+        );
 
         // 遍历所有aggregator，找到匹配的
         for (key, aggregator) in aggregators.iter() {
             let key_base = extract_base_instrument_id(key);
             if key_base == base_id {
-                log::debug!(
-                    "📊 [KLineActor] Found matching aggregator: {} -> {} for query {}",
+                log::info!(
+                    "📊 [KLineActor GetKLines] Found matching aggregator: {} -> {} for query {}",
                     msg.instrument_id,
                     key,
                     base_id
                 );
-                return aggregator.get_recent_klines(msg.period, msg.count);
+                let klines = aggregator.get_recent_klines(msg.period, msg.count);
+                log::info!(
+                    "📊 [KLineActor GetKLines] Returning {} K-lines via base_id match",
+                    klines.len()
+                );
+                return klines;
             }
         }
 
+        log::warn!(
+            "📊 [KLineActor GetKLines] No aggregator found for instrument: {} (base: {})",
+            msg.instrument_id, base_id
+        );
         Vec::new()
     }
 }

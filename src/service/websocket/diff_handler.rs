@@ -877,6 +877,7 @@ impl DiffHandler {
     }
 
     /// 处理K线订阅请求（DIFF协议 set_chart）
+    /// ✨ 增强调试日志 @yutiansut @quantaxis
     async fn handle_set_chart(
         &self,
         user_id: &str,
@@ -886,12 +887,22 @@ impl DiffHandler {
         view_width: i32,
         ctx_addr: Addr<DiffWebsocketSession>,
     ) {
+        log::info!(
+            "📊 [DIFF set_chart] Received request: user={}, chart_id={}, ins_list={}, duration={}, view_width={}",
+            user_id, chart_id, ins_list, duration, view_width
+        );
+
         // 解析合约列表
         let instruments: Vec<String> = ins_list
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+
+        log::info!(
+            "📊 [DIFF set_chart] Parsed instruments: {:?}",
+            instruments
+        );
 
         if instruments.is_empty() || ins_list.is_empty() {
             // 空列表表示删除该图表订阅
@@ -935,8 +946,14 @@ impl DiffHandler {
         let period = period.unwrap();
         let period_name = format!("{:?}", period);
 
+        log::info!(
+            "📊 [DIFF set_chart] Converted period: {:?} (period_name={})",
+            period, period_name
+        );
+
         // 查询历史K线数据（从KLineActor）
         if let Some(ref kline_actor) = self.kline_actor {
+            log::info!("📊 [DIFF set_chart] KLineActor is available, querying K-lines...");
             // 取第一个合约作为主合约
             let instrument_id = instruments[0].clone();
             let count = view_width.max(100) as usize; // 至少100根
@@ -949,6 +966,11 @@ impl DiffHandler {
             let instruments_clone = instruments.clone();
 
             tokio::spawn(async move {
+                log::info!(
+                    "📊 [DIFF set_chart] Querying KLineActor: instrument={}, period={:?}, count={}",
+                    instrument_id, period, count
+                );
+
                 // 查询历史K线
                 let klines = kline_actor_clone
                     .send(crate::market::GetKLines {
@@ -960,6 +982,10 @@ impl DiffHandler {
 
                 match klines {
                     Ok(klines) => {
+                        log::info!(
+                            "📊 [DIFF set_chart] KLineActor returned {} K-lines for {}",
+                            klines.len(), instrument_id
+                        );
                         // 转换为DIFF格式
                         let mut kline_data = serde_json::Map::new();
                         let mut last_kline_id = 0i64;

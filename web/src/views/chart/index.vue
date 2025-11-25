@@ -60,8 +60,8 @@
       </el-row>
     </el-card>
 
-    <el-card class="chart-card">
-      <div class="chart-container">
+    <el-card class="chart-card" :body-style="{ height: '100%', padding: '10px' }">
+      <div class="chart-container" style="height: calc(100vh - 250px); min-height: 500px;">
         <KLineChart
           ref="klineChart"
           :symbol="selectedInstrument"
@@ -160,21 +160,33 @@ export default {
         }
 
         // 转换为数组格式
-        const klineArray = Object.values(periodKlines.data).map(k => ({
-          datetime: k.datetime / 1000000,  // 纳秒转毫秒
-          open: k.open,
-          high: k.high,
-          low: k.low,
-          close: k.close,
-          volume: k.volume,
-          amount: k.amount || (k.volume * k.close)
-        }))
+        console.log('[ChartPage] 📊 Raw period klines data:', periodKlines.data)
+
+        const klineArray = Object.values(periodKlines.data).map(k => {
+          const converted = {
+            datetime: k.datetime / 1000000,  // 纳秒转毫秒
+            open: k.open,
+            high: k.high,
+            low: k.low,
+            close: k.close,
+            volume: k.volume,
+            amount: k.amount || (k.volume * k.close)
+          }
+          console.log('[ChartPage] 📊 Converted K-line:', {
+            original_datetime: k.datetime,
+            converted_datetime: converted.datetime,
+            readable_time: new Date(converted.datetime).toLocaleString(),
+            ohlc: [k.open, k.high, k.low, k.close]
+          })
+          return converted
+        })
 
         // 按时间排序
         klineArray.sort((a, b) => a.datetime - b.datetime)
 
         this.klineDataList = klineArray
-        console.log('[ChartPage] K-line data updated:', klineArray.length, 'bars')
+        console.log('[ChartPage] ✅ K-line data updated:', klineArray.length, 'bars')
+        console.log('[ChartPage] 📊 Sample kline data:', klineArray[0])
       },
       deep: true
     },
@@ -295,7 +307,8 @@ export default {
   }
 
   .chart-card {
-    flex: 1;
+    // ✨ 修复: 使用显式高度而非 flex (flex 在某些情况下会计算为 0) @yutiansut @quantaxis
+    height: calc(100vh - 220px); // 页面高度 - padding - header
     display: flex;
     flex-direction: column;
 

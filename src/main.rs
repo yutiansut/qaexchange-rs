@@ -213,12 +213,12 @@ impl ExchangeServer {
 
         let market_broadcaster = Arc::new(MarketDataBroadcaster::new());
 
-        // 1.3.1 创建K线WAL管理器
-        let kline_wal_dir = "./data/wal/klines";
-        std::fs::create_dir_all(kline_wal_dir).unwrap_or_else(|e| {
+        // 1.3.1 创建K线WAL管理器（统一到配置路径）
+        let kline_wal_dir = format!("{}/klines/wal", config.storage_path);
+        std::fs::create_dir_all(&kline_wal_dir).unwrap_or_else(|e| {
             log::warn!("Failed to create K-line WAL directory: {}", e);
         });
-        let kline_wal_manager = Arc::new(qaexchange::storage::wal::WalManager::new(kline_wal_dir));
+        let kline_wal_manager = Arc::new(qaexchange::storage::wal::WalManager::new(&kline_wal_dir));
         log::info!("✅ K-line WAL Manager initialized at {}", kline_wal_dir);
 
         // 1.3.2 启动K线Actor（订阅tick事件，独立处理K线聚合）
