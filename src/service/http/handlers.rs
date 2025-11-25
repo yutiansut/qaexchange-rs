@@ -133,6 +133,14 @@ pub async fn submit_order(
     req: web::Json<SubmitOrderRequest>,
     state: web::Data<Arc<AppState>>,
 ) -> Result<HttpResponse> {
+    // ✨ Debug: 打印接收到的请求 @yutiansut @quantaxis
+    log::info!(
+        "📥 HTTP submit_order: user_id={}, account_id={:?}, instrument={}",
+        req.user_id,
+        req.account_id,
+        req.instrument_id
+    );
+
     // 服务层：验证账户所有权并获取 account_id
     let account_id = if let Some(ref acc_id) = req.account_id {
         // ✅ 客户端明确传递了 account_id，验证所有权

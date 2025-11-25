@@ -281,28 +281,19 @@ impl MarketDataService {
         instrument_id: &str,
         depth: usize,
     ) -> Result<OrderBookSnapshot> {
-        log::debug!(
-            "📊 [MarketData] get_orderbook_snapshot for {} (depth={})",
-            instrument_id,
-            depth
-        );
-
-        // L1 缓存查询
+        // L1 缓存查询（降低日志级别到trace以减少输出）
         if let Some(snapshot) = self.cache.get_orderbook(instrument_id) {
-            log::debug!("✅ [L1 Cache] Hit for orderbook {}", instrument_id);
+            log::trace!("✅ [L1 Cache] Hit for orderbook {}", instrument_id);
             return Ok(snapshot);
         }
-        log::debug!("❌ [L1 Cache] Miss for orderbook {}", instrument_id);
+        log::trace!("❌ [L1 Cache] Miss for orderbook {}", instrument_id);
 
-        // L2 缓存查询：从 WAL 恢复最近的快照
+        // L2 缓存查询：从 WAL 恢复最近的快照（降低日志级别）
         if let Some(ref storage) = self.storage {
-            log::debug!(
-                "🔍 [L2 Storage] Querying WAL for orderbook {}",
-                instrument_id
-            );
+            log::trace!("🔍 [L2 Storage] Querying WAL for orderbook {}", instrument_id);
             match self.load_orderbook_from_storage(instrument_id) {
                 Ok(snapshot) => {
-                    log::info!(
+                    log::trace!(
                         "✅ [L2 Storage] Found orderbook {} in WAL: {} bids, {} asks",
                         instrument_id,
                         snapshot.bids.len(),
@@ -314,15 +305,15 @@ impl MarketDataService {
                     return Ok(snapshot);
                 }
                 Err(e) => {
-                    log::debug!("❌ [L2 Storage] Not found in WAL: {}", e);
+                    log::trace!("❌ [L2 Storage] Not found in WAL: {}", e);
                 }
             }
         } else {
-            log::debug!("⚠️  [L2 Storage] Storage not configured");
+            log::trace!("⚠️  [L2 Storage] Storage not configured");
         }
 
-        // L3 缓存未命中，从 Orderbook 实时计算
-        log::debug!(
+        // L3 缓存未命中，从 Orderbook 实时计算（降低日志级别）
+        log::trace!(
             "🔍 [L3 Realtime] Computing orderbook from matching engine for {}",
             instrument_id
         );
@@ -434,21 +425,21 @@ impl MarketDataService {
 
     /// 获取指定合约的 Tick 数据
     pub fn get_tick_data(&self, instrument_id: &str) -> Result<TickData> {
-        log::debug!("📊 [MarketData] get_tick_data for {}", instrument_id);
+        log::trace!("📊 [MarketData] get_tick_data for {}", instrument_id);
 
-        // L1 缓存查询
+        // L1 缓存查询（降低日志级别）
         if let Some(tick) = self.cache.get_tick(instrument_id) {
-            log::debug!("✅ [L1 Cache] Hit for tick {}", instrument_id);
+            log::trace!("✅ [L1 Cache] Hit for tick {}", instrument_id);
             return Ok(tick);
         }
-        log::debug!("❌ [L1 Cache] Miss for tick {}", instrument_id);
+        log::trace!("❌ [L1 Cache] Miss for tick {}", instrument_id);
 
-        // L2 从 WAL 恢复最近的 Tick
+        // L2 从 WAL 恢复最近的 Tick（降低日志级别）
         if let Some(ref storage) = self.storage {
-            log::debug!("🔍 [L2 Storage] Querying WAL for tick {}", instrument_id);
+            log::trace!("🔍 [L2 Storage] Querying WAL for tick {}", instrument_id);
             match self.load_tick_from_storage(instrument_id) {
                 Ok(tick) => {
-                    log::info!(
+                    log::trace!(
                         "✅ [L2 Storage] Found tick {} in WAL: price={}",
                         instrument_id,
                         tick.last_price
@@ -459,15 +450,15 @@ impl MarketDataService {
                     return Ok(tick);
                 }
                 Err(e) => {
-                    log::debug!("❌ [L2 Storage] Not found in WAL: {}", e);
+                    log::trace!("❌ [L2 Storage] Not found in WAL: {}", e);
                 }
             }
         } else {
-            log::debug!("⚠️  [L2 Storage] Storage not configured");
+            log::trace!("⚠️  [L2 Storage] Storage not configured");
         }
 
-        // L3 缓存未命中，从 Orderbook 实时计算
-        log::debug!(
+        // L3 缓存未命中，从 Orderbook 实时计算（降低日志级别）
+        log::trace!(
             "🔍 [L3 Realtime] Computing tick from orderbook for {}",
             instrument_id
         );

@@ -138,6 +138,10 @@ pub struct OrderRouter {
     /// 用户订单索引 (user_id -> Vec<order_id>)
     user_orders: DashMap<String, Arc<RwLock<Vec<String>>>>,
 
+    /// ✨ 撮合引擎订单ID反向索引 (matching_engine_order_id -> order_id) @yutiansut @quantaxis
+    /// 用于在成交时通过对手单的matching_engine_order_id找到对应的order_id
+    engine_id_to_order: DashMap<u64, String>,
+
     /// 订单序号生成器
     order_seq: AtomicU64,
 
@@ -189,6 +193,7 @@ impl OrderRouter {
             storage: None,
             orders: DashMap::new(),
             user_orders: DashMap::new(),
+            engine_id_to_order: DashMap::new(),
             order_seq: AtomicU64::new(1),
             trade_count: AtomicU64::new(0),
             trade_volume: parking_lot::RwLock::new(0.0),
@@ -274,6 +279,7 @@ impl OrderRouter {
             storage: None,
             orders: DashMap::new(),
             user_orders: DashMap::new(),
+            engine_id_to_order: DashMap::new(),
             order_seq: AtomicU64::new(1),
             trade_count: AtomicU64::new(0),
             trade_volume: parking_lot::RwLock::new(0.0),
@@ -691,32 +697,39 @@ impl OrderRouter {
                             } else {
                                 // 第二个事件：对手单的成交
                                 // 检查对手单是否在我们的订单簿中，如果在则更新状态
-                                log::debug!("🔍     Processing OPPOSITE order trade: order_id={}, opposite={}", match_order_id, opposite_order_id);
+                                log::debug!("🔍     Processing OPPOSITE order trade: engine_order_id={}, opposite={}", match_order_id, opposite_order_id);
 
-                                // 将对手单的 order_id (u64) 转换为我们的 order_id (String)
-                                let opposite_order_str = format!("O{:024}", opposite_order_id);
+                                // ✨ 修复：使用反向映射查找对手单的 order_id
+                                // 原逻辑: format!("O{:024}", opposite_order_id) → "O000000000000000000000001"
+                                // 实际格式: "O{timestamp}{seq}" → "O17640442296060000000001"
+                                if let Some(opposite_order_id_str) = self.engine_id_to_order.get(&opposite_order_id) {
+                                    let opposite_order_str = opposite_order_id_str.value().clone();
+                                    log::debug!("🔍     Found opposite order mapping: engine_id={} → order_id={}", opposite_order_id, opposite_order_str);
 
-                                // 如果对手单在我们的订单簿中，更新它的状态
-                                if self.orders.contains_key(&opposite_order_str) {
-                                    log::debug!("🔍     Found opposite order {} in our orderbook, updating status", opposite_order_str);
+                                    // 如果对手单在我们的订单簿中，更新它的状态
+                                    if self.orders.contains_key(&opposite_order_str) {
+                                        log::debug!("🔍     Found opposite order {} in our orderbook, updating status", opposite_order_str);
 
-                                    // 提取对手单信息用于处理
-                                    if let Some(opposite_info) =
-                                        self.orders.get(&opposite_order_str)
-                                    {
-                                        let opposite_order_data =
-                                            opposite_info.read().order.clone();
-                                        // 处理对手单的成交
-                                        self.handle_success_result(
-                                            &opposite_order_str,
-                                            &opposite_order_data,
-                                            success,
-                                        )?;
+                                        // 提取对手单信息用于处理
+                                        if let Some(opposite_info) = self.orders.get(&opposite_order_str) {
+                                            let opposite_order_data = opposite_info.read().order.clone();
+                                            // 处理对手单的成交
+                                            self.handle_success_result(
+                                                &opposite_order_str,
+                                                &opposite_order_data,
+                                                success,
+                                            )?;
+                                        }
+                                    } else {
+                                        log::warn!(
+                                            "⚠️     Opposite order {} not found in our orderbook (inconsistent state!)",
+                                            opposite_order_str
+                                        );
                                     }
                                 } else {
                                     log::debug!(
-                                        "🔍     Opposite order {} not in our orderbook, skipping",
-                                        opposite_order_str
+                                        "🔍     Opposite order engine_id={} not in our exchange (external order), skipping",
+                                        opposite_order_id
                                     );
                                 }
                             }
@@ -778,6 +791,11 @@ impl OrderRouter {
                     info.update_time = ts;
                     info.matching_engine_order_id = Some(id); // 存储撮合引擎订单ID，用于撤单
                 }
+
+                // ✨ 存储反向映射: matching_engine_order_id → order_id
+                // 用于在成交时通过对手单的matching_engine_order_id找到对应的order_id
+                self.engine_id_to_order.insert(id, order_id.to_string());
+                log::debug!("💾 Stored reverse mapping: engine_id={} → order_id={}", id, order_id);
 
                 // Phase 6: 使用新的 handle_order_accepted_new (交易所只推送ACCEPTED回报)
                 let exchange_order_id = self.trade_gateway.handle_order_accepted_new(

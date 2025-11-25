@@ -539,30 +539,41 @@ impl DiffHandler {
             id
         });
 
-        // 验证用户权限（session用户必须与订单用户匹配）
-        if session_user_id != order_user_id {
-            let notify_patch = serde_json::json!({
-                "notify": {
-                    "order_error": {
-                        "type": "MESSAGE",
-                        "level": "ERROR",
-                        "code": 2001,
-                        "content": "User ID mismatch"
+        // ✨ 修改验证逻辑：交易所只关心account_id，不验证user_id
+        //
+        // 如果客户端提供了account_id，则只验证账户权限（不验证user_id匹配）
+        // 原因：交易所视角只认账户，User→Account映射是经纪商业务 @yutiansut @quantaxis
+        if client_account_id.is_none() {
+            // 向后兼容：如果没有提供account_id，则验证user_id匹配
+            if session_user_id != order_user_id {
+                let notify_patch = serde_json::json!({
+                    "notify": {
+                        "order_error": {
+                            "type": "MESSAGE",
+                            "level": "ERROR",
+                            "code": 2001,
+                            "content": "User ID mismatch (legacy mode: provide account_id to bypass)"
+                        }
                     }
-                }
-            });
+                });
 
-            let rtn_data = DiffServerMessage::RtnData {
-                data: vec![notify_patch],
-            };
+                let rtn_data = DiffServerMessage::RtnData {
+                    data: vec![notify_patch],
+                };
 
-            ctx_addr.do_send(SendDiffMessage { message: rtn_data });
-            log::warn!(
-                "DIFF insert order failed: user mismatch (session={}, order={})",
-                session_user_id,
-                order_user_id
+                ctx_addr.do_send(SendDiffMessage { message: rtn_data });
+                log::warn!(
+                    "DIFF insert order failed: user mismatch (session={}, order={}) - legacy mode",
+                    session_user_id,
+                    order_user_id
+                );
+                return;
+            }
+        } else {
+            log::debug!(
+                "DIFF insert order: skipping user_id verification (account_id provided: {:?})",
+                client_account_id
             );
-            return;
         }
 
         if let Some(ref order_router) = self.order_router {

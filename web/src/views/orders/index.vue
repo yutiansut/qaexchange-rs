@@ -186,7 +186,8 @@ export default {
       queryInstrument: '',
       submitDialogVisible: false,
       submitForm: {
-        user_id: '',
+        user_id: '',        // ✨ 交易所模式：与account_id相同 @yutiansut @quantaxis
+        account_id: '',     // 交易账户ID
         instrument_id: 'IF2501',
         direction: 'BUY',
         offset: 'OPEN',
@@ -292,16 +293,20 @@ export default {
     },
 
     showSubmitDialog() {
-      // 自动选择第一个账户
+      // ✨ 交易所模式：自动选择第一个账户，user_id和account_id都设置为账户ID @yutiansut @quantaxis
       if (this.accounts.length > 0) {
-        this.submitForm.user_id = this.accounts[0].account_id
+        const accountId = this.accounts[0].account_id
+        this.submitForm.user_id = accountId
+        this.submitForm.account_id = accountId
       }
       this.submitDialogVisible = true
       this.$nextTick(() => {
         this.$refs.submitForm && this.$refs.submitForm.resetFields()
         // 重新设置账户ID（因为resetFields会清空）
         if (this.accounts.length > 0) {
-          this.submitForm.user_id = this.accounts[0].account_id
+          const accountId = this.accounts[0].account_id
+          this.submitForm.user_id = accountId
+          this.submitForm.account_id = accountId
         }
       })
     },

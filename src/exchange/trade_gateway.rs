@@ -1774,6 +1774,7 @@ mod tests {
                 volume,
                 price,
                 Some(2i64),
+                "QA001",
             )
             .unwrap();
 
@@ -1793,6 +1794,7 @@ mod tests {
                 5.0,
                 50100.0,
                 Some(3i64),
+                "QA002",
             )
             .unwrap();
 
@@ -1880,6 +1882,7 @@ mod tests {
                 10.0,
                 50000.0,
                 Some(exchange_order_id + 1),
+                "QA001",
             )
             .unwrap();
         assert_eq!(trade_id, 2);

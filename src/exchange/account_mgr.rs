@@ -247,16 +247,33 @@ impl AccountManager {
     }
 
     /// 查询用户的所有账户
+    /// 获取用户的账户列表
+    ///
+    /// ✨ 支持两种模式 @yutiansut @quantaxis：
+    /// 1. 传入user_id（UUID格式）→ 查找该用户的所有账户（经纪商模式）
+    /// 2. 传入account_id（ACC_xxx格式）→ 直接返回该账户（交易所模式/直接登录）
     pub fn get_accounts_by_user(&self, user_id: &str) -> Vec<Arc<RwLock<QA_Account>>> {
-        self.user_accounts
-            .get(user_id)
-            .map(|account_ids| {
-                account_ids
-                    .iter()
-                    .filter_map(|id| self.accounts.get(id).map(|r| r.value().clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
+        // 1. 先尝试作为user_id查找（经纪商模式）
+        if let Some(account_ids) = self.user_accounts.get(user_id) {
+            return account_ids
+                .iter()
+                .filter_map(|id| self.accounts.get(id).map(|r| r.value().clone()))
+                .collect();
+        }
+
+        // 2. ✨ 如果找不到，检查是否是账户ID本身（交易所模式/直接登录）
+        if user_id.starts_with("ACC_") {
+            if let Some(account) = self.accounts.get(user_id) {
+                log::debug!(
+                    "get_accounts_by_user: treating {} as account_id (exchange mode)",
+                    user_id
+                );
+                return vec![account.value().clone()];
+            }
+        }
+
+        // 3. 都找不到，返回空列表
+        vec![]
     }
 
     /// 获取用户的默认账户（第一个账户）
@@ -304,25 +321,60 @@ impl AccountManager {
     /// ```ignore
     /// account_mgr.verify_account_ownership("ACC_xxx", "user123")?;
     /// ```
+    /// 验证账户所有权
+    ///
+    /// ✨ 修改逻辑：交易所只关心账户是否存在，不强制验证User所有权 @yutiansut @quantaxis
+    ///
+    /// 规则：
+    /// - 如果user_id为空字符串，只验证账户存在（交易所模式）
+    /// - 如果user_id与account_id相同，只验证账户存在（直接账户登录）
+    /// - 否则验证账户所有权（经纪商模式）
     pub fn verify_account_ownership(
         &self,
         account_id: &str,
         user_id: &str,
     ) -> Result<(), ExchangeError> {
-        // 1. 检查账户是否存在
-        let metadata = self.metadata.get(account_id).ok_or_else(|| {
-            ExchangeError::AccountError(format!("Account not found: {}", account_id))
-        })?;
-
-        // 2. 检查账户所有权
-        if metadata.user_id != user_id {
-            return Err(ExchangeError::PermissionDenied(format!(
-                "Account {} does not belong to user {} (owner: {})",
-                account_id, user_id, metadata.user_id
+        // 1. ✨ 先检查账户是否在accounts中存在（支持WAL恢复后metadata缺失的情况）
+        if !self.accounts.contains_key(account_id) {
+            return Err(ExchangeError::AccountError(format!(
+                "Account not found: {}",
+                account_id
             )));
         }
 
-        Ok(())
+        // 2. ✨ 交易所模式：如果user_id为空或等于account_id，只验证账户存在即可
+        if user_id.is_empty() || user_id == account_id {
+            log::debug!(
+                "Account ownership verification passed: exchange mode (account={})",
+                account_id
+            );
+            return Ok(());
+        }
+
+        // 3. ✨ 经纪商模式：需要验证所有权，需要metadata
+        match self.metadata.get(account_id) {
+            Some(metadata) => {
+                if metadata.user_id != user_id {
+                    return Err(ExchangeError::PermissionDenied(format!(
+                        "Account {} does not belong to user {} (owner: {})",
+                        account_id, user_id, metadata.user_id
+                    )));
+                }
+                Ok(())
+            }
+            None => {
+                // ⚠️ metadata缺失（可能是WAL恢复后的情况）
+                // 在经纪商模式下无法验证所有权，返回错误
+                log::warn!(
+                    "Account {} exists but metadata is missing (WAL recovery issue?)",
+                    account_id
+                );
+                Err(ExchangeError::AccountError(format!(
+                    "Account metadata missing for {} (server may need restart with full recovery)",
+                    account_id
+                )))
+            }
+        }
     }
 
     /// 统计指定合约的总持仓量（多空取最大值，避免重复计数）

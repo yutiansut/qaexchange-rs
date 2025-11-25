@@ -316,9 +316,11 @@ export default {
     handleSubmitClose() {
       this.submitting = true
 
+      // ✨ 交易所模式：user_id 和 account_id 都使用账户ID @yutiansut @quantaxis
+      // 原因：交易所只关心账户，User→Account映射是经纪商业务
       const orderData = {
-        user_id: this.currentUser,
-        account_id: this.closeForm.account_id,  // 添加account_id（必需）
+        user_id: this.closeForm.account_id,     // 交易所模式：使用账户ID
+        account_id: this.closeForm.account_id,
         instrument_id: this.closeForm.instrument_id,
         direction: this.closeForm.direction === 'LONG' ? 'SELL' : 'BUY',
         offset: 'CLOSE',

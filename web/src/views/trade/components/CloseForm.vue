@@ -283,8 +283,10 @@ export default {
 
         this.submitting = true
 
+        // ✨ 交易所模式：user_id 和 account_id 都使用账户ID @yutiansut @quantaxis
+        // 原因：交易所只关心账户，User→Account映射是经纪商业务
         const orderData = {
-          user_id: this.currentUser,
+          user_id: this.form.account_id,    // 交易所模式：使用账户ID
           account_id: this.form.account_id,
           direction: this.form.direction === 'LONG' ? 'SELL' : 'BUY',
           offset: 'CLOSE',
