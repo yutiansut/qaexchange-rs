@@ -213,6 +213,12 @@ impl RecoveryManager {
             | WalRecord::ExchangeResponseRecord { .. } => {
                 // 交易所内部记录不需要恢复到账户状态，仅存档用于历史查询和审计
             }
+
+            // 因子记录（恢复时跳过，因子状态由 FactorEngine 独立恢复）
+            WalRecord::FactorUpdate { .. } | WalRecord::FactorSnapshot { .. } => {
+                // 因子数据不需要恢复到账户状态，因子计算状态由 FactorEngine 独立管理
+                // 可通过 factor/state.rs 的 StateRecovery::load_checkpoint 恢复
+            }
         }
 
         Ok(())

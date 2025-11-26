@@ -646,6 +646,30 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 kline_open_oi_builder.push(Some(*open_oi));
                 kline_close_oi_builder.push(Some(*close_oi));
             }
+
+            // 因子数据类型暂不支持OLAP列式存储（因子计算状态存储于独立快照文件）
+            // 未来可扩展为列式存储以支持因子历史查询
+            WalRecord::FactorUpdate { .. } | WalRecord::FactorSnapshot { .. } => {
+                record_type_builder.push(Some(14)); // Factor type ID
+
+                // 所有字段为 null（因子数据有独立存储路径）
+                order_id_builder.push(None);
+                user_id_builder.push(None::<&[u8]>);
+                instrument_id_builder.push(None::<&[u8]>);
+                direction_builder.push(None);
+                offset_builder.push(None);
+                price_builder.push(None);
+                volume_builder.push(None);
+                trade_id_builder.push(None);
+                exchange_order_id_builder.push(None);
+                balance_builder.push(None);
+                available_builder.push(None);
+                frozen_builder.push(None);
+                margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
+            }
         }
     }
 

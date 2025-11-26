@@ -1,20 +1,40 @@
-// WAL Record 数据结构
+// WAL Record 数据结构 - 统一流批一体化存储
+//
+// 架构设计：
+// ┌─────────────────────────────────────────────────────────────────────┐
+// │                    WalRecord (统一存储层)                            │
+// │                                                                      │
+// │  ┌─────────────────────────────────────────────────────────────┐   │
+// │  │ 账户数据          │ 交易数据           │ 行情数据             │   │
+// │  │ - AccountOpen     │ - OrderInsert      │ - TickData          │   │
+// │  │ - AccountUpdate   │ - TradeExecuted    │ - OrderBookSnapshot │   │
+// │  │ - UserRegister    │ - ExchangeOrder    │ - OrderBookDelta    │   │
+// │  │ - AccountBind     │ - ExchangeTrade    │ - KLineFinished     │   │
+// │  │                   │ - ExchangeResponse │                     │   │
+// │  └─────────────────────────────────────────────────────────────┘   │
+// │  ┌─────────────────────────────────────────────────────────────┐   │
+// │  │ 因子数据                                                      │   │
+// │  │ - FactorUpdate   (单因子增量更新)                             │   │
+// │  │ - FactorSnapshot (批量因子快照)                               │   │
+// │  └─────────────────────────────────────────────────────────────┘   │
+// └─────────────────────────────────────────────────────────────────────┘
 //
 // 支持的记录类型：
-// - OrderInsert: 订单写入
-// - TradeExecuted: 成交回报
-// - AccountUpdate: 账户更新
-// - Checkpoint: 检查点标记
-// - TickData: Tick 行情（新增）
-// - OrderBookSnapshot: 订单簿快照（新增）
-// - OrderBookDelta: 订单簿增量更新（新增）
-// - KLineFinished: K线数据（新增）
+// - AccountOpen/AccountUpdate: 账户数据
+// - OrderInsert/TradeExecuted: 用户订单和成交
+// - ExchangeOrderRecord/ExchangeTradeRecord: 交易所逐笔数据
+// - TickData/OrderBookSnapshot/OrderBookDelta: 行情数据
+// - KLineFinished: K线数据（多周期）
+// - FactorUpdate/FactorSnapshot: 因子数据（流批一体化）
 //
 // 优化设计：
 // - OrderID 品种内唯一（u64），无需全局唯一 UUID
 // - 空间节省：40 bytes → 8 bytes (80% reduction)
 // - 性能提升：ID 生成 AtomicU64::fetch_add (~5ns) vs UUID (~100ns) = 20x faster
 // - 行情数据使用固定数组避免动态分配
+// - 因子数据支持标量、向量、可选值三种类型
+//
+// @yutiansut @quantaxis
 
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
@@ -174,6 +194,43 @@ pub enum WalRecord {
         open_oi: i64, // 起始持仓量
         close_oi: i64, // 结束持仓量
         timestamp: i64, // 记录写入时间戳（纳秒）
+    },
+
+    /// 因子数据更新（流批一体化）
+    /// 存储路径: {instrument_id}/factors/
+    /// 用于因子计算结果的持久化和恢复
+    ///
+    /// 设计理念：
+    /// - 因子值以 f64 数组存储，支持多因子同时更新
+    /// - 因子名称作为索引键，值按固定顺序存储
+    /// - 支持标量、向量、可选值三种类型
+    ///
+    /// @yutiansut @quantaxis
+    FactorUpdate {
+        instrument_id: [u8; 16], // 合约ID
+        factor_id: [u8; 32],     // 因子ID/名称 (e.g. "ma_5", "rsi_14", "macd_dif")
+        factor_type: u8,         // 0=Scalar, 1=Vector, 2=Optional
+        value: f64,              // 标量值（Scalar类型）
+        values: [f64; 8],        // 向量值（Vector类型，最多8个元素）
+        value_count: u8,         // 向量元素数量
+        is_valid: bool,          // Optional类型的有效标志
+        source_timestamp: i64,   // 数据源时间戳（触发计算的tick/kline时间）
+        timestamp: i64,          // 记录写入时间戳（纳秒）
+    },
+
+    /// 因子快照（批量存储）
+    /// 用于定期保存因子状态，支持快速恢复
+    ///
+    /// @yutiansut @quantaxis
+    FactorSnapshot {
+        instrument_id: [u8; 16],    // 合约ID
+        snapshot_type: u8,          // 0=增量, 1=全量
+        factor_count: u8,           // 因子数量（最多32个）
+        factor_ids: [[u8; 32]; 32], // 因子ID数组
+        values: [f64; 32],          // 因子值数组
+        update_count: u64,          // 更新计数
+        checkpoint_id: u64,         // 检查点ID
+        timestamp: i64,             // 快照时间戳（纳秒）
     },
 }
 

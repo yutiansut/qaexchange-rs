@@ -87,6 +87,8 @@ impl MemTableValue {
             WalRecord::ExchangeTradeRecord { time, .. } => *time,
             WalRecord::ExchangeResponseRecord { timestamp, .. } => *timestamp,
             WalRecord::KLineFinished { timestamp, .. } => *timestamp,
+            WalRecord::FactorUpdate { timestamp, .. } => *timestamp,
+            WalRecord::FactorSnapshot { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -118,6 +120,8 @@ impl MemTableEntry {
             WalRecord::ExchangeTradeRecord { time, .. } => *time,
             WalRecord::ExchangeResponseRecord { timestamp, .. } => *timestamp,
             WalRecord::KLineFinished { timestamp, .. } => *timestamp,
+            WalRecord::FactorUpdate { timestamp, .. } => *timestamp,
+            WalRecord::FactorSnapshot { timestamp, .. } => *timestamp,
         };
 
         Self {
