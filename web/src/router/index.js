@@ -95,6 +95,12 @@ const routes = [
       },
       // 管理端功能
       {
+        path: 'market-overview',
+        name: 'MarketOverview',
+        component: () => import('@/views/admin/market-overview.vue'),
+        meta: { title: '市场总览', icon: 'el-icon-view', group: 'system' }
+      },
+      {
         path: 'admin-instruments',
         name: 'AdminInstruments',
         component: () => import('@/views/admin/instruments.vue'),

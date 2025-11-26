@@ -204,6 +204,8 @@ mod tests {
             base_path: storage_path.to_string(),
             memtable_size_bytes: 1024 * 1024,
             estimated_entry_size: 256,
+            enable_olap_conversion: false, // 测试中禁用 OLAP 转换
+            ..Default::default()
         };
 
         let storage = Arc::new(OltpHybridStorage::create("test_user", config).unwrap());

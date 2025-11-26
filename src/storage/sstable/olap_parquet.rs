@@ -5,22 +5,43 @@
 // - 支持谓词下推（predicate pushdown）
 // - 适合大规模扫描和聚合查询
 // - 不可变文件
+//
+// 性能优化 (Phase 11):
+// - Row Group 级别时间戳统计提取
+// - 谓词下推跳过不相关 Row Groups
+// - 零拷贝读取路径
+//
+// @yutiansut @quantaxis
 
 use arrow2::array::{
     Array, BooleanArray, MutableArray, MutableBooleanArray, MutableFixedSizeBinaryArray,
 };
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::Schema;
-use arrow2::io::parquet::read::{infer_schema, read_metadata, FileReader};
+use arrow2::io::parquet::read::{
+    infer_schema, read_metadata, FileReader, RowGroupMetaData,
+};
 use arrow2::io::parquet::write::{
-    CompressionOptions, DynIter, DynStreamingIterator, Encoding, FileWriter, RowGroupIterator,
+    CompressionOptions, Encoding, FileWriter, RowGroupIterator,
     Version, WriteOptions,
 };
+// parquet2 types for statistics extraction
+use parquet2::schema::types::PhysicalType as ParquetPhysicalType;
+use parquet2::statistics::PrimitiveStatistics;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::types::SSTableMetadata;
+
+/// Row Group 时间戳范围（用于谓词下推）
+#[derive(Debug, Clone)]
+pub struct RowGroupTimeRange {
+    pub index: usize,
+    pub min_timestamp: i64,
+    pub max_timestamp: i64,
+    pub row_count: usize,
+}
 
 /// Parquet SSTable Writer
 ///
@@ -165,14 +186,23 @@ impl ParquetSSTableWriter {
 /// Parquet SSTable Reader
 ///
 /// 从 Parquet 文件读取数据
+///
+/// 性能特性:
+/// - Row Group 级别谓词下推
+/// - 时间戳统计信息缓存
+/// - 选择性读取（跳过不相关 Row Groups）
 pub struct ParquetSSTable {
     file_path: PathBuf,
     metadata: SSTableMetadata,
     schema: Arc<Schema>,
+    /// Row Group 时间戳范围（用于谓词下推）
+    row_group_ranges: Vec<RowGroupTimeRange>,
 }
 
 impl ParquetSSTable {
     /// 打开 Parquet SSTable
+    ///
+    /// 性能优化：提取所有 Row Group 的时间戳统计信息用于谓词下推
     pub fn open<P: AsRef<Path>>(file_path: P) -> Result<Self, String> {
         let file_path = file_path.as_ref().to_path_buf();
 
@@ -186,13 +216,40 @@ impl ParquetSSTable {
         let schema =
             infer_schema(&parquet_metadata).map_err(|e| format!("Infer schema failed: {}", e))?;
 
-        // 提取统计信息
+        // 提取 Row Group 时间戳统计信息
         let mut entry_count = 0u64;
-        let min_timestamp = 0i64; // TODO: 从 Parquet 统计信息提取
-        let max_timestamp = 0i64; // TODO: 从 Parquet 统计信息提取
+        let mut global_min_ts = i64::MAX;
+        let mut global_max_ts = i64::MIN;
+        let mut row_group_ranges = Vec::with_capacity(parquet_metadata.row_groups.len());
 
-        for row_group in parquet_metadata.row_groups.iter() {
-            entry_count += row_group.num_rows() as u64;
+        for (index, row_group) in parquet_metadata.row_groups.iter().enumerate() {
+            let row_count = row_group.num_rows() as usize;
+            entry_count += row_count as u64;
+
+            // 提取时间戳列（第一列）的统计信息
+            let (min_ts, max_ts) = Self::extract_timestamp_statistics(row_group);
+
+            if min_ts < global_min_ts {
+                global_min_ts = min_ts;
+            }
+            if max_ts > global_max_ts {
+                global_max_ts = max_ts;
+            }
+
+            row_group_ranges.push(RowGroupTimeRange {
+                index,
+                min_timestamp: min_ts,
+                max_timestamp: max_ts,
+                row_count,
+            });
+        }
+
+        // 处理空文件情况
+        if global_min_ts == i64::MAX {
+            global_min_ts = 0;
+        }
+        if global_max_ts == i64::MIN {
+            global_max_ts = 0;
         }
 
         let file_size = std::fs::metadata(&file_path)
@@ -202,9 +259,9 @@ impl ParquetSSTable {
         let metadata = SSTableMetadata {
             version: 2,
             entry_count,
-            min_timestamp,
-            max_timestamp,
-            min_key: Vec::new(), // OLAP不需要key range（只用于OLTP compaction）
+            min_timestamp: global_min_ts,
+            max_timestamp: global_max_ts,
+            min_key: Vec::new(),
             max_key: Vec::new(),
             file_size,
             block_offsets: Vec::new(),
@@ -212,11 +269,59 @@ impl ParquetSSTable {
             created_at: chrono::Utc::now().timestamp(),
         };
 
+        log::debug!(
+            "Opened ParquetSSTable {:?}: {} entries, {} row groups, time range [{}, {}]",
+            file_path,
+            entry_count,
+            row_group_ranges.len(),
+            global_min_ts,
+            global_max_ts
+        );
+
         Ok(Self {
             file_path,
             metadata,
             schema: Arc::new(schema),
+            row_group_ranges,
         })
+    }
+
+    /// 从 Row Group 元数据中提取时间戳列的 min/max 统计信息
+    ///
+    /// 性能特性：
+    /// - 零分配提取（直接从元数据读取）
+    /// - 支持 Int64 物理类型（纳秒时间戳）
+    /// - 优雅降级（无统计时返回宽松范围）
+    #[inline]
+    fn extract_timestamp_statistics(row_group: &RowGroupMetaData) -> (i64, i64) {
+        // 时间戳是第一列 (index 0)
+        if row_group.columns().is_empty() {
+            return (i64::MIN, i64::MAX);
+        }
+
+        let column_meta = &row_group.columns()[0];
+
+        // 尝试从 column chunk 统计信息中提取
+        // statistics() 返回 Option<Result<Arc<dyn Statistics>>>
+        if let Some(Ok(stats)) = column_meta.statistics() {
+            // 检查物理类型是否为 Int64
+            if *stats.physical_type() == ParquetPhysicalType::Int64 {
+                // 安全地 downcast 到 PrimitiveStatistics<i64>
+                if let Some(int_stats) = stats.as_any().downcast_ref::<PrimitiveStatistics<i64>>() {
+                    let min = int_stats.min_value.unwrap_or(i64::MIN);
+                    let max = int_stats.max_value.unwrap_or(i64::MAX);
+                    return (min, max);
+                }
+            }
+        }
+
+        // 如果没有统计信息或类型不匹配，返回宽松范围（不做过滤）
+        (i64::MIN, i64::MAX)
+    }
+
+    /// 获取 Row Group 时间戳范围（用于外部优化）
+    pub fn row_group_ranges(&self) -> &[RowGroupTimeRange] {
+        &self.row_group_ranges
     }
 
     /// 获取元数据
@@ -229,9 +334,14 @@ impl ParquetSSTable {
         &self.schema
     }
 
-    /// 范围查询
+    /// 范围查询（带谓词下推）
     ///
     /// 返回时间戳范围内的所有 Chunk
+    ///
+    /// 性能优化：
+    /// 1. 文件级别时间范围快速过滤
+    /// 2. Row Group 级别谓词下推（跳过不相关 Row Groups）
+    /// 3. 行级别精确过滤
     ///
     /// # Arguments
     /// * `start_ts` - 起始时间戳（纳秒）
@@ -241,22 +351,69 @@ impl ParquetSSTable {
         start_ts: i64,
         end_ts: i64,
     ) -> Result<Vec<Chunk<Box<dyn Array>>>, String> {
-        // 快速路径：时间范围不重叠
+        // 快速路径 1：文件级别时间范围不重叠
         if self.metadata.max_timestamp != 0
             && (end_ts < self.metadata.min_timestamp || start_ts > self.metadata.max_timestamp)
         {
+            log::trace!(
+                "Skipping file {:?}: time range [{}, {}] does not overlap [{}, {}]",
+                self.file_path,
+                self.metadata.min_timestamp,
+                self.metadata.max_timestamp,
+                start_ts,
+                end_ts
+            );
             return Ok(Vec::new());
         }
 
+        // 快速路径 2：确定需要读取的 Row Groups（谓词下推）
+        let relevant_row_groups: Vec<usize> = self
+            .row_group_ranges
+            .iter()
+            .filter(|rg| {
+                // Row Group 时间范围与查询范围有重叠
+                rg.max_timestamp >= start_ts && rg.min_timestamp <= end_ts
+            })
+            .map(|rg| rg.index)
+            .collect();
+
+        if relevant_row_groups.is_empty() {
+            log::trace!(
+                "Skipping file {:?}: no relevant row groups for time range [{}, {}]",
+                self.file_path,
+                start_ts,
+                end_ts
+            );
+            return Ok(Vec::new());
+        }
+
+        let skipped_count = self.row_group_ranges.len() - relevant_row_groups.len();
+        if skipped_count > 0 {
+            log::debug!(
+                "Predicate pushdown: reading {}/{} row groups, skipped {} for {:?}",
+                relevant_row_groups.len(),
+                self.row_group_ranges.len(),
+                skipped_count,
+                self.file_path
+            );
+        }
+
+        // 打开文件并读取元数据
         let mut file = File::open(&self.file_path)
             .map_err(|e| format!("Open parquet file for query failed: {}", e))?;
 
         let parquet_metadata =
             read_metadata(&mut file).map_err(|e| format!("Read parquet metadata failed: {}", e))?;
 
+        // 只选择相关的 Row Groups
+        let selected_row_groups: Vec<RowGroupMetaData> = relevant_row_groups
+            .iter()
+            .filter_map(|&idx| parquet_metadata.row_groups.get(idx).cloned())
+            .collect();
+
         let reader = FileReader::new(
             file,
-            parquet_metadata.row_groups,
+            selected_row_groups,
             (*self.schema).clone(),
             None,
             None,
@@ -265,11 +422,11 @@ impl ParquetSSTable {
 
         let mut chunks = Vec::new();
 
-        // 读取所有 Row Groups
+        // 读取选中的 Row Groups
         for chunk_result in reader {
             let chunk = chunk_result.map_err(|e| format!("Read chunk failed: {}", e))?;
 
-            // 过滤：只保留时间戳在范围内的行
+            // 行级别精确过滤
             let filtered_chunk = filter_chunk_by_timestamp(&chunk, start_ts, end_ts)?;
 
             if !filtered_chunk.is_empty() {
@@ -278,6 +435,29 @@ impl ParquetSSTable {
         }
 
         Ok(chunks)
+    }
+
+    /// 高性能范围查询（返回行数估算，用于查询优化）
+    ///
+    /// 不读取实际数据，仅基于统计信息估算匹配行数
+    pub fn estimate_row_count(&self, start_ts: i64, end_ts: i64) -> usize {
+        if end_ts < self.metadata.min_timestamp || start_ts > self.metadata.max_timestamp {
+            return 0;
+        }
+
+        self.row_group_ranges
+            .iter()
+            .filter(|rg| rg.max_timestamp >= start_ts && rg.min_timestamp <= end_ts)
+            .map(|rg| {
+                // 估算重叠比例
+                let rg_span = (rg.max_timestamp - rg.min_timestamp).max(1) as f64;
+                let overlap_start = start_ts.max(rg.min_timestamp);
+                let overlap_end = end_ts.min(rg.max_timestamp);
+                let overlap_span = (overlap_end - overlap_start).max(0) as f64;
+                let ratio = (overlap_span / rg_span).min(1.0);
+                (rg.row_count as f64 * ratio) as usize
+            })
+            .sum()
     }
 
     /// 扫描整个文件（用于全量查询）

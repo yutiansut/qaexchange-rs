@@ -43,6 +43,12 @@
             系统监控
           </el-menu-item>
 
+          <!-- 市场总览 -->
+          <el-menu-item index="/market-overview">
+            <i class="el-icon-view"></i>
+            市场总览
+          </el-menu-item>
+
           <!-- 管理中心 - 仅管理员可见 -->
           <el-submenu v-if="isAdmin" index="admin">
             <template slot="title">

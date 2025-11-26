@@ -6726,6 +6726,7 @@ dependencies = [
  "mockall",
  "mongodb",
  "parking_lot 0.12.4",
+ "parquet2",
  "pest",
  "pest_derive",
  "polars 0.51.0 (registry+https://github.com/rust-lang/crates.io-index)",

@@ -12,8 +12,10 @@
 
 use crate::storage::checkpoint::CheckpointManager;
 use crate::storage::compaction::{CompactionConfig, CompactionScheduler, SSTableInfo};
+use crate::storage::conversion::{ConversionManager, SchedulerConfig, WorkerConfig};
 use crate::storage::memtable::oltp::OltpMemTable;
 use crate::storage::memtable::types::MemTableValue;
+use crate::storage::sstable::olap_parquet::ParquetSSTable;
 use crate::storage::sstable::oltp_rkyv::{RkyvSSTable, RkyvSSTableWriter};
 use crate::storage::wal::{WalManager, WalRecord};
 use parking_lot::RwLock;
@@ -31,6 +33,15 @@ pub struct OltpHybridConfig {
 
     /// 每条记录的预估大小
     pub estimated_entry_size: usize,
+
+    /// 是否启用 OLTP → OLAP 转换
+    pub enable_olap_conversion: bool,
+
+    /// OLAP 转换触发阈值（SSTable 数量）
+    pub olap_conversion_threshold: usize,
+
+    /// OLAP 转换触发阈值（数据年龄，秒）
+    pub olap_conversion_age_seconds: i64,
 }
 
 impl Default for OltpHybridConfig {
@@ -39,6 +50,9 @@ impl Default for OltpHybridConfig {
             base_path: "/home/quantaxis/qaexchange-rs/output//qaexchange/storage".to_string(),
             memtable_size_bytes: 64 * 1024 * 1024, // 64 MB
             estimated_entry_size: 256,
+            enable_olap_conversion: true,
+            olap_conversion_threshold: 10,          // 10 个 SSTable 触发转换
+            olap_conversion_age_seconds: 3600 * 24, // 1 天前的数据触发转换
         }
     }
 }
@@ -48,7 +62,12 @@ impl Default for OltpHybridConfig {
 /// 目录结构：
 /// {base_path}/{instrument_id}/
 ///   ├── wal/           - WAL 文件
-///   └── sstables/      - SSTable 文件
+///   ├── sstables/      - OLTP SSTable 文件
+///   └── olap/          - OLAP Parquet 文件
+///
+/// 数据流：
+/// Write Path: WAL → MemTable → SSTable → Parquet (异步转换)
+/// Read Path:  MemTable + SSTable (OLTP) + Parquet (OLAP)
 pub struct OltpHybridStorage {
     /// 品种 ID
     instrument_id: String,
@@ -62,6 +81,12 @@ pub struct OltpHybridStorage {
     /// 已持久化的 SSTable 列表（按时间排序）
     sstables: Arc<RwLock<Vec<Arc<RkyvSSTable>>>>,
 
+    /// OLAP Parquet 文件列表（已转换的历史数据）
+    olap_files: Arc<RwLock<Vec<Arc<ParquetSSTable>>>>,
+
+    /// OLAP 数据时间边界（早于此时间使用 OLAP）
+    olap_cutoff_timestamp: Arc<parking_lot::Mutex<i64>>,
+
     /// Compaction 调度器
     compaction_scheduler: Arc<CompactionScheduler>,
 
@@ -70,6 +95,9 @@ pub struct OltpHybridStorage {
 
     /// Checkpoint 计数器
     checkpoint_counter: Arc<parking_lot::Mutex<u64>>,
+
+    /// 转换管理器（可选）
+    conversion_manager: Option<Arc<parking_lot::Mutex<ConversionManager>>>,
 
     /// 配置
     config: OltpHybridConfig,
@@ -94,6 +122,11 @@ impl OltpHybridStorage {
         std::fs::create_dir_all(&sstable_path)
             .map_err(|e| format!("Create sstable path failed: {}", e))?;
 
+        // 创建 OLAP 目录
+        let olap_path = base_path.join("olap");
+        std::fs::create_dir_all(&olap_path)
+            .map_err(|e| format!("Create olap path failed: {}", e))?;
+
         // 创建 MemTable
         let memtable_config = crate::storage::memtable::oltp::OltpMemTableConfig {
             max_size_bytes: config.memtable_size_bytes,
@@ -115,14 +148,51 @@ impl OltpHybridStorage {
         let checkpoint_dir = base_path.join("checkpoints");
         let checkpoint_manager = Arc::new(CheckpointManager::new(&checkpoint_dir, instrument_id)?);
 
+        // 创建转换管理器（如果启用）
+        let conversion_manager = if config.enable_olap_conversion {
+            let metadata_path = base_path.join("conversion_metadata.json");
+            let scheduler_config = SchedulerConfig::default();
+            let worker_config = WorkerConfig::default();
+
+            match ConversionManager::new(
+                PathBuf::from(&config.base_path),
+                metadata_path,
+                scheduler_config,
+                worker_config,
+            ) {
+                Ok(mut manager) => {
+                    manager.start();
+                    log::info!("[{}] OLAP conversion manager started", instrument_id);
+                    Some(Arc::new(parking_lot::Mutex::new(manager)))
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[{}] Failed to create conversion manager: {}. OLAP conversion disabled.",
+                        instrument_id,
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // 加载已有的 OLAP 文件
+        let olap_files = Arc::new(RwLock::new(Self::load_olap_files(&olap_path)?));
+        let olap_cutoff = Self::calculate_olap_cutoff(&olap_files.read());
+
         let storage = Self {
             instrument_id: instrument_id.to_string(),
             wal: wal.clone(),
             memtable: memtable.clone(),
             sstables: Arc::new(RwLock::new(Vec::new())),
+            olap_files,
+            olap_cutoff_timestamp: Arc::new(parking_lot::Mutex::new(olap_cutoff)),
             compaction_scheduler,
             checkpoint_manager,
             checkpoint_counter: Arc::new(parking_lot::Mutex::new(0)),
+            conversion_manager,
             config,
             sstable_counter: Arc::new(parking_lot::Mutex::new(0)),
         };
@@ -147,6 +217,50 @@ impl OltpHybridStorage {
         }
 
         Ok(storage)
+    }
+
+    /// 加载 OLAP Parquet 文件
+    fn load_olap_files(olap_path: &PathBuf) -> Result<Vec<Arc<ParquetSSTable>>, String> {
+        let mut files = Vec::new();
+
+        if !olap_path.exists() {
+            return Ok(files);
+        }
+
+        let entries = std::fs::read_dir(olap_path)
+            .map_err(|e| format!("Read olap dir failed: {}", e))?;
+
+        let mut parquet_paths: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("parquet"))
+            .map(|e| e.path())
+            .collect();
+
+        parquet_paths.sort();
+
+        for path in parquet_paths {
+            match ParquetSSTable::open(&path) {
+                Ok(sstable) => {
+                    log::debug!("Loaded OLAP file: {:?}", path);
+                    files.push(Arc::new(sstable));
+                }
+                Err(e) => {
+                    log::warn!("Failed to load OLAP file {:?}: {}", path, e);
+                }
+            }
+        }
+
+        log::info!("Loaded {} OLAP Parquet files", files.len());
+        Ok(files)
+    }
+
+    /// 计算 OLAP 时间边界
+    fn calculate_olap_cutoff(olap_files: &[Arc<ParquetSSTable>]) -> i64 {
+        olap_files
+            .iter()
+            .map(|f| f.metadata().max_timestamp)
+            .max()
+            .unwrap_or(0)
     }
 
     /// 写入记录（WAL + MemTable）
@@ -548,6 +662,113 @@ impl OltpHybridStorage {
 
         Ok(())
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // OLAP 访问接口（供 BatchDataSource 使用）
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// 获取 OLAP 文件列表
+    ///
+    /// 用于 OltpBatchAdapter 构建混合查询
+    pub fn get_olap_files(&self) -> Vec<Arc<ParquetSSTable>> {
+        self.olap_files.read().clone()
+    }
+
+    /// 获取 OLAP 时间边界
+    ///
+    /// 早于此时间的数据应该查询 OLAP
+    pub fn get_olap_cutoff_timestamp(&self) -> i64 {
+        *self.olap_cutoff_timestamp.lock()
+    }
+
+    /// 刷新 OLAP 文件列表
+    ///
+    /// 在转换完成后调用以加载新的 Parquet 文件
+    pub fn refresh_olap_files(&self) -> Result<(), String> {
+        let olap_path = PathBuf::from(&self.config.base_path)
+            .join(&self.instrument_id)
+            .join("olap");
+
+        let new_files = Self::load_olap_files(&olap_path)?;
+        let new_cutoff = Self::calculate_olap_cutoff(&new_files);
+
+        *self.olap_files.write() = new_files;
+        *self.olap_cutoff_timestamp.lock() = new_cutoff;
+
+        log::info!(
+            "[{}] Refreshed OLAP files, cutoff timestamp: {}",
+            self.instrument_id,
+            new_cutoff
+        );
+
+        Ok(())
+    }
+
+    /// 检查并触发 OLAP 转换
+    ///
+    /// 条件：
+    /// 1. SSTable 数量超过阈值
+    /// 2. 存在超过年龄阈值的数据
+    pub fn check_and_trigger_conversion(&self) -> Result<bool, String> {
+        let conversion_manager = match &self.conversion_manager {
+            Some(cm) => cm,
+            None => return Ok(false),
+        };
+
+        let sstables = self.sstables.read();
+
+        // 条件 1：SSTable 数量超过阈值
+        if sstables.len() < self.config.olap_conversion_threshold {
+            return Ok(false);
+        }
+
+        // 条件 2：检查是否有超过年龄阈值的数据
+        let now = chrono::Utc::now().timestamp();
+        let age_threshold = now - self.config.olap_conversion_age_seconds;
+
+        // 找到所有 max_timestamp < age_threshold 的 SSTable（完全过期）
+        let old_sstables: Vec<PathBuf> = sstables
+            .iter()
+            .filter(|sst| sst.metadata().max_timestamp < age_threshold)
+            .map(|sst| PathBuf::from(sst.file_path()))
+            .collect();
+
+        if old_sstables.is_empty() {
+            return Ok(false);
+        }
+
+        drop(sstables);
+
+        // 触发转换
+        log::info!(
+            "[{}] Triggering OLAP conversion for {} old SSTables",
+            self.instrument_id,
+            old_sstables.len()
+        );
+
+        let manager = conversion_manager.lock();
+        manager.trigger_conversion(&self.instrument_id, old_sstables)?;
+
+        Ok(true)
+    }
+
+    /// 手动触发 OLAP 转换（用于测试或立即转换）
+    pub fn trigger_olap_conversion(&self, sstable_paths: Vec<PathBuf>) -> Result<(), String> {
+        let conversion_manager = self
+            .conversion_manager
+            .as_ref()
+            .ok_or("OLAP conversion not enabled")?;
+
+        let manager = conversion_manager.lock();
+        manager.trigger_conversion(&self.instrument_id, sstable_paths)
+    }
+
+    /// 获取转换统计信息
+    pub fn conversion_stats(&self) -> Option<crate::storage::conversion::ConversionStats> {
+        self.conversion_manager
+            .as_ref()
+            .map(|cm| cm.lock().get_stats())
+    }
 }
 
 /// 存储统计信息
@@ -586,6 +807,8 @@ mod tests {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),
             memtable_size_bytes: 1024 * 1024,
             estimated_entry_size: 256,
+            enable_olap_conversion: false, // 测试中禁用 OLAP 转换
+            ..Default::default()
         };
 
         let storage = OltpHybridStorage::create("IF2501", config).unwrap();
@@ -613,6 +836,8 @@ mod tests {
             base_path: tmp_dir.path().to_str().unwrap().to_string(),
             memtable_size_bytes: 1000, // 很小，容易触发 flush
             estimated_entry_size: 100,
+            enable_olap_conversion: false, // 测试中禁用 OLAP 转换
+            ..Default::default()
         };
 
         let storage = OltpHybridStorage::create("IF2501", config).unwrap();

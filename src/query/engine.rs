@@ -58,7 +58,19 @@ impl QueryEngine {
         self.dataframe_to_response(df, elapsed_ms)
     }
 
-    /// 执行 SQL 查询
+    /// 执行 SQL 查询并返回 DataFrame
+    ///
+    /// 公开接口，用于直接获取查询结果
+    ///
+    /// # Example
+    /// ```ignore
+    /// let df = engine.sql("SELECT * FROM data WHERE timestamp > 1000")?;
+    /// ```
+    pub fn sql(&self, query: &str) -> Result<DataFrame, String> {
+        self.execute_sql(query)
+    }
+
+    /// 执行 SQL 查询 (内部实现)
     fn execute_sql(&self, query: &str) -> Result<DataFrame, String> {
         // 获取 Parquet 文件路径
         let parquet_paths = self.scanner.get_parquet_paths();
