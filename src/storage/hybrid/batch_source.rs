@@ -11,6 +11,7 @@
 // - OLTP: P99 < 100μs (MemTable + SSTable)
 // - OLAP: P99 < 10ms (Parquet 谓词下推)
 // - 自动路由：根据时间范围选择最优数据源
+// - 类型过滤：O(1) 位掩码过滤
 //
 // @yutiansut @quantaxis
 
@@ -19,6 +20,7 @@ use crate::query::hybrid::{
     RecordValue,
 };
 use crate::storage::hybrid::oltp::OltpHybridStorage;
+use crate::storage::hybrid::query_filter::{QueryFilter, RecordType, RecordTypeSet};
 use crate::storage::sstable::olap_parquet::ParquetSSTable;
 use crate::storage::wal::record::WalRecord;
 use std::collections::HashMap;
@@ -428,6 +430,248 @@ impl OltpBatchAdapter {
         }
 
         Ok(all_records)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 高性能过滤查询（新增）
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// 使用 QueryFilter 进行高性能过滤查询
+    ///
+    /// # 性能特性
+    /// - 类型过滤：O(1) 位掩码检查
+    /// - 合约过滤：O(1) HashSet 查找
+    /// - 时间范围：谓词下推到存储层
+    /// - 零拷贝：使用引用避免克隆
+    ///
+    /// # 示例
+    /// ```ignore
+    /// let filter = QueryFilter::klines()
+    ///     .with_instrument("cu2501")
+    ///     .with_time_range(start_ts, end_ts)
+    ///     .with_limit(1000);
+    ///
+    /// let records = adapter.query_filtered("cu2501", filter).await?;
+    /// ```
+    pub async fn query_filtered(
+        &self,
+        key: &str,
+        filter: QueryFilter,
+    ) -> Result<Vec<Record>, BatchQueryError> {
+        // 从过滤器提取时间范围
+        let (start_ts, end_ts) = filter
+            .time_range
+            .as_ref()
+            .map(|r| (*r.start(), *r.end()))
+            .unwrap_or((i64::MIN, i64::MAX));
+
+        let mut results = Vec::new();
+
+        // 1. 查询 OLAP (历史数据) - 使用过滤器
+        if start_ts < self.olap_cutoff_timestamp && !self.olap_files.is_empty() {
+            let olap_end = end_ts.min(self.olap_cutoff_timestamp);
+            let olap_records = self.query_olap_filtered(key, start_ts, olap_end, &filter)?;
+            results.extend(olap_records);
+        }
+
+        // 2. 查询 OLTP (近期数据) - 使用过滤器
+        if end_ts >= self.olap_cutoff_timestamp {
+            let oltp_start = start_ts.max(self.olap_cutoff_timestamp);
+            let oltp_records = self.query_oltp_filtered(key, oltp_start, end_ts, &filter)?;
+            results.extend(oltp_records);
+        }
+
+        // 3. 按时间戳排序
+        results.sort_by_key(|r| r.timestamp);
+
+        // 4. 应用分页和限制
+        let offset = filter.offset;
+        let limit = filter.limit.unwrap_or(usize::MAX);
+
+        Ok(results.into_iter().skip(offset).take(limit).collect())
+    }
+
+    /// OLTP 过滤查询
+    fn query_oltp_filtered(
+        &self,
+        key: &str,
+        start_ts: i64,
+        end_ts: i64,
+        filter: &QueryFilter,
+    ) -> Result<Vec<Record>, BatchQueryError> {
+        let results = self
+            .storage
+            .range_query(start_ts, end_ts)
+            .map_err(|e| BatchQueryError::IoError(e))?;
+
+        // 使用过滤器进行高效过滤
+        Ok(results
+            .into_iter()
+            .filter(|(ts, _, record)| filter.matches(record, *ts))
+            .map(|(ts, _seq, record)| self.wal_record_to_record(key, ts, &record))
+            .collect())
+    }
+
+    /// OLAP 过滤查询（Parquet 谓词下推 + 内存过滤）
+    fn query_olap_filtered(
+        &self,
+        key: &str,
+        start_ts: i64,
+        end_ts: i64,
+        filter: &QueryFilter,
+    ) -> Result<Vec<Record>, BatchQueryError> {
+        use arrow2::array::{PrimitiveArray, Utf8Array};
+
+        let mut all_records = Vec::new();
+
+        for parquet in &self.olap_files {
+            let chunks = parquet
+                .range_query(start_ts, end_ts)
+                .map_err(|e| BatchQueryError::IoError(e))?;
+
+            for chunk in chunks {
+                if chunk.is_empty() {
+                    continue;
+                }
+
+                let timestamp_array = chunk.arrays()[0]
+                    .as_any()
+                    .downcast_ref::<PrimitiveArray<i64>>()
+                    .ok_or_else(|| BatchQueryError::IoError("Missing timestamp".to_string()))?;
+
+                // 提取 record_type 列（如果存在）用于类型过滤
+                let record_type_array = chunk.arrays().get(1).and_then(|arr| {
+                    arr.as_any().downcast_ref::<PrimitiveArray<i32>>()
+                });
+
+                let price_array = chunk.arrays().get(8).and_then(|arr| {
+                    arr.as_any().downcast_ref::<PrimitiveArray<f64>>()
+                });
+
+                let volume_array = chunk.arrays().get(9).and_then(|arr| {
+                    arr.as_any().downcast_ref::<PrimitiveArray<f64>>()
+                });
+
+                for i in 0..chunk.len() {
+                    let timestamp = timestamp_array.value(i);
+
+                    // 时间范围过滤（已由 Parquet 谓词下推处理，这里双重检查）
+                    if let Some(ref range) = filter.time_range {
+                        if !range.contains(&timestamp) {
+                            continue;
+                        }
+                    }
+
+                    // 记录类型过滤（OLAP路径）
+                    // OLAP 存储的 record_type 是 i32，需要转换为 RecordType
+                    if let Some(record_type_arr) = record_type_array {
+                        if let Some(rt_value) = record_type_arr.get(i) {
+                            // 尝试从 i32 值映射到 RecordType
+                            if let Some(rt) = RecordType::from_i32(rt_value) {
+                                if !filter.record_types.contains(rt) {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    // 价格范围过滤
+                    if let Some(ref price_range) = filter.price_range {
+                        if let Some(price_arr) = price_array {
+                            if let Some(price) = price_arr.get(i) {
+                                if !price_range.contains(&price) {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    let mut record = Record::new(key, timestamp);
+
+                    if let Some(price_arr) = price_array {
+                        if let Some(price) = price_arr.get(i) {
+                            record = record.with_value("price", RecordValue::Float(price));
+                        }
+                    }
+
+                    if let Some(volume_arr) = volume_array {
+                        if let Some(volume) = volume_arr.get(i) {
+                            record = record.with_value("volume", RecordValue::Float(volume));
+                        }
+                    }
+
+                    all_records.push(record);
+                }
+            }
+        }
+
+        Ok(all_records)
+    }
+
+    /// 快捷方法：查询 K 线数据
+    pub async fn query_klines(
+        &self,
+        instrument: &str,
+        start_ts: i64,
+        end_ts: i64,
+        limit: Option<usize>,
+    ) -> Result<Vec<Record>, BatchQueryError> {
+        let mut filter = QueryFilter::klines()
+            .with_time_range(start_ts, end_ts)
+            .with_instrument(instrument);
+
+        if let Some(l) = limit {
+            filter = filter.with_limit(l);
+        }
+
+        self.query_filtered(instrument, filter).await
+    }
+
+    /// 快捷方法：查询 Tick 数据
+    pub async fn query_ticks(
+        &self,
+        instrument: &str,
+        start_ts: i64,
+        end_ts: i64,
+        limit: Option<usize>,
+    ) -> Result<Vec<Record>, BatchQueryError> {
+        let mut filter = QueryFilter::ticks()
+            .with_time_range(start_ts, end_ts)
+            .with_instrument(instrument);
+
+        if let Some(l) = limit {
+            filter = filter.with_limit(l);
+        }
+
+        self.query_filtered(instrument, filter).await
+    }
+
+    /// 快捷方法：查询因子数据
+    pub async fn query_factors(
+        &self,
+        instrument: &str,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<Record>, BatchQueryError> {
+        let filter = QueryFilter::factors()
+            .with_time_range(start_ts, end_ts)
+            .with_instrument(instrument);
+
+        self.query_filtered(instrument, filter).await
+    }
+
+    /// 快捷方法：查询成交数据
+    pub async fn query_trades(
+        &self,
+        instrument: &str,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<Record>, BatchQueryError> {
+        let filter = QueryFilter::trades()
+            .with_time_range(start_ts, end_ts)
+            .with_instrument(instrument);
+
+        self.query_filtered(instrument, filter).await
     }
 }
 

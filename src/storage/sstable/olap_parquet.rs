@@ -27,6 +27,9 @@ use arrow2::io::parquet::write::{
 };
 // parquet2 types for statistics extraction
 use parquet2::schema::types::PhysicalType as ParquetPhysicalType;
+
+use super::compression::{CompressionAlgorithm, CompressionStrategy};
+use crate::storage::hybrid::query_filter::RecordCategory;
 use parquet2::statistics::PrimitiveStatistics;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -46,6 +49,8 @@ pub struct RowGroupTimeRange {
 /// Parquet SSTable Writer
 ///
 /// 将 Arrow2 Chunk 批量写入 Parquet 文件
+///
+/// 支持按数据类型自动选择最优压缩算法
 pub struct ParquetSSTableWriter {
     file_path: PathBuf,
     schema: Arc<Schema>,
@@ -53,15 +58,35 @@ pub struct ParquetSSTableWriter {
     entry_count: u64,
     min_timestamp: Option<i64>,
     max_timestamp: Option<i64>,
+    /// 压缩选项（根据数据类型动态选择）
+    compression: CompressionOptions,
+    /// 压缩策略（用于选择压缩算法）
+    compression_strategy: CompressionStrategy,
 }
 
 impl ParquetSSTableWriter {
-    /// 创建新的 Parquet Writer
+    /// 创建新的 Parquet Writer（使用默认平衡压缩策略）
     ///
     /// # Arguments
     /// * `file_path` - 输出文件路径
     /// * `schema` - Arrow2 Schema
     pub fn create<P: AsRef<Path>>(file_path: P, schema: Arc<Schema>) -> Result<Self, String> {
+        Self::create_with_compression(file_path, schema, CompressionStrategy::balanced(), None)
+    }
+
+    /// 创建新的 Parquet Writer（指定压缩策略和数据类别）
+    ///
+    /// # Arguments
+    /// * `file_path` - 输出文件路径
+    /// * `schema` - Arrow2 Schema
+    /// * `strategy` - 压缩策略配置
+    /// * `category` - 数据类别（用于自动选择压缩算法）
+    pub fn create_with_compression<P: AsRef<Path>>(
+        file_path: P,
+        schema: Arc<Schema>,
+        strategy: CompressionStrategy,
+        category: Option<RecordCategory>,
+    ) -> Result<Self, String> {
         let file_path = file_path.as_ref().to_path_buf();
 
         // 确保目录存在
@@ -73,11 +98,25 @@ impl ParquetSSTableWriter {
         let file =
             File::create(&file_path).map_err(|e| format!("Create parquet file failed: {}", e))?;
 
-        // Parquet 写入选项（简化版本，使用 Snappy 压缩）
+        // 根据数据类别选择压缩算法
+        let compression_alg = match category {
+            Some(cat) => strategy.get_for_category(cat),
+            None => strategy.default, // 使用默认压缩
+        };
+        let compression = compression_alg.to_parquet_options();
+
+        log::debug!(
+            "Creating ParquetSSTable {:?} with compression: {} (category: {:?})",
+            file_path,
+            compression_alg.name(),
+            category
+        );
+
+        // Parquet 写入选项（根据数据类型动态选择压缩）
         let options = WriteOptions {
-            write_statistics: true,                  // 写入统计信息（min/max 等）
-            compression: CompressionOptions::Snappy, // Snappy 压缩
-            version: Version::V2,                    // Parquet 2.0
+            write_statistics: true, // 写入统计信息（min/max 等）
+            compression,            // 动态压缩
+            version: Version::V2,   // Parquet 2.0
             data_pagesize_limit: None,
         };
 
@@ -99,7 +138,24 @@ impl ParquetSSTableWriter {
             entry_count: 0,
             min_timestamp: None,
             max_timestamp: None,
+            compression,
+            compression_strategy: strategy,
         })
+    }
+
+    /// 创建低延迟 Parquet Writer（使用 LZ4 压缩）
+    pub fn create_low_latency<P: AsRef<Path>>(file_path: P, schema: Arc<Schema>) -> Result<Self, String> {
+        Self::create_with_compression(file_path, schema, CompressionStrategy::low_latency(), None)
+    }
+
+    /// 创建高压缩 Parquet Writer（使用 ZSTD 压缩）
+    pub fn create_high_compression<P: AsRef<Path>>(file_path: P, schema: Arc<Schema>) -> Result<Self, String> {
+        Self::create_with_compression(file_path, schema, CompressionStrategy::high_compression(), None)
+    }
+
+    /// 创建归档 Parquet Writer（最高压缩比）
+    pub fn create_archive<P: AsRef<Path>>(file_path: P, schema: Arc<Schema>) -> Result<Self, String> {
+        Self::create_with_compression(file_path, schema, CompressionStrategy::archive(), None)
     }
 
     /// 写入一个 Chunk
@@ -136,7 +192,7 @@ impl ParquetSSTableWriter {
             &self.schema,
             WriteOptions {
                 write_statistics: true,
-                compression: CompressionOptions::Snappy,
+                compression: self.compression, // 使用动态压缩配置
                 version: Version::V2,
                 data_pagesize_limit: None,
             },

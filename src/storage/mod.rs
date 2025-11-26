@@ -1,4 +1,6 @@
 //! 持久化存储模块
+//!
+//! @yutiansut @quantaxis
 
 pub use qars::qaconnector;
 
@@ -31,3 +33,6 @@ pub mod conversion;
 
 // Storage Subscriber (异步持久化)
 pub mod subscriber;
+
+// 二级索引模块
+pub mod index;
