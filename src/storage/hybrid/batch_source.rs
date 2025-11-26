@@ -169,8 +169,181 @@ impl OltpBatchAdapter {
                     .with_value("volume", RecordValue::Int(*volume))
                     .with_value("amount", RecordValue::Float(*amount));
             }
-            _ => {
-                result = result.with_value("record_type", RecordValue::String("Other".to_string()));
+
+            // ═══════════════════════════════════════════════════════════════════
+            // 行情数据转换
+            // ═══════════════════════════════════════════════════════════════════
+            WalRecord::TickData {
+                last_price,
+                bid_price,
+                ask_price,
+                volume,
+                ..
+            } => {
+                result = result
+                    .with_value("record_type", RecordValue::String("TickData".to_string()))
+                    .with_value("last_price", RecordValue::Float(*last_price))
+                    .with_value("bid_price", RecordValue::Float(*bid_price))
+                    .with_value("ask_price", RecordValue::Float(*ask_price))
+                    .with_value("volume", RecordValue::Int(*volume));
+            }
+
+            WalRecord::OrderBookSnapshot {
+                bids,
+                asks,
+                last_price,
+                ..
+            } => {
+                result = result
+                    .with_value("record_type", RecordValue::String("OrderBookSnapshot".to_string()))
+                    .with_value("last_price", RecordValue::Float(*last_price))
+                    .with_value("bid_price_1", RecordValue::Float(bids[0].0))
+                    .with_value("bid_volume_1", RecordValue::Int(bids[0].1))
+                    .with_value("ask_price_1", RecordValue::Float(asks[0].0))
+                    .with_value("ask_volume_1", RecordValue::Int(asks[0].1))
+                    .with_value("bid_depth", RecordValue::Int(bids.iter().filter(|(p, _)| *p > 0.0).count() as i64))
+                    .with_value("ask_depth", RecordValue::Int(asks.iter().filter(|(p, _)| *p > 0.0).count() as i64));
+            }
+
+            WalRecord::OrderBookDelta {
+                side,
+                price,
+                volume,
+                ..
+            } => {
+                result = result
+                    .with_value("record_type", RecordValue::String("OrderBookDelta".to_string()))
+                    .with_value("side", RecordValue::Int(*side as i64))
+                    .with_value("price", RecordValue::Float(*price))
+                    .with_value("volume", RecordValue::Int(*volume));
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // 交易所逐笔数据转换
+            // ═══════════════════════════════════════════════════════════════════
+            WalRecord::ExchangeOrderRecord {
+                exchange_order_id,
+                direction,
+                offset,
+                price_type,
+                price,
+                volume,
+                ..
+            } => {
+                result = result
+                    .with_value("record_type", RecordValue::String("ExchangeOrderRecord".to_string()))
+                    .with_value("exchange_order_id", RecordValue::Int(*exchange_order_id))
+                    .with_value("direction", RecordValue::Int(*direction as i64))
+                    .with_value("offset", RecordValue::Int(*offset as i64))
+                    .with_value("price_type", RecordValue::Int(*price_type as i64))
+                    .with_value("price", RecordValue::Float(*price))
+                    .with_value("volume", RecordValue::Float(*volume));
+            }
+
+            WalRecord::ExchangeTradeRecord {
+                buy_exchange_order_id,
+                sell_exchange_order_id,
+                deal_price,
+                deal_volume,
+                trade_id,
+                ..
+            } => {
+                result = result
+                    .with_value("record_type", RecordValue::String("ExchangeTradeRecord".to_string()))
+                    .with_value("buy_order_id", RecordValue::Int(*buy_exchange_order_id))
+                    .with_value("sell_order_id", RecordValue::Int(*sell_exchange_order_id))
+                    .with_value("deal_price", RecordValue::Float(*deal_price))
+                    .with_value("deal_volume", RecordValue::Float(*deal_volume))
+                    .with_value("trade_id", RecordValue::Int(*trade_id));
+            }
+
+            WalRecord::ExchangeResponseRecord {
+                response_type,
+                exchange_order_id,
+                trade_id,
+                volume,
+                price,
+                ..
+            } => {
+                result = result
+                    .with_value("record_type", RecordValue::String("ExchangeResponseRecord".to_string()))
+                    .with_value("response_type", RecordValue::Int(*response_type as i64))
+                    .with_value("exchange_order_id", RecordValue::Int(*exchange_order_id))
+                    .with_value("trade_id", RecordValue::Int(*trade_id))
+                    .with_value("volume", RecordValue::Float(*volume))
+                    .with_value("price", RecordValue::Float(*price));
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // 因子数据转换
+            // ═══════════════════════════════════════════════════════════════════
+            WalRecord::FactorUpdate {
+                factor_id,
+                factor_type,
+                value,
+                values,
+                value_count,
+                is_valid,
+                source_timestamp,
+                ..
+            } => {
+                let factor_name = WalRecord::from_fixed_array(factor_id);
+                result = result
+                    .with_value("record_type", RecordValue::String("FactorUpdate".to_string()))
+                    .with_value("factor_id", RecordValue::String(factor_name))
+                    .with_value("factor_type", RecordValue::Int(*factor_type as i64))
+                    .with_value("value", RecordValue::Float(*value))
+                    .with_value("value_count", RecordValue::Int(*value_count as i64))
+                    .with_value("is_valid", RecordValue::Int(if *is_valid { 1 } else { 0 }))
+                    .with_value("source_timestamp", RecordValue::Int(*source_timestamp));
+
+                // 如果是向量类型，添加前几个值
+                if *factor_type == 1 && *value_count > 0 {
+                    for i in 0..(*value_count as usize).min(8) {
+                        result = result.with_value(
+                            &format!("value_{}", i),
+                            RecordValue::Float(values[i]),
+                        );
+                    }
+                }
+            }
+
+            WalRecord::FactorSnapshot {
+                snapshot_type,
+                factor_count,
+                factor_ids,
+                values,
+                update_count,
+                checkpoint_id,
+                ..
+            } => {
+                result = result
+                    .with_value("record_type", RecordValue::String("FactorSnapshot".to_string()))
+                    .with_value("snapshot_type", RecordValue::Int(*snapshot_type as i64))
+                    .with_value("factor_count", RecordValue::Int(*factor_count as i64))
+                    .with_value("update_count", RecordValue::Int(*update_count as i64))
+                    .with_value("checkpoint_id", RecordValue::Int(*checkpoint_id as i64));
+
+                // 添加因子名称和值
+                for i in 0..(*factor_count as usize).min(32) {
+                    let factor_name = WalRecord::from_fixed_array(&factor_ids[i]);
+                    if !factor_name.is_empty() {
+                        result = result.with_value(
+                            &format!("factor_{}", factor_name),
+                            RecordValue::Float(values[i]),
+                        );
+                    }
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // 其他记录类型（账户/用户管理，不参与批查询）
+            // ═══════════════════════════════════════════════════════════════════
+            WalRecord::AccountOpen { .. }
+            | WalRecord::UserRegister { .. }
+            | WalRecord::AccountBind { .. }
+            | WalRecord::Checkpoint { .. } => {
+                result = result.with_value("record_type", RecordValue::String("Metadata".to_string()));
             }
         }
 

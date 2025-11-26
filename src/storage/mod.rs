@@ -23,6 +23,9 @@ pub mod checkpoint;
 // WAL Recovery 模块（WAL恢复）
 pub mod recovery;
 
+// Unified Recovery 模块（统一流批恢复）
+pub mod unified_recovery;
+
 // OLTP → OLAP 转换模块
 pub mod conversion;
 
