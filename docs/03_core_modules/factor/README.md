@@ -321,7 +321,10 @@ for stmt in program.statements {
 
 - [增量算子详解](./incremental_operators.md) - 算子实现原理
 - [流批一体引擎](./stream_batch_engine.md) - 引擎架构设计
+- [因子 WAL 集成](./wal_persister.md) - 异步持久化与恢复 ✨ **新增**
 - [查询引擎](../storage/query_engine.md) - Polars SQL 集成
+- [压缩策略](../storage/compression.md) - 因子数据压缩配置
+- [二级索引](../storage/index.md) - 因子查询索引
 - [系统架构](../../02_architecture/system_overview.md) - 整体架构
 
 ---
@@ -335,6 +338,7 @@ src/factor/
 ├── dag.rs              # 因子 DAG 管理
 ├── state.rs            # 状态存储与检查点
 ├── view.rs             # 物化视图管理
+├── wal_persister.rs    # WAL 异步持久化 ✨ 新增
 └── operators/
     ├── mod.rs          # 算子模块导出
     ├── basic.rs        # 基础算子

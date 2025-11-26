@@ -1,7 +1,7 @@
 # QAExchange-RS 文档中心
 
-**版本**: v1.1.0
-**最后更新**: 2025-11-24
+**版本**: v1.2.0
+**最后更新**: 2025-11-26
 
 欢迎使用 QAExchange-RS 文档！本文档中心提供完整的系统架构、API 参考、集成指南和开发文档。
 
@@ -35,6 +35,8 @@
 - [WAL 设计](./03_core_modules/storage/wal.md) - Write-Ahead Log 崩溃恢复
 - [MemTable 实现](./03_core_modules/storage/memtable.md) - OLTP/OLAP 内存表
 - [SSTable 格式](./03_core_modules/storage/sstable.md) - rkyv/Parquet 持久化
+- [压缩策略](./03_core_modules/storage/compression.md) - 按数据类型动态压缩 ✨ **新增**
+- [二级索引](./03_core_modules/storage/index.md) - 时序/合约/类型复合索引 ✨ **新增**
 - [查询引擎](./03_core_modules/storage/query_engine.md) - Polars SQL 查询
 - [复制系统](./03_core_modules/storage/replication.md) - 主从复制与故障转移
 
@@ -51,6 +53,7 @@
   - 增量算子 (RollingMean, EMA, RSI, MACD)
   - Factor DAG 依赖图
   - 物化视图缓存
+- [因子 WAL 集成](./03_core_modules/factor/wal_persister.md) - 异步持久化与恢复 ✨ **新增**
 
 #### 集群管理 ✨ **新增**
 - [集群管理系统](./03_core_modules/cluster/README.md) - 一致性哈希分片
@@ -146,13 +149,14 @@
 - **架构师**: [高性能架构](./02_architecture/high_performance.md) → [高级主题](./08_advanced/)
 
 ### 按主题查找
-- **性能优化**: [高性能架构](./02_architecture/high_performance.md), [解耦存储](./02_architecture/decoupled_storage.md)
-- **数据持久化**: [WAL](./03_core_modules/storage/wal.md), [SSTable](./03_core_modules/storage/sstable.md)
+- **性能优化**: [高性能架构](./02_architecture/high_performance.md), [解耦存储](./02_architecture/decoupled_storage.md), [压缩策略](./03_core_modules/storage/compression.md), [二级索引](./03_core_modules/storage/index.md)
+- **数据持久化**: [WAL](./03_core_modules/storage/wal.md), [SSTable](./03_core_modules/storage/sstable.md), [压缩策略](./03_core_modules/storage/compression.md)
 - **市场数据**: [快照生成器](./03_core_modules/market/snapshot_generator.md), [K线聚合系统](./03_core_modules/market/kline.md), [K线实时推送](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md)
 - **协议集成**: [DIFF 协议](./04_api/websocket/diff_protocol.md), [数据模型](./02_architecture/data_models.md)
 - **WebSocket**: [协议规范](./04_api/websocket/protocol.md), [前端集成](./05_integration/frontend/integration_guide.md), [K线推送](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md)
 - **测试部署**: [测试指南](./06_development/testing.md), [K线测试](./06_development/KLINE_TESTING_GUIDE.md), [部署指南](./06_development/deployment.md)
-- **因子计算**: [因子系统](./03_core_modules/factor/README.md) - 流批一体化、增量算子、DAG 依赖 ✨ **新增**
+- **因子计算**: [因子系统](./03_core_modules/factor/README.md), [因子 WAL 集成](./03_core_modules/factor/wal_persister.md) - 流批一体化、增量算子、DAG 依赖、异步持久化 ✨ **更新**
+- **二级索引**: [索引系统](./03_core_modules/storage/index.md) - 时序索引、合约索引、类型索引、复合查询 ✨ **新增**
 - **集群管理**: [集群系统](./03_core_modules/cluster/README.md) - 一致性哈希、分片路由、副本分布 ✨ **新增**
 - **查询引擎**: [查询引擎](./03_core_modules/storage/query_engine.md) - Polars SQL、流批混合查询 ✨ **更新**
 
@@ -164,7 +168,7 @@
 |------|------|----------|------|
 | 快速开始 | v1.0.0 | 2025-10-06 | ✅ 完整 |
 | 系统架构 | v0.4.0 | 2025-11-24 | ✅ 完整（新增因子/集群/DSL层） |
-| 核心模块 | v1.1.0 | 2025-11-24 | ✅ 完整（新增因子/集群模块） |
+| 核心模块 | v1.2.0 | 2025-11-26 | ✅ 完整（新增压缩策略/二级索引/因子WAL） |
 | API 参考 | v1.0.0 | 2025-10-06 | ✅ 完整 |
 | 集成指南 | v1.0.0 | 2025-10-06 | ✅ 完整 |
 | 开发指南 | v1.0.0 | 2025-10-07 | ✅ 完整（新增K线测试） |
@@ -188,5 +192,5 @@
 
 ---
 
-**最后更新**: 2025-11-24
+**最后更新**: 2025-11-26
 **维护者**: QAExchange-RS 开发团队

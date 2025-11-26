@@ -31,6 +31,8 @@
     - [WAL 设计](03_core_modules/storage/wal.md)
     - [MemTable 实现](03_core_modules/storage/memtable.md)
     - [SSTable 格式](03_core_modules/storage/sstable.md)
+    - [压缩策略](03_core_modules/storage/compression.md)
+    - [二级索引](03_core_modules/storage/index.md)
     - [查询引擎](03_core_modules/storage/query_engine.md)
     - [复制系统](03_core_modules/storage/replication.md)
   - [市场数据模块]()
@@ -40,6 +42,9 @@
   - [通知系统]()
     - [架构设计](03_core_modules/notification/architecture.md)
     - [订阅过滤](03_core_modules/notification/subscription.md)
+  - [因子计算系统]()
+    - [因子系统概览](03_core_modules/factor/README.md)
+    - [因子 WAL 集成](03_core_modules/factor/wal_persister.md)
 
 ---
 
