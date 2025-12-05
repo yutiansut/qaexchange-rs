@@ -865,7 +865,8 @@ impl TradeGateway {
 
     /// 处理撤单成功回报 (Phase 3)
     ///
-    /// 交易所撤单成功，推送CancelAccepted回报给账户
+    /// 交易所撤单成功，推送CANCELLED状态回报给账户，并释放冻结资金
+    /// ✨ 修复：添加 qa_order_id 参数，用于调用 qars cancel_order 释放冻结资金 @yutiansut @quantaxis
     pub fn handle_cancel_accepted_new(
         &self,
         exchange: &str,
@@ -878,8 +879,38 @@ impl TradeGateway {
         price_type: &str,
         price: f64,
         remaining_volume: f64,
+        qa_order_id: &str, // ✨ 新增：qars 内部订单ID，用于释放冻结资金
     ) -> Result<(), ExchangeError> {
         let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
+
+        // ✨ 释放冻结资金：调用 qars cancel_order @yutiansut @quantaxis
+        // user_id 在 qaexchange 中实际是 account_id
+        if let Ok(account) = self.account_mgr.get_account(user_id) {
+            let mut acc = account.write();
+            match acc.cancel_order(qa_order_id) {
+                Ok(cancelled_order) => {
+                    log::info!(
+                        "Frozen funds released for cancelled order: qa_order_id={}, account={}, released_order={}",
+                        qa_order_id,
+                        user_id,
+                        cancelled_order.order_id
+                    );
+                }
+                Err(_) => {
+                    // 可能订单已经成交或已被取消，frozen 中不存在
+                    log::warn!(
+                        "Failed to release frozen funds (may already be released): qa_order_id={}, account={}",
+                        qa_order_id,
+                        user_id
+                    );
+                }
+            }
+        } else {
+            log::error!(
+                "Account not found when releasing frozen funds: user_id={}",
+                user_id
+            );
+        }
 
         let order_status = OrderStatusNotification {
             exchange_id: exchange.to_string(),
@@ -900,11 +931,12 @@ impl TradeGateway {
         self.emit_order_status(order_status)?;
 
         log::info!(
-            "Cancel accepted: exchange_order_id={}, instrument={}, user={}, order_id={}",
+            "Cancel accepted: exchange_order_id={}, instrument={}, user={}, order_id={}, qa_order_id={}",
             exchange_order_id,
             instrument_id,
             user_id,
-            order_id
+            order_id,
+            qa_order_id
         );
 
         Ok(())

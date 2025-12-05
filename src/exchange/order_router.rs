@@ -1024,21 +1024,20 @@ impl OrderRouter {
                 // 订单被撤销
                 log::info!("Order {} cancelled at {}", order_id, ts);
 
-                // 更新订单状态
-                if let Some(order_info) = self.orders.get(order_id) {
+                // 更新订单状态，并获取 qa_order_id 用于释放冻结资金
+                // ✨ 修复：获取 qa_order_id 传递给 handle_cancel_accepted_new @yutiansut @quantaxis
+                let (qa_order_id, remaining_volume) = if let Some(order_info) = self.orders.get(order_id) {
                     let mut info = order_info.write();
                     info.status = OrderStatus::Cancelled;
                     info.update_time = ts;
-                }
-
-                let remaining_volume = if let Some(order_info) = self.orders.get(order_id) {
-                    let info = order_info.read();
-                    info.order.volume_orign - info.filled_volume
+                    let remaining = info.order.volume_orign - info.filled_volume;
+                    (info.qa_order_id.clone(), remaining)
                 } else {
-                    order.volume_orign
+                    (String::new(), order.volume_orign)
                 };
 
                 // Phase 6: 使用新的 handle_cancel_accepted_new (交易所推送CANCEL_ACCEPTED回报)
+                // ✨ 修复：传递 qa_order_id 用于调用 qars cancel_order 释放冻结资金 @yutiansut @quantaxis
                 self.trade_gateway.handle_cancel_accepted_new(
                     &order.exchange_id,
                     &order.instrument_id,
@@ -1050,6 +1049,7 @@ impl OrderRouter {
                     &order.price_type,
                     order.limit_price,
                     remaining_volume,
+                    &qa_order_id, // ✨ 新增：传递 qars 订单ID 释放冻结资金
                 )?;
 
                 log::debug!(
@@ -1165,6 +1165,8 @@ impl OrderRouter {
 
         let instrument_id = info.order.instrument_id.clone();
         let direction_str = info.order.direction.clone();
+        // ✨ 保存订单信息用于后续处理 @yutiansut @quantaxis
+        let order = info.order.clone();
 
         // 释放写锁，避免在调用撮合引擎时持有锁
         drop(info);
@@ -1209,12 +1211,17 @@ impl OrderRouter {
         drop(ob);
 
         // 处理撤单结果
+        // ✨ 修复：必须调用 handle_success_result 来处理 Success::Cancelled 事件
+        // 这样才能触发 handle_cancel_accepted_new 释放冻结资金 @yutiansut @quantaxis
         for result in results {
             match result {
                 Ok(success) => {
                     log::info!("Cancel order success: {:?}", success);
-                    // 撤单成功后会收到 Success::Cancelled 事件，由 handle_success_result 处理
-                    // 这里不需要额外处理
+                    // ✨ 调用 handle_success_result 处理撤单成功事件
+                    // 这会触发 Success::Cancelled 分支，更新订单状态并释放冻结资金
+                    if let Err(e) = self.handle_success_result(&req.order_id, &order, success) {
+                        log::error!("Failed to handle cancel success result: {:?}", e);
+                    }
                 }
                 Err(failed) => {
                     log::error!("Cancel order failed: {:?}", failed);
