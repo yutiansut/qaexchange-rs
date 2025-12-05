@@ -18,6 +18,26 @@
 //!   |<----- ACK -------------|                    |
 //!   |<----- ACK ----------------------------|     |
 //! ```
+//!
+//! ## gRPC 服务启动示例
+//!
+//! ```rust,no_run
+//! use qaexchange::replication::{
+//!     GrpcConfig, ReplicationContext, ReplicationServiceImpl,
+//!     RoleManager, LogReplicator, ReplicationConfig, NodeRole,
+//! };
+//! use std::sync::Arc;
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let role_mgr = Arc::new(RoleManager::new("node1".to_string(), NodeRole::Master));
+//!     let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+//!     let ctx = Arc::new(ReplicationContext::new("node1".to_string(), role_mgr, replicator));
+//!
+//!     let config = GrpcConfig::default();
+//!     ReplicationServiceImpl::serve(ctx, config).await.unwrap();
+//! }
+//! ```
 
 pub mod failover;
 pub mod grpc;
@@ -29,7 +49,11 @@ pub mod role;
 pub use failover::FailoverCoordinator;
 pub use grpc::{
     ClusterManager, ClusterNode, GrpcConfig, ReplicationClient, ReplicationContext,
-    ReplicationServiceImpl,
+    ReplicationServiceImpl, internal_to_proto_log_entry,
+    // Proto types re-export
+    proto, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse,
+    VoteRequest, VoteResponse, SnapshotChunk, SnapshotResponse, NodeStatus, RecordType,
+    ReplicationService, ReplicationServiceServer, ReplicationServiceClient,
 };
 pub use heartbeat::HeartbeatManager;
 pub use protocol::{LogEntry, ReplicationMessage, ReplicationRequest, ReplicationResponse};

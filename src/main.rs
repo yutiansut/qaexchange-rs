@@ -177,6 +177,9 @@ impl ExchangeServer {
                     base_path: config.storage_path.clone(),
                     memtable_size_bytes: 1 * 1024 * 1024, // 1MB（降低阈值以便测试）
                     estimated_entry_size: 512,
+                    enable_olap_conversion: false,        // 用户数据不需要 OLAP 转换
+                    olap_conversion_threshold: 10,
+                    olap_conversion_age_seconds: 3600 * 24,
                 },
             )
             .expect("Failed to create user storage"),
@@ -292,6 +295,9 @@ impl ExchangeServer {
                     base_path: config.storage_path.clone(),
                     memtable_size_bytes: 2 * 1024 * 1024, // 2MB（降低阈值以便测试，生产环境建议 64MB）
                     estimated_entry_size: 256,            // TickData + OrderBookSnapshot 平均大小
+                    enable_olap_conversion: true,         // 市场数据启用 OLAP 转换（历史分析用）
+                    olap_conversion_threshold: 10,
+                    olap_conversion_age_seconds: 3600 * 24, // 1 天前的数据转换为 OLAP
                 },
             )
             .expect("Failed to create market data storage"),
@@ -550,6 +556,9 @@ impl ExchangeServer {
                 base_path: self.config.storage_path.clone(),
                 memtable_size_bytes: 2 * 1024 * 1024, // 2 MB（降低阈值以便测试）
                 estimated_entry_size: 256,
+                enable_olap_conversion: true,         // 订阅存储启用 OLAP 转换
+                olap_conversion_threshold: 10,
+                olap_conversion_age_seconds: 3600 * 24, // 1 天前的数据转换为 OLAP
             },
             batch_size: 100,
             batch_timeout_ms: 10,

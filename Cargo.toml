@@ -114,6 +114,15 @@ polars = { version = "0.51", features = ["lazy", "sql", "parquet", "dtype-full",
 # 零拷贝 IPC (可选)
 iceoryx2 = { version = "0.4", optional = true }  # 共享内存零拷贝通信
 
+# gRPC 流式传输
+tokio-stream = "0.1"
+
+# 系统信息采集
+sysinfo = "0.31"
+
+[build-dependencies]
+tonic-build = "0.12"
+
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.12"

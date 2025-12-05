@@ -695,41 +695,44 @@ impl OrderRouter {
                                 self.handle_success_result(order_id, order, success.clone())?;
                                 handled_trade = true;
                             } else {
-                                // 第二个事件：对手单的成交
-                                // 检查对手单是否在我们的订单簿中，如果在则更新状态
-                                log::debug!("🔍     Processing OPPOSITE order trade: engine_order_id={}, opposite={}", match_order_id, opposite_order_id);
+                                // 第二个事件：对手单（挂单方）的成交
+                                // qars 返回的第二个 Filled 事件中：
+                                // - match_order_id = 对手单（挂单方）的 engine_id
+                                // - opposite_order_id = 新订单（taker）的 engine_id
+                                // 我们需要用 match_order_id 找到对手单的 order_id 来更新其账户
+                                log::debug!("🔍     Processing MAKER order trade: maker_engine_id={}, taker_engine_id={}", match_order_id, opposite_order_id);
 
-                                // ✨ 修复：使用反向映射查找对手单的 order_id
-                                // 原逻辑: format!("O{:024}", opposite_order_id) → "O000000000000000000000001"
-                                // 实际格式: "O{timestamp}{seq}" → "O17640442296060000000001"
-                                if let Some(opposite_order_id_str) = self.engine_id_to_order.get(&opposite_order_id) {
-                                    let opposite_order_str = opposite_order_id_str.value().clone();
-                                    log::debug!("🔍     Found opposite order mapping: engine_id={} → order_id={}", opposite_order_id, opposite_order_str);
+                                // ✨ 关键修复：使用 match_order_id（对手单的engine_id）查找对手单的 order_id
+                                // 之前的 BUG：使用 opposite_order_id 查找，导致找到的是已处理的新订单
+                                // @yutiansut @quantaxis
+                                if let Some(maker_order_id_str) = self.engine_id_to_order.get(&match_order_id) {
+                                    let maker_order_str = maker_order_id_str.value().clone();
+                                    log::debug!("🔍     Found maker order mapping: engine_id={} → order_id={}", match_order_id, maker_order_str);
 
-                                    // 如果对手单在我们的订单簿中，更新它的状态
-                                    if self.orders.contains_key(&opposite_order_str) {
-                                        log::debug!("🔍     Found opposite order {} in our orderbook, updating status", opposite_order_str);
+                                    // 如果挂单方（maker）在我们的订单簿中，更新它的状态
+                                    if self.orders.contains_key(&maker_order_str) {
+                                        log::debug!("🔍     Found maker order {} in our orderbook, updating status", maker_order_str);
 
-                                        // 提取对手单信息用于处理
-                                        if let Some(opposite_info) = self.orders.get(&opposite_order_str) {
-                                            let opposite_order_data = opposite_info.read().order.clone();
-                                            // 处理对手单的成交
+                                        // 提取挂单方信息用于处理
+                                        if let Some(maker_info) = self.orders.get(&maker_order_str) {
+                                            let maker_order_data = maker_info.read().order.clone();
+                                            // 处理挂单方的成交 - 更新其账户持仓和资金
                                             self.handle_success_result(
-                                                &opposite_order_str,
-                                                &opposite_order_data,
+                                                &maker_order_str,
+                                                &maker_order_data,
                                                 success,
                                             )?;
                                         }
                                     } else {
                                         log::warn!(
-                                            "⚠️     Opposite order {} not found in our orderbook (inconsistent state!)",
-                                            opposite_order_str
+                                            "⚠️     Maker order {} not found in our orderbook (inconsistent state!)",
+                                            maker_order_str
                                         );
                                     }
                                 } else {
                                     log::debug!(
-                                        "🔍     Opposite order engine_id={} not in our exchange (external order), skipping",
-                                        opposite_order_id
+                                        "🔍     Maker order engine_id={} not in our exchange (external order), skipping",
+                                        match_order_id
                                     );
                                 }
                             }

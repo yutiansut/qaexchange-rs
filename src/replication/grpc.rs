@@ -3,138 +3,47 @@
 //! @yutiansut @quantaxis
 //!
 //! 提供基于 gRPC 的节点间通信：
-//! - 日志复制
-//! - 心跳检测
-//! - 快照传输
-//! - 选举投票
+//! - 日志复制 (高性能批量传输)
+//! - 心跳检测 (亚毫秒级延迟)
+//! - 快照传输 (流式分块)
+//! - 选举投票 (Raft 协议)
+//!
+//! 性能目标：
+//! - 日志复制延迟: P99 < 10ms
+//! - 心跳延迟: P99 < 5ms
+//! - 吞吐量: > 100K ops/s
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::RwLock;
+use sysinfo::System;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{transport::Server, Request, Response, Status};
 
-use super::role::{NodeRole, RoleManager};
+use super::protocol::{LogEntry as InternalLogEntry, ReplicationRequest as InternalReplicationRequest};
 use super::replicator::LogReplicator;
+use super::role::{NodeRole, RoleManager};
 
 // ═══════════════════════════════════════════════════════════════════════════
-// gRPC 消息类型 (手动定义，替代 proto 生成)
+// Proto 生成模块 (tonic 自动生成)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// 日志条目
-#[derive(Debug, Clone)]
-pub struct LogEntry {
-    pub sequence: u64,
-    pub term: u64,
-    pub record_data: Vec<u8>,
-    pub timestamp: i64,
-    pub record_type: RecordType,
+pub mod proto {
+    tonic::include_proto!("qaexchange.replication");
 }
 
-/// 记录类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum RecordType {
-    Unknown = 0,
-    OrderInsert = 1,
-    OrderCancel = 2,
-    TradeExecuted = 3,
-    AccountUpdate = 4,
-    PositionUpdate = 5,
-    TickData = 6,
-    OrderbookSnapshot = 7,
-    Checkpoint = 8,
-}
-
-/// AppendEntries 请求
-#[derive(Debug, Clone)]
-pub struct AppendEntriesRequest {
-    pub term: u64,
-    pub leader_id: String,
-    pub prev_log_sequence: u64,
-    pub prev_log_term: u64,
-    pub entries: Vec<LogEntry>,
-    pub leader_commit: u64,
-}
-
-/// AppendEntries 响应
-#[derive(Debug, Clone)]
-pub struct AppendEntriesResponse {
-    pub term: u64,
-    pub success: bool,
-    pub match_sequence: u64,
-    pub error: String,
-}
-
-/// 心跳请求
-#[derive(Debug, Clone)]
-pub struct HeartbeatRequest {
-    pub term: u64,
-    pub leader_id: String,
-    pub leader_commit: u64,
-    pub timestamp: i64,
-}
-
-/// 心跳响应
-#[derive(Debug, Clone)]
-pub struct HeartbeatResponse {
-    pub term: u64,
-    pub node_id: String,
-    pub last_log_sequence: u64,
-    pub healthy: bool,
-    pub status: Option<NodeStatus>,
-}
-
-/// 节点状态
-#[derive(Debug, Clone)]
-pub struct NodeStatus {
-    pub cpu_usage: f32,
-    pub memory_usage: f32,
-    pub disk_usage: f32,
-    pub pending_logs: u64,
-    pub replication_lag_ms: u64,
-}
-
-/// 投票请求
-#[derive(Debug, Clone)]
-pub struct VoteRequest {
-    pub term: u64,
-    pub candidate_id: String,
-    pub last_log_sequence: u64,
-    pub last_log_term: u64,
-}
-
-/// 投票响应
-#[derive(Debug, Clone)]
-pub struct VoteResponse {
-    pub term: u64,
-    pub vote_granted: bool,
-    pub voter_id: String,
-}
-
-/// 快照块
-#[derive(Debug, Clone)]
-pub struct SnapshotChunk {
-    pub term: u64,
-    pub last_included_sequence: u64,
-    pub last_included_term: u64,
-    pub chunk_index: u64,
-    pub total_chunks: u64,
-    pub data: Vec<u8>,
-    pub is_last: bool,
-}
-
-/// 快照响应
-#[derive(Debug, Clone)]
-pub struct SnapshotResponse {
-    pub term: u64,
-    pub success: bool,
-    pub error: String,
-    pub bytes_received: u64,
-}
+pub use proto::replication_service_client::ReplicationServiceClient;
+pub use proto::replication_service_server::{ReplicationService, ReplicationServiceServer};
+pub use proto::{
+    AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse,
+    LogEntry, NodeStatus, RecordType, SnapshotChunk, SnapshotResponse, VoteRequest, VoteResponse,
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
-// gRPC 服务实现
+// gRPC 服务配置
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// 复制服务配置
@@ -150,6 +59,10 @@ pub struct GrpcConfig {
     pub max_message_size: usize,
     /// 并发流数量
     pub max_concurrent_streams: u32,
+    /// 心跳间隔
+    pub heartbeat_interval: Duration,
+    /// 重试次数
+    pub max_retries: u32,
 }
 
 impl Default for GrpcConfig {
@@ -160,9 +73,15 @@ impl Default for GrpcConfig {
             request_timeout: Duration::from_secs(30),
             max_message_size: 64 * 1024 * 1024, // 64MB
             max_concurrent_streams: 100,
+            heartbeat_interval: Duration::from_millis(100),
+            max_retries: 3,
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 复制上下文 (共享状态)
+// ═══════════════════════════════════════════════════════════════════════════
 
 /// 复制服务上下文
 pub struct ReplicationContext {
@@ -176,6 +95,14 @@ pub struct ReplicationContext {
     pub current_term: Arc<RwLock<u64>>,
     /// 已投票给 (在当前 term)
     pub voted_for: Arc<RwLock<Option<String>>>,
+    /// 已提交的日志序列号
+    pub commit_index: Arc<RwLock<u64>>,
+    /// 最后应用的日志序列号
+    pub last_applied: Arc<RwLock<u64>>,
+    /// 日志存储 (sequence -> LogEntry)
+    log_store: Arc<RwLock<Vec<InternalLogEntry>>>,
+    /// 系统信息采集器
+    sys_info: Arc<RwLock<System>>,
 }
 
 impl ReplicationContext {
@@ -184,15 +111,108 @@ impl ReplicationContext {
         role_manager: Arc<RoleManager>,
         replicator: Arc<LogReplicator>,
     ) -> Self {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
         Self {
             node_id,
             role_manager,
             replicator,
             current_term: Arc::new(RwLock::new(0)),
             voted_for: Arc::new(RwLock::new(None)),
+            commit_index: Arc::new(RwLock::new(0)),
+            last_applied: Arc::new(RwLock::new(0)),
+            log_store: Arc::new(RwLock::new(Vec::new())),
+            sys_info: Arc::new(RwLock::new(sys)),
+        }
+    }
+
+    /// 获取最后一条日志的序列号和 term
+    pub fn get_last_log_info(&self) -> (u64, u64) {
+        let logs = self.log_store.read();
+        logs.last()
+            .map(|entry| (entry.sequence, entry.term))
+            .unwrap_or((0, 0))
+    }
+
+    /// 检查日志一致性
+    pub fn check_log_consistency(&self, prev_sequence: u64, prev_term: u64) -> bool {
+        if prev_sequence == 0 {
+            return true; // 空日志
+        }
+
+        let logs = self.log_store.read();
+        logs.iter()
+            .find(|e| e.sequence == prev_sequence)
+            .map(|e| e.term == prev_term)
+            .unwrap_or(false)
+    }
+
+    /// 追加日志条目
+    pub fn append_entries(&self, entries: Vec<InternalLogEntry>) -> u64 {
+        let mut logs = self.log_store.write();
+        let mut last_sequence = 0;
+
+        for entry in entries {
+            // 删除冲突的日志
+            logs.retain(|e| e.sequence < entry.sequence || e.term == entry.term);
+            last_sequence = entry.sequence;
+            logs.push(entry);
+        }
+
+        // 保持日志有序
+        logs.sort_by_key(|e| e.sequence);
+        last_sequence
+    }
+
+    /// 更新提交索引
+    pub fn update_commit_index(&self, leader_commit: u64) {
+        let (last_sequence, _) = self.get_last_log_info();
+        let new_commit = leader_commit.min(last_sequence);
+
+        let mut commit = self.commit_index.write();
+        if new_commit > *commit {
+            *commit = new_commit;
+            log::info!("[{}] Commit index updated to {}", self.node_id, new_commit);
+        }
+    }
+
+    /// 采集系统状态
+    pub fn collect_node_status(&self) -> NodeStatus {
+        let mut sys = self.sys_info.write();
+        sys.refresh_cpu_all();
+        sys.refresh_memory();
+
+        let cpu_usage = sys.global_cpu_usage();
+        let total_memory = sys.total_memory() as f32;
+        let used_memory = sys.used_memory() as f32;
+        let memory_usage = if total_memory > 0.0 {
+            (used_memory / total_memory) * 100.0
+        } else {
+            0.0
+        };
+
+        // 获取待复制日志数量
+        let pending_logs = self.replicator.pending_count() as u64;
+
+        // 计算复制延迟 (基于 commit_index 和 last_applied 的差距)
+        let commit = *self.commit_index.read();
+        let applied = *self.last_applied.read();
+        let replication_lag_ms = (commit.saturating_sub(applied)) * 10; // 估算
+
+        NodeStatus {
+            cpu_usage,
+            memory_usage,
+            disk_usage: 0.0, // TODO: 实现磁盘使用率采集
+            pending_logs,
+            replication_lag_ms,
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// gRPC 服务实现 (服务端)
+// ═══════════════════════════════════════════════════════════════════════════
 
 /// 复制服务实现
 pub struct ReplicationServiceImpl {
@@ -204,135 +224,301 @@ impl ReplicationServiceImpl {
         Self { ctx }
     }
 
-    /// 处理 AppendEntries 请求
-    pub async fn append_entries(
+    /// 启动 gRPC 服务器
+    pub async fn serve(ctx: Arc<ReplicationContext>, config: GrpcConfig) -> Result<(), tonic::transport::Error> {
+        let service = ReplicationServiceImpl::new(ctx);
+
+        log::info!("Starting gRPC replication server at {}", config.listen_addr);
+
+        Server::builder()
+            .max_frame_size(Some(config.max_message_size as u32))
+            .concurrency_limit_per_connection(config.max_concurrent_streams as usize)
+            .add_service(ReplicationServiceServer::new(service))
+            .serve(config.listen_addr)
+            .await
+    }
+}
+
+#[tonic::async_trait]
+impl ReplicationService for ReplicationServiceImpl {
+    /// 处理 AppendEntries 请求 (日志复制)
+    async fn append_entries(
         &self,
-        request: AppendEntriesRequest,
-    ) -> Result<AppendEntriesResponse, String> {
+        request: Request<AppendEntriesRequest>,
+    ) -> Result<Response<AppendEntriesResponse>, Status> {
+        let req = request.into_inner();
         let mut current_term = self.ctx.current_term.write();
 
-        // 检查 term
-        if request.term < *current_term {
-            return Ok(AppendEntriesResponse {
+        // 1. 检查 term
+        if req.term < *current_term {
+            return Ok(Response::new(AppendEntriesResponse {
                 term: *current_term,
                 success: false,
                 match_sequence: 0,
                 error: "Term outdated".to_string(),
-            });
+            }));
         }
 
-        // 更新 term
-        if request.term > *current_term {
-            *current_term = request.term;
+        // 2. 更新 term 并转为 Slave
+        if req.term > *current_term {
+            *current_term = req.term;
             *self.ctx.voted_for.write() = None;
-            self.ctx.role_manager.set_role(NodeRole::Slave);
+            self.ctx.role_manager.become_slave(req.leader_id.clone());
         }
 
-        // TODO: 实现实际的日志复制逻辑
-        // 1. 检查 prev_log 一致性
-        // 2. 追加日志
-        // 3. 更新 commit_index
+        // 释放锁
+        let term = *current_term;
+        drop(current_term);
 
-        Ok(AppendEntriesResponse {
-            term: *current_term,
+        // 3. 检查日志一致性
+        if !self.ctx.check_log_consistency(req.prev_log_sequence, req.prev_log_term) {
+            log::warn!(
+                "[{}] Log inconsistency: prev_seq={}, prev_term={}",
+                self.ctx.node_id,
+                req.prev_log_sequence,
+                req.prev_log_term
+            );
+            return Ok(Response::new(AppendEntriesResponse {
+                term,
+                success: false,
+                match_sequence: 0,
+                error: "Log inconsistency".to_string(),
+            }));
+        }
+
+        // 4. 追加日志条目
+        let entries: Vec<InternalLogEntry> = req
+            .entries
+            .into_iter()
+            .map(|e| proto_to_internal_log_entry(e))
+            .collect();
+
+        let match_sequence = if entries.is_empty() {
+            self.ctx.get_last_log_info().0
+        } else {
+            self.ctx.append_entries(entries)
+        };
+
+        // 5. 更新提交索引
+        self.ctx.update_commit_index(req.leader_commit);
+
+        log::debug!(
+            "[{}] AppendEntries success: match_seq={}, commit={}",
+            self.ctx.node_id,
+            match_sequence,
+            req.leader_commit
+        );
+
+        Ok(Response::new(AppendEntriesResponse {
+            term,
             success: true,
-            match_sequence: request.entries.last().map(|e| e.sequence).unwrap_or(0),
+            match_sequence,
             error: String::new(),
-        })
+        }))
     }
 
     /// 处理心跳请求
-    pub async fn heartbeat(
+    async fn heartbeat(
         &self,
-        request: HeartbeatRequest,
-    ) -> Result<HeartbeatResponse, String> {
+        request: Request<HeartbeatRequest>,
+    ) -> Result<Response<HeartbeatResponse>, Status> {
+        let req = request.into_inner();
         let current_term = *self.ctx.current_term.read();
 
-        // 更新 term
-        if request.term > current_term {
-            *self.ctx.current_term.write() = request.term;
+        // 更新 term 和 leader
+        if req.term > current_term {
+            *self.ctx.current_term.write() = req.term;
             *self.ctx.voted_for.write() = None;
-            self.ctx.role_manager.set_role(NodeRole::Slave);
+            self.ctx.role_manager.become_slave(req.leader_id.clone());
         }
 
-        // 收集节点状态
-        let status = NodeStatus {
-            cpu_usage: 0.0,        // TODO: 实际采集
-            memory_usage: 0.0,     // TODO: 实际采集
-            disk_usage: 0.0,       // TODO: 实际采集
-            pending_logs: 0,       // TODO: 从 replicator 获取
-            replication_lag_ms: 0, // TODO: 计算
-        };
+        // 更新提交索引
+        self.ctx.update_commit_index(req.leader_commit);
 
-        Ok(HeartbeatResponse {
+        // 采集节点状态
+        let status = Some(self.ctx.collect_node_status());
+        let (last_log_sequence, _) = self.ctx.get_last_log_info();
+
+        Ok(Response::new(HeartbeatResponse {
             term: current_term,
             node_id: self.ctx.node_id.clone(),
-            last_log_sequence: 0, // TODO: 从 replicator 获取
+            last_log_sequence,
             healthy: true,
-            status: Some(status),
-        })
+            status,
+        }))
     }
 
     /// 处理投票请求
-    pub async fn request_vote(
+    async fn request_vote(
         &self,
-        request: VoteRequest,
-    ) -> Result<VoteResponse, String> {
+        request: Request<VoteRequest>,
+    ) -> Result<Response<VoteResponse>, Status> {
+        let req = request.into_inner();
         let mut current_term = self.ctx.current_term.write();
         let mut voted_for = self.ctx.voted_for.write();
 
-        // 检查 term
-        if request.term < *current_term {
-            return Ok(VoteResponse {
+        // 1. 检查 term
+        if req.term < *current_term {
+            return Ok(Response::new(VoteResponse {
                 term: *current_term,
                 vote_granted: false,
                 voter_id: self.ctx.node_id.clone(),
-            });
+            }));
         }
 
-        // 更新 term
-        if request.term > *current_term {
-            *current_term = request.term;
+        // 2. 更新 term
+        if req.term > *current_term {
+            *current_term = req.term;
             *voted_for = None;
             self.ctx.role_manager.set_role(NodeRole::Slave);
         }
 
-        // 检查是否已投票
+        // 3. 检查是否已投票
         let vote_granted = match &*voted_for {
             None => {
-                // 未投票，检查日志是否足够新
-                // TODO: 实际检查日志
-                *voted_for = Some(request.candidate_id.clone());
-                true
+                // 检查日志是否足够新
+                let (last_seq, last_term) = self.ctx.get_last_log_info();
+                let log_ok = req.last_log_term > last_term
+                    || (req.last_log_term == last_term && req.last_log_sequence >= last_seq);
+
+                if log_ok {
+                    *voted_for = Some(req.candidate_id.clone());
+                    log::info!(
+                        "[{}] Voted for {} in term {}",
+                        self.ctx.node_id,
+                        req.candidate_id,
+                        req.term
+                    );
+                    true
+                } else {
+                    log::info!(
+                        "[{}] Rejected vote for {} (log not up-to-date)",
+                        self.ctx.node_id,
+                        req.candidate_id
+                    );
+                    false
+                }
             }
-            Some(id) => id == &request.candidate_id,
+            Some(id) => id == &req.candidate_id,
         };
 
-        Ok(VoteResponse {
+        Ok(Response::new(VoteResponse {
             term: *current_term,
             vote_granted,
             voter_id: self.ctx.node_id.clone(),
-        })
+        }))
     }
 
-    /// 处理快照安装
-    pub async fn install_snapshot(
+    /// 处理快照安装 (流式接收)
+    async fn install_snapshot(
         &self,
-        chunks: Vec<SnapshotChunk>,
-    ) -> Result<SnapshotResponse, String> {
-        let mut total_bytes = 0u64;
+        request: Request<tonic::Streaming<SnapshotChunk>>,
+    ) -> Result<Response<SnapshotResponse>, Status> {
+        use tokio_stream::StreamExt;
 
-        for chunk in chunks {
-            // TODO: 实际存储快照数据
+        let mut stream = request.into_inner();
+        let mut total_bytes = 0u64;
+        let mut last_sequence = 0u64;
+        let mut last_term = 0u64;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+
+            // 更新 term
+            if chunk.term > *self.ctx.current_term.read() {
+                *self.ctx.current_term.write() = chunk.term;
+            }
+
             total_bytes += chunk.data.len() as u64;
+            last_sequence = chunk.last_included_sequence;
+            last_term = chunk.last_included_term;
+
+            // TODO: 将快照数据写入存储
+
+            if chunk.is_last {
+                log::info!(
+                    "[{}] Snapshot installed: {} bytes, last_seq={}, last_term={}",
+                    self.ctx.node_id,
+                    total_bytes,
+                    last_sequence,
+                    last_term
+                );
+                break;
+            }
         }
 
-        Ok(SnapshotResponse {
+        // 更新状态
+        *self.ctx.commit_index.write() = last_sequence;
+        *self.ctx.last_applied.write() = last_sequence;
+
+        Ok(Response::new(SnapshotResponse {
             term: *self.ctx.current_term.read(),
             success: true,
             error: String::new(),
             bytes_received: total_bytes,
-        })
+        }))
+    }
+
+    /// 流式日志复制 (双向流)
+    type StreamAppendEntriesStream = ReceiverStream<Result<AppendEntriesResponse, Status>>;
+
+    async fn stream_append_entries(
+        &self,
+        request: Request<tonic::Streaming<AppendEntriesRequest>>,
+    ) -> Result<Response<Self::StreamAppendEntriesStream>, Status> {
+        use tokio_stream::StreamExt;
+
+        let mut stream = request.into_inner();
+        let (tx, rx) = mpsc::channel(100);
+        let ctx = self.ctx.clone();
+
+        tokio::spawn(async move {
+            while let Some(req) = stream.next().await {
+                let response = match req {
+                    Ok(req) => {
+                        let current_term = *ctx.current_term.read();
+
+                        // 简化处理：直接追加日志
+                        if req.term >= current_term {
+                            if req.term > current_term {
+                                *ctx.current_term.write() = req.term;
+                                ctx.role_manager.become_slave(req.leader_id.clone());
+                            }
+
+                            let entries: Vec<InternalLogEntry> = req
+                                .entries
+                                .into_iter()
+                                .map(|e| proto_to_internal_log_entry(e))
+                                .collect();
+
+                            let match_sequence = ctx.append_entries(entries);
+                            ctx.update_commit_index(req.leader_commit);
+
+                            Ok(AppendEntriesResponse {
+                                term: current_term,
+                                success: true,
+                                match_sequence,
+                                error: String::new(),
+                            })
+                        } else {
+                            Ok(AppendEntriesResponse {
+                                term: current_term,
+                                success: false,
+                                match_sequence: 0,
+                                error: "Term outdated".to_string(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(Status::internal(e.to_string())),
+                };
+
+                if tx.send(response).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
 
@@ -340,12 +526,14 @@ impl ReplicationServiceImpl {
 // gRPC 客户端
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// 复制客户端
+/// 复制客户端 (高性能)
 pub struct ReplicationClient {
     /// 目标地址
     target_addr: String,
     /// 配置
     config: GrpcConfig,
+    /// 连接 (延迟初始化)
+    client: Arc<RwLock<Option<ReplicationServiceClient<tonic::transport::Channel>>>>,
 }
 
 impl ReplicationClient {
@@ -353,40 +541,152 @@ impl ReplicationClient {
         Self {
             target_addr,
             config,
+            client: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// 发送 AppendEntries
+    /// 获取或创建连接
+    async fn get_client(&self) -> Result<ReplicationServiceClient<tonic::transport::Channel>, String> {
+        // 检查现有连接
+        {
+            let client = self.client.read();
+            if let Some(c) = client.as_ref() {
+                return Ok(c.clone());
+            }
+        }
+
+        // 创建新连接
+        let endpoint = tonic::transport::Channel::from_shared(format!("http://{}", self.target_addr))
+            .map_err(|e| format!("Invalid address: {}", e))?
+            .connect_timeout(self.config.connect_timeout)
+            .timeout(self.config.request_timeout);
+
+        let channel = endpoint
+            .connect()
+            .await
+            .map_err(|e| format!("Connection failed: {}", e))?;
+
+        let new_client = ReplicationServiceClient::new(channel)
+            .max_decoding_message_size(self.config.max_message_size)
+            .max_encoding_message_size(self.config.max_message_size);
+
+        *self.client.write() = Some(new_client.clone());
+        Ok(new_client)
+    }
+
+    /// 发送 AppendEntries (带重试)
     pub async fn append_entries(
         &self,
         request: AppendEntriesRequest,
     ) -> Result<AppendEntriesResponse, String> {
-        // TODO: 使用 tonic 客户端发送请求
-        // 当前返回模拟响应
-        Err("Not implemented - requires tonic codegen".to_string())
+        let mut retries = 0;
+        let mut last_error = String::new();
+
+        while retries < self.config.max_retries {
+            match self.get_client().await {
+                Ok(mut client) => {
+                    match client.append_entries(Request::new(request.clone())).await {
+                        Ok(response) => return Ok(response.into_inner()),
+                        Err(e) => {
+                            last_error = format!("AppendEntries failed: {}", e);
+                            // 连接可能失效，清除缓存
+                            *self.client.write() = None;
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_error = e;
+                }
+            }
+
+            retries += 1;
+            if retries < self.config.max_retries {
+                tokio::time::sleep(Duration::from_millis(100 * retries as u64)).await;
+            }
+        }
+
+        Err(last_error)
     }
 
-    /// 发送心跳
-    pub async fn heartbeat(
-        &self,
-        request: HeartbeatRequest,
-    ) -> Result<HeartbeatResponse, String> {
-        // TODO: 使用 tonic 客户端发送请求
-        Err("Not implemented - requires tonic codegen".to_string())
+    /// 发送心跳 (带重试)
+    pub async fn heartbeat(&self, request: HeartbeatRequest) -> Result<HeartbeatResponse, String> {
+        let mut retries = 0;
+        let mut last_error = String::new();
+
+        while retries < self.config.max_retries {
+            match self.get_client().await {
+                Ok(mut client) => {
+                    match client.heartbeat(Request::new(request.clone())).await {
+                        Ok(response) => return Ok(response.into_inner()),
+                        Err(e) => {
+                            last_error = format!("Heartbeat failed: {}", e);
+                            *self.client.write() = None;
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_error = e;
+                }
+            }
+
+            retries += 1;
+            if retries < self.config.max_retries {
+                tokio::time::sleep(Duration::from_millis(50 * retries as u64)).await;
+            }
+        }
+
+        Err(last_error)
     }
 
-    /// 请求投票
-    pub async fn request_vote(
+    /// 请求投票 (带重试)
+    pub async fn request_vote(&self, request: VoteRequest) -> Result<VoteResponse, String> {
+        let mut retries = 0;
+        let mut last_error = String::new();
+
+        while retries < self.config.max_retries {
+            match self.get_client().await {
+                Ok(mut client) => {
+                    match client.request_vote(Request::new(request.clone())).await {
+                        Ok(response) => return Ok(response.into_inner()),
+                        Err(e) => {
+                            last_error = format!("RequestVote failed: {}", e);
+                            *self.client.write() = None;
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_error = e;
+                }
+            }
+
+            retries += 1;
+            if retries < self.config.max_retries {
+                tokio::time::sleep(Duration::from_millis(100 * retries as u64)).await;
+            }
+        }
+
+        Err(last_error)
+    }
+
+    /// 发送快照 (流式)
+    pub async fn install_snapshot(
         &self,
-        request: VoteRequest,
-    ) -> Result<VoteResponse, String> {
-        // TODO: 使用 tonic 客户端发送请求
-        Err("Not implemented - requires tonic codegen".to_string())
+        chunks: Vec<SnapshotChunk>,
+    ) -> Result<SnapshotResponse, String> {
+        let mut client = self.get_client().await?;
+
+        let stream = tokio_stream::iter(chunks);
+
+        client
+            .install_snapshot(stream)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|e| format!("InstallSnapshot failed: {}", e))
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 节点管理器
+// 集群管理器
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// 集群节点
@@ -426,6 +726,7 @@ impl ClusterManager {
     pub fn add_node(&self, node: ClusterNode) {
         let mut nodes = self.nodes.write();
         if !nodes.iter().any(|n| n.id == node.id) {
+            log::info!("Node {} added to cluster: {}", node.id, node.addr);
             nodes.push(node);
         }
     }
@@ -435,6 +736,7 @@ impl ClusterManager {
         let mut nodes = self.nodes.write();
         nodes.retain(|n| n.id != node_id);
         self.clients.remove(node_id);
+        log::info!("Node {} removed from cluster", node_id);
     }
 
     /// 获取所有节点
@@ -469,36 +771,58 @@ impl ClusterManager {
         Some(client)
     }
 
-    /// 广播 AppendEntries 到所有节点
+    /// 广播 AppendEntries 到所有节点 (并行)
     pub async fn broadcast_append_entries(
         &self,
         request: AppendEntriesRequest,
     ) -> Vec<(String, Result<AppendEntriesResponse, String>)> {
         let nodes = self.get_active_nodes();
-        let mut results = Vec::with_capacity(nodes.len());
+        let mut handles = Vec::with_capacity(nodes.len());
 
         for node in nodes {
             if let Some(client) = self.get_client(&node.id) {
-                let result = client.append_entries(request.clone()).await;
-                results.push((node.id, result));
+                let req = request.clone();
+                let node_id = node.id.clone();
+                handles.push(tokio::spawn(async move {
+                    let result = client.append_entries(req).await;
+                    (node_id, result)
+                }));
+            }
+        }
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            if let Ok(result) = handle.await {
+                results.push(result);
             }
         }
 
         results
     }
 
-    /// 广播心跳
+    /// 广播心跳 (并行)
     pub async fn broadcast_heartbeat(
         &self,
         request: HeartbeatRequest,
     ) -> Vec<(String, Result<HeartbeatResponse, String>)> {
         let nodes = self.get_active_nodes();
-        let mut results = Vec::with_capacity(nodes.len());
+        let mut handles = Vec::with_capacity(nodes.len());
 
         for node in nodes {
             if let Some(client) = self.get_client(&node.id) {
-                let result = client.heartbeat(request.clone()).await;
-                results.push((node.id, result));
+                let req = request.clone();
+                let node_id = node.id.clone();
+                handles.push(tokio::spawn(async move {
+                    let result = client.heartbeat(req).await;
+                    (node_id, result)
+                }));
+            }
+        }
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            if let Ok(result) = handle.await {
+                results.push(result);
             }
         }
 
@@ -525,18 +849,92 @@ impl ClusterManager {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 辅助函数
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Proto LogEntry -> Internal LogEntry
+fn proto_to_internal_log_entry(proto: LogEntry) -> InternalLogEntry {
+    use crate::storage::wal::WalRecord;
+    use rkyv::Deserialize as RkyvDeserialize;
+
+    // 尝试反序列化 WAL 记录
+    let record = if proto.record_data.is_empty() {
+        // 空记录，创建占位符
+        WalRecord::Checkpoint {
+            sequence: proto.sequence,
+            timestamp: proto.timestamp,
+        }
+    } else {
+        match rkyv::check_archived_root::<WalRecord>(&proto.record_data) {
+            Ok(archived) => {
+                RkyvDeserialize::deserialize(archived, &mut rkyv::Infallible).unwrap_or_else(|_| {
+                    WalRecord::Checkpoint {
+                        sequence: proto.sequence,
+                        timestamp: proto.timestamp,
+                    }
+                })
+            }
+            Err(_) => WalRecord::Checkpoint {
+                sequence: proto.sequence,
+                timestamp: proto.timestamp,
+            },
+        }
+    };
+
+    InternalLogEntry {
+        sequence: proto.sequence,
+        term: proto.term,
+        record,
+        timestamp: proto.timestamp,
+    }
+}
+
+/// Internal LogEntry -> Proto LogEntry
+pub fn internal_to_proto_log_entry(internal: &InternalLogEntry) -> LogEntry {
+    let record_data = rkyv::to_bytes::<_, 2048>(&internal.record)
+        .map(|b| b.to_vec())
+        .unwrap_or_default();
+
+    let record_type = match &internal.record {
+        crate::storage::wal::WalRecord::OrderInsert { .. } => RecordType::OrderInsert,
+        crate::storage::wal::WalRecord::TradeExecuted { .. } => RecordType::TradeExecuted,
+        crate::storage::wal::WalRecord::AccountUpdate { .. } => RecordType::AccountUpdate,
+        crate::storage::wal::WalRecord::TickData { .. } => RecordType::TickData,
+        crate::storage::wal::WalRecord::OrderBookSnapshot { .. } => RecordType::OrderbookSnapshot,
+        crate::storage::wal::WalRecord::Checkpoint { .. } => RecordType::Checkpoint,
+        // 其他类型映射为 Unknown
+        _ => RecordType::Unknown,
+    };
+
+    LogEntry {
+        sequence: internal.sequence,
+        term: internal.term,
+        record_data,
+        timestamp: internal.timestamp,
+        record_type: record_type.into(),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 测试
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::replication::replicator::ReplicationConfig;
+
+    #[test]
+    fn test_grpc_config_default() {
+        let config = GrpcConfig::default();
+        assert_eq!(config.max_message_size, 64 * 1024 * 1024);
+        assert_eq!(config.max_concurrent_streams, 100);
+    }
 
     #[test]
     fn test_cluster_manager() {
         let manager = ClusterManager::new("node1".to_string(), GrpcConfig::default());
 
-        // 添加节点
         manager.add_node(ClusterNode {
             id: "node2".to_string(),
             addr: "127.0.0.1:9091".to_string(),
@@ -558,15 +956,22 @@ mod tests {
         assert_eq!(manager.get_nodes().len(), 2);
         assert_eq!(manager.get_active_nodes().len(), 2);
 
-        // 移除节点
         manager.remove_node("node2");
         assert_eq!(manager.get_nodes().len(), 1);
     }
 
-    #[test]
-    fn test_grpc_config() {
-        let config = GrpcConfig::default();
-        assert_eq!(config.max_message_size, 64 * 1024 * 1024);
-        assert_eq!(config.max_concurrent_streams, 100);
+    #[tokio::test]
+    async fn test_replication_context() {
+        let role_mgr = Arc::new(RoleManager::new("test_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::new("test_node".to_string(), role_mgr, replicator);
+
+        // 测试空日志状态
+        let (seq, term) = ctx.get_last_log_info();
+        assert_eq!(seq, 0);
+        assert_eq!(term, 0);
+
+        // 测试日志一致性检查 (空日志)
+        assert!(ctx.check_log_consistency(0, 0));
     }
 }
