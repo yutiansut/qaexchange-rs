@@ -119,14 +119,16 @@ impl AccountManager {
         // 创建账户 (复用 QA_Account)
         // portfolio_cookie 使用 user_id，建立 User -> Account 关系
         // user_cookie 使用 account_name，对应 QIFI 的 investor_name
-        // environment 设置为 "real" 以启用完整的订单管理功能
+        // ✨ environment 设置为 "sim"：send_order 只冻结资金，由 receive_deal_sim 更新持仓
+        // 注意：不能用 "real"，否则 send_order 会立即调用 receive_deal_real 导致持仓双倍计算
+        // @yutiansut @quantaxis
         let account = QA_Account::new(
             &account_id,       // account_cookie (账户唯一标识)
             &req.user_id,      // portfolio_cookie (用户ID - 建立User关联)
             &req.account_name, // user_cookie (账户名称 -> QIFI investor_name)
             req.init_cash,     // init_cash
             false,             // auto_reload
-            "real",            // environment (必须是 "real" 才能使用 dailyorders)
+            "sim",             // environment (sim模式：send_order不立即成交，需等receive_deal_sim)
         );
 
         // 存储账户

@@ -962,7 +962,7 @@ impl TradeGateway {
     /// 返回: (status, volume_left, volume_orign) - 订单的当前状态
     fn update_account(
         &self,
-        user_id: &str,
+        account_id: &str, // ✨ 实际是 account_id，不是 user_id @yutiansut @quantaxis
         instrument_id: &str,
         direction: &str,
         offset: &str,
@@ -970,17 +970,18 @@ impl TradeGateway {
         volume: f64,
         qa_order_id: &str, // qars 内部订单ID（非交易所订单ID）
     ) -> Result<(String, f64, f64), ExchangeError> {
-        log::debug!("🔧 update_account called: user={}, instrument={}, {}  {}, price={}, volume={}, qa_order_id={}",
-            user_id, instrument_id, direction, offset, price, volume, qa_order_id);
+        log::debug!("🔧 update_account called: account={}, instrument={}, {}  {}, price={}, volume={}, qa_order_id={}",
+            account_id, instrument_id, direction, offset, price, volume, qa_order_id);
 
-        let account = self.account_mgr.get_default_account(user_id)?;
+        // ✨ 修复：使用 get_account 而非 get_default_account，因为传入的是 account_id
+        let account = self.account_mgr.get_account(account_id)?;
         let mut acc = account.write();
 
         // 检查成交前的持仓（详细）
         if let Some(pos) = acc.get_position(instrument_id) {
             log::debug!(
                 "🔧   BEFORE receive_deal_sim: {} position details:",
-                user_id
+                account_id
             );
             log::debug!("🔧     volume_short_today={}, volume_short_his={}, volume_short_frozen_today={}, volume_short_frozen_his={}",
                 pos.volume_short_today, pos.volume_short_his, pos.volume_short_frozen_today, pos.volume_short_frozen_his);
@@ -988,7 +989,7 @@ impl TradeGateway {
         } else {
             log::debug!(
                 "🔧   BEFORE receive_deal_sim: {} no position for {}",
-                user_id,
+                account_id,
                 instrument_id
             );
         }
@@ -1037,7 +1038,7 @@ impl TradeGateway {
             .map(|p| (p.volume_long_unmut(), p.volume_short_unmut()));
         log::debug!(
             "🔧   AFTER receive_deal_sim: {} position={:?}",
-            user_id,
+            account_id,
             pos_after
         );
 
@@ -1077,7 +1078,7 @@ impl TradeGateway {
 
         log::debug!(
             "Account updated: {} {} {} {} @ {} x {} | qa_order_id: {} | trade_id: {} | money: {:.2} | order_status={}, volume_left={}/{}",
-            user_id, direction, offset, instrument_id, price, volume, qa_order_id, trade_id, acc.money, status, volume_left, volume_orign
+            account_id, direction, offset, instrument_id, price, volume, qa_order_id, trade_id, acc.money, status, volume_left, volume_orign
         );
 
         Ok((status, volume_left, volume_orign))
@@ -1161,12 +1162,15 @@ impl TradeGateway {
     }
 
     /// 推送账户更新
-    fn push_account_update(&self, user_id: &str) -> Result<(), ExchangeError> {
-        let account = self.account_mgr.get_default_account(user_id)?;
+    /// ✨ 注意：参数实际是 account_id（由订单的 user_id 字段传入，但其值为 account_id）
+    /// @yutiansut @quantaxis
+    fn push_account_update(&self, account_id: &str) -> Result<(), ExchangeError> {
+        // ✨ 修复：使用 get_account 而非 get_default_account，因为传入的是 account_id
+        let account = self.account_mgr.get_account(account_id)?;
         let acc = account.read();
 
         let notification = AccountUpdateNotification {
-            user_id: user_id.to_string(),
+            user_id: account_id.to_string(), // ✨ 使用 account_id @yutiansut @quantaxis
             balance: acc.accounts.balance,
             available: acc.money,
             margin: acc.accounts.margin,
@@ -1181,7 +1185,7 @@ impl TradeGateway {
         if let Some(snapshot_mgr) = &self.snapshot_mgr {
             let patch = serde_json::json!({
                 "accounts": {
-                    user_id: {
+                    account_id: {  // ✨ 使用 account_id @yutiansut @quantaxis
                         "balance": acc.accounts.balance,
                         "available": acc.money,
                         "margin": acc.accounts.margin,
@@ -1192,9 +1196,9 @@ impl TradeGateway {
             });
 
             let snapshot_mgr = snapshot_mgr.clone();
-            let user_id = user_id.to_string();
+            let account_id_owned = account_id.to_string(); // ✨ 重命名避免变量遮蔽 @yutiansut @quantaxis
             tokio::spawn(async move {
-                snapshot_mgr.push_patch(&user_id, patch).await;
+                snapshot_mgr.push_patch(&account_id_owned, patch).await;
             });
         }
 
