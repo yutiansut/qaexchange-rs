@@ -360,6 +360,39 @@ export function getAccountDetail(userId) {
   })
 }
 
+// ============= 管理端 - 全市场订单/成交查询 API @yutiansut @quantaxis =============
+
+/**
+ * 获取全市场所有订单（管理端）
+ * @param {Object} params - 查询参数
+ * @param {number} params.page - 页码
+ * @param {number} params.page_size - 每页数量
+ * @param {string} params.status - 状态过滤
+ * @param {string} params.instrument_id - 合约过滤
+ */
+export function listAllOrders(params) {
+  return request({
+    url: '/management/orders',
+    method: 'get',
+    params
+  })
+}
+
+/**
+ * 获取全市场所有成交（管理端）
+ * @param {Object} params - 查询参数
+ * @param {number} params.page - 页码
+ * @param {number} params.page_size - 每页数量
+ * @param {string} params.instrument_id - 合约过滤
+ */
+export function listAllTrades(params) {
+  return request({
+    url: '/management/trades',
+    method: 'get',
+    params
+  })
+}
+
 // ============= 管理端 - 资金管理 API =============
 
 /**

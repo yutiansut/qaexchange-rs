@@ -175,6 +175,17 @@ impl TradeRecorder {
         id
     }
 
+    /// 获取所有成交记录 (管理端)
+    /// @yutiansut @quantaxis
+    pub fn get_all_trades(&self) -> Vec<TradeRecord> {
+        self.trades.iter().map(|r| r.value().clone()).collect()
+    }
+
+    /// 获取成交记录总数
+    pub fn get_trade_count(&self) -> usize {
+        self.trades.len()
+    }
+
     /// 清空所有记录
     pub fn clear(&self) {
         self.trades.clear();

@@ -668,12 +668,15 @@ impl ExchangeServer {
         };
         let admin_data = web::Data::new(admin_state);
 
-        // 创建管理端状态（账户管理、资金管理、风控监控）
+        // 创建管理端状态（账户管理、资金管理、风控监控、全市场订单/成交查询）
+        // @yutiansut @quantaxis
         let management_state = ManagementAppState {
             account_mgr: self.account_mgr.clone(),
             capital_mgr: self.capital_mgr.clone(),
             risk_monitor: self.risk_monitor.clone(),
             settlement_engine: self.settlement_engine.clone(),
+            order_router: self.order_router.clone(),
+            trade_recorder: self.matching_engine.get_trade_recorder(),
         };
         let management_data = web::Data::new(management_state);
 

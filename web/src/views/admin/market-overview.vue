@@ -137,10 +137,11 @@
             @change="loadAllOrders"
           >
             <el-option label="全部" value="" />
-            <el-option label="待成交" value="Pending" />
+            <el-option label="已提交" value="Submitted" />
             <el-option label="部分成交" value="PartiallyFilled" />
             <el-option label="已成交" value="Filled" />
             <el-option label="已撤销" value="Cancelled" />
+            <el-option label="已拒绝" value="Rejected" />
           </el-select>
           <el-input
             v-model="orderSearch"
@@ -265,7 +266,8 @@
 </template>
 
 <script>
-import { listAllAccounts, queryUserOrders } from '@/api'
+// @yutiansut @quantaxis - 使用高效的全市场 API
+import { listAllAccounts, listAllOrders } from '@/api'
 
 export default {
   name: 'MarketOverview',
@@ -322,8 +324,14 @@ export default {
     totalAccounts() {
       return this.accounts.length
     },
+    // 活跃订单数 (Submitted/PartiallyFilled/PendingRoute/PendingRisk)
     totalOrders() {
-      return this.allOrders.filter(o => o.status === 'Pending' || o.status === 'PartiallyFilled').length
+      return this.allOrders.filter(o =>
+        o.status === 'Submitted' ||
+        o.status === 'PartiallyFilled' ||
+        o.status === 'PendingRoute' ||
+        o.status === 'PendingRisk'
+      ).length
     },
     totalBalance() {
       return this.accounts.reduce((sum, acc) => sum + acc.balance, 0)
@@ -369,24 +377,30 @@ export default {
       }
     },
 
+    // @yutiansut @quantaxis - 使用高效的全市场订单 API (单次请求)
     async loadAllOrders() {
       this.ordersLoading = true
       try {
-        // 获取所有账户的订单
-        const orderPromises = this.accounts.slice(0, 50).map(account => // 限制只查前50个账户，避免请求过多
-          queryUserOrders(account.user_id).catch(() => ({ orders: [] }))
-        )
+        // 单次 API 调用获取所有订单（后端支持分页和过滤）
+        const params = {
+          page: 1,
+          page_size: 200  // 获取最近200条订单
+        }
+        if (this.orderStatusFilter) {
+          params.status = this.orderStatusFilter
+        }
 
-        const results = await Promise.all(orderPromises)
-        this.allOrders = results.flatMap(res => Array.isArray(res) ? res : (res.orders || []))
+        const response = await listAllOrders(params)
+        this.allOrders = response.orders || []
 
         // 更新最近订单（用于实时监控）
         this.recentOrders = this.allOrders
-          .filter(o => o.status === 'Pending' || o.status === 'PartiallyFilled')
+          .filter(o => o.status === 'Submitted' || o.status === 'PartiallyFilled' || o.status === 'PendingRoute')
           .sort((a, b) => b.submit_time - a.submit_time)
           .slice(0, 20)
       } catch (error) {
         console.error('加载订单失败:', error)
+        this.$message.error('加载订单失败: ' + (error.message || '未知错误'))
       } finally {
         this.ordersLoading = false
       }
@@ -413,26 +427,29 @@ export default {
       return 'danger'
     },
 
+    // @yutiansut @quantaxis - 后端 OrderStatus 枚举映射
     getOrderStatusType(status) {
       const map = {
-        'Pending': 'warning',
+        'PendingRisk': 'warning',
+        'PendingRoute': 'warning',
+        'Submitted': 'primary',
         'PartiallyFilled': 'info',
         'Filled': 'success',
         'Cancelled': 'info',
-        'Rejected': 'danger',
-        'Submitted': 'warning'
+        'Rejected': 'danger'
       }
       return map[status] || 'info'
     },
 
     getOrderStatusText(status) {
       const map = {
-        'Pending': '待成交',
+        'PendingRisk': '风控审核中',
+        'PendingRoute': '等待路由',
+        'Submitted': '已提交',
         'PartiallyFilled': '部分成交',
         'Filled': '已成交',
         'Cancelled': '已撤销',
-        'Rejected': '已拒绝',
-        'Submitted': '已提交'
+        'Rejected': '已拒绝'
       }
       return map[status] || status
     },

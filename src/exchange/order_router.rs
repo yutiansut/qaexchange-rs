@@ -1734,6 +1734,31 @@ impl OrderRouter {
             Vec::new()
         }
     }
+
+    /// 获取所有订单的详细信息 (管理端)
+    /// @yutiansut @quantaxis
+    pub fn get_all_orders(&self) -> Vec<(String, Order, OrderStatus, i64, i64, f64)> {
+        self.orders
+            .iter()
+            .map(|entry| {
+                let order_id = entry.key().clone();
+                let info = entry.value().read();
+                (
+                    order_id,
+                    info.order.clone(),
+                    info.status,
+                    info.submit_time,
+                    info.update_time,
+                    info.filled_volume,
+                )
+            })
+            .collect()
+    }
+
+    /// 获取订单总数
+    pub fn get_order_count(&self) -> usize {
+        self.orders.len()
+    }
 }
 
 #[cfg(test)]

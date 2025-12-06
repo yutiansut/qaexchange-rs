@@ -176,6 +176,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                     "/account/{user_id}/detail",
                     web::get().to(management::get_account_detail),
                 )
+                // 全市场订单/成交查询 (管理端) @yutiansut @quantaxis
+                .route("/orders", web::get().to(management::list_all_orders))
+                .route("/trades", web::get().to(management::list_all_trades))
                 // 资金管理
                 .route("/deposit", web::post().to(management::deposit))
                 .route("/withdraw", web::post().to(management::withdraw))
