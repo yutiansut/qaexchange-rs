@@ -142,6 +142,10 @@ pub struct OrderRouter {
     /// 用于在成交时通过对手单的matching_engine_order_id找到对应的order_id
     engine_id_to_order: DashMap<u64, String>,
 
+    /// ✨ 撮合引擎订单ID → user_id 直接映射 (性能优化) @yutiansut @quantaxis
+    /// 避免成交时两次查找（engine_id→order_id→user_id），直接 O(1) 获取
+    engine_id_to_user: DashMap<u64, String>,
+
     /// 订单序号生成器
     order_seq: AtomicU64,
 
@@ -194,6 +198,7 @@ impl OrderRouter {
             orders: DashMap::new(),
             user_orders: DashMap::new(),
             engine_id_to_order: DashMap::new(),
+            engine_id_to_user: DashMap::new(),
             order_seq: AtomicU64::new(1),
             trade_count: AtomicU64::new(0),
             trade_volume: parking_lot::RwLock::new(0.0),
@@ -280,6 +285,7 @@ impl OrderRouter {
             orders: DashMap::new(),
             user_orders: DashMap::new(),
             engine_id_to_order: DashMap::new(),
+            engine_id_to_user: DashMap::new(),
             order_seq: AtomicU64::new(1),
             trade_count: AtomicU64::new(0),
             trade_volume: parking_lot::RwLock::new(0.0),
@@ -795,10 +801,11 @@ impl OrderRouter {
                     info.matching_engine_order_id = Some(id); // 存储撮合引擎订单ID，用于撤单
                 }
 
-                // ✨ 存储反向映射: matching_engine_order_id → order_id
-                // 用于在成交时通过对手单的matching_engine_order_id找到对应的order_id
+                // ✨ 存储反向映射: matching_engine_order_id → order_id / user_id @yutiansut @quantaxis
+                // 用于在成交时通过对手单的matching_engine_order_id找到对应的order_id和user_id
                 self.engine_id_to_order.insert(id, order_id.to_string());
-                log::debug!("💾 Stored reverse mapping: engine_id={} → order_id={}", id, order_id);
+                self.engine_id_to_user.insert(id, order.user_id.clone()); // ✨ O(1) 直接映射
+                log::debug!("💾 Stored reverse mapping: engine_id={} → order_id={}, user_id={}", id, order_id, order.user_id);
 
                 // Phase 6: 使用新的 handle_order_accepted_new (交易所只推送ACCEPTED回报)
                 let exchange_order_id = self.trade_gateway.handle_order_accepted_new(
@@ -906,6 +913,19 @@ impl OrderRouter {
                     String::new()
                 };
 
+                // ✨ O(1) 直接查找对手方的 user_id @yutiansut @quantaxis
+                // 性能优化：避免两次DashMap查找 + 一次RwLock读取
+                let opposite_user_id: Option<String> = self
+                    .engine_id_to_user
+                    .get(&opposite_order_id)
+                    .map(|v| v.value().clone());
+
+                log::debug!(
+                    "⚡ Trade opposite lookup (O(1)): engine_id={} -> user_id={:?}",
+                    opposite_order_id,
+                    opposite_user_id
+                );
+
                 // Phase 6: 使用新的 handle_trade_new (交易所只推送TRADE回报，不判断FILLED/PARTIAL)
                 // 注意：这里假设我们使用已生成的exchange_order_id（从Accepted事件保存）
                 // 简化实现：使用match_order_id作为exchange_order_id
@@ -921,6 +941,7 @@ impl OrderRouter {
                     volume,
                     price,
                     Some(opposite_order_id as i64),
+                    opposite_user_id.as_deref(), // ✨ 传递对手方user_id
                     &qa_order_id, // ✨ 传递qars订单ID
                 )?;
 
@@ -996,6 +1017,19 @@ impl OrderRouter {
                     String::new()
                 };
 
+                // ✨ O(1) 直接查找对手方的 user_id @yutiansut @quantaxis
+                // 性能优化：避免两次DashMap查找 + 一次RwLock读取
+                let opposite_user_id: Option<String> = self
+                    .engine_id_to_user
+                    .get(&opposite_order_id)
+                    .map(|v| v.value().clone());
+
+                log::debug!(
+                    "⚡ Trade opposite lookup (O(1), partial): engine_id={} -> user_id={:?}",
+                    opposite_order_id,
+                    opposite_user_id
+                );
+
                 // Phase 6: 使用新的 handle_trade_new (交易所不区分FILLED/PARTIAL，只推送TRADE)
                 // ✨ 修复：传递qa_order_id用于调用receive_deal_sim @yutiansut @quantaxis
                 let trade_id = self.trade_gateway.handle_trade_new(
@@ -1009,6 +1043,7 @@ impl OrderRouter {
                     volume,
                     price,
                     Some(opposite_order_id as i64),
+                    opposite_user_id.as_deref(), // ✨ 传递对手方user_id
                     &qa_order_id, // ✨ 传递qars订单ID
                 )?;
 

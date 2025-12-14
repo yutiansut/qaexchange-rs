@@ -3,7 +3,9 @@
 //! 提供 RESTful API 接口用于账户管理、订单操作、查询等功能
 
 pub mod admin;
+pub mod account_admin;  // Phase 12-13: 密码/手续费/保证金/冻结/审计/公告 @yutiansut @quantaxis
 pub mod auth;
+pub mod data_query;  // 数据查询和导出 @yutiansut @quantaxis
 pub mod handlers;
 pub mod kline;
 pub mod management;
@@ -11,6 +13,7 @@ pub mod market;
 pub mod models;
 pub mod monitoring;
 pub mod routes;
+pub mod transfer;  // 银期转账 @yutiansut @quantaxis
 
 use actix_web::{middleware, web, App, HttpServer as ActixHttpServer};
 use std::io;
@@ -54,6 +57,9 @@ impl HttpServer {
             user_mgr,
             storage_stats: None,
             conversion_mgr: None,
+            // 数据查询存储组件（在HttpServer::new中初始化为None，由main.rs完整初始化）@yutiansut @quantaxis
+            market_data_storage: None,
+            kline_wal_manager: None,
         });
 
         let market_service = Arc::new(MarketDataService::new(matching_engine));

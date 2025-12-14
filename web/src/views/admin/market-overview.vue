@@ -202,6 +202,57 @@
         </el-table>
       </el-tab-pane>
 
+      <!-- 成交记录标签页 @yutiansut @quantaxis -->
+      <el-tab-pane label="成交记录" name="trades">
+        <div style="margin-bottom: 15px;">
+          <el-button type="primary" size="small" icon="el-icon-refresh" @click="loadAllTrades" :loading="tradesLoading">
+            刷新
+          </el-button>
+          <el-input
+            v-model="tradeSearch"
+            placeholder="搜索合约或账户"
+            size="small"
+            style="width: 300px; margin-left: 10px;"
+            clearable
+          >
+            <i slot="prefix" class="el-input__icon el-icon-search"></i>
+          </el-input>
+        </div>
+
+        <el-table
+          :data="filteredTrades"
+          border
+          stripe
+          height="600"
+          v-loading="tradesLoading"
+        >
+          <el-table-column prop="trade_id" label="成交ID" width="180" show-overflow-tooltip />
+          <el-table-column prop="instrument_id" label="合约" width="100" />
+          <el-table-column prop="buy_user_id" label="买方账户" width="200" show-overflow-tooltip>
+            <template slot-scope="scope">
+              {{ getAccountNameShort(scope.row.buy_user_id) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="sell_user_id" label="卖方账户" width="200" show-overflow-tooltip>
+            <template slot-scope="scope">
+              {{ getAccountNameShort(scope.row.sell_user_id) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="price" label="成交价" width="100" align="right">
+            <template slot-scope="scope">
+              {{ scope.row.price.toFixed(2) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="volume" label="成交量" width="80" align="right" />
+          <el-table-column prop="trading_day" label="交易日" width="100" />
+          <el-table-column prop="timestamp" label="成交时间" width="160">
+            <template slot-scope="scope">
+              {{ formatTimestamp(scope.row.timestamp) }}
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
       <!-- 实时监控标签页 -->
       <el-tab-pane label="实时监控" name="realtime">
         <div class="realtime-monitor">
@@ -267,7 +318,7 @@
 
 <script>
 // @yutiansut @quantaxis - 使用高效的全市场 API
-import { listAllAccounts, listAllOrders } from '@/api'
+import { listAllAccounts, listAllOrders, listAllTrades } from '@/api'
 
 export default {
   name: 'MarketOverview',
@@ -286,6 +337,10 @@ export default {
       ordersLoading: false,
       orderStatusFilter: '',
       orderSearch: '',
+      // 成交相关 @yutiansut @quantaxis
+      allTrades: [],
+      tradesLoading: false,
+      tradeSearch: '',
       // 实时监控
       recentOrders: [],
       // 自动刷新
@@ -321,6 +376,19 @@ export default {
 
       return orders
     },
+    // @yutiansut @quantaxis - 过滤成交记录
+    filteredTrades() {
+      if (!this.tradeSearch) {
+        return this.allTrades
+      }
+      const search = this.tradeSearch.toLowerCase()
+      return this.allTrades.filter(t =>
+        t.instrument_id.toLowerCase().includes(search) ||
+        t.buy_user_id.toLowerCase().includes(search) ||
+        t.sell_user_id.toLowerCase().includes(search) ||
+        t.trade_id.toLowerCase().includes(search)
+      )
+    },
     totalAccounts() {
       return this.accounts.length
     },
@@ -349,10 +417,12 @@ export default {
   mounted() {
     this.loadAccounts()
     this.loadAllOrders()
+    this.loadAllTrades()  // @yutiansut @quantaxis - 加载全市场成交
     // 每10秒自动刷新
     this.refreshTimer = setInterval(() => {
       this.loadAccounts()
       this.loadAllOrders()
+      this.loadAllTrades()  // @yutiansut @quantaxis
     }, 10000)
   },
   beforeDestroy() {
@@ -403,6 +473,25 @@ export default {
         this.$message.error('加载订单失败: ' + (error.message || '未知错误'))
       } finally {
         this.ordersLoading = false
+      }
+    },
+
+    // @yutiansut @quantaxis - 加载全市场成交记录
+    async loadAllTrades() {
+      this.tradesLoading = true
+      try {
+        const params = {
+          page: 1,
+          page_size: 200  // 获取最近200条成交
+        }
+
+        const response = await listAllTrades(params)
+        this.allTrades = response.trades || []
+      } catch (error) {
+        console.error('加载成交记录失败:', error)
+        this.$message.error('加载成交记录失败: ' + (error.message || '未知错误'))
+      } finally {
+        this.tradesLoading = false
       }
     },
 
@@ -494,69 +583,296 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+// @yutiansut @quantaxis - 市场总览页面样式（现代化设计）
+$primary-color: #1890ff;
+$success-color: #52c41a;
+$warning-color: #faad14;
+$danger-color: #f5222d;
+
 .market-overview {
-  padding: 20px;
+  padding: 0;
+
+  // 统计卡片网格
+  ::v-deep .el-col {
+    .el-card {
+      border-radius: 12px;
+      border: none;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+      transition: all 0.3s ease;
+      overflow: visible;
+
+      &:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+      }
+
+      .el-card__body {
+        padding: 20px;
+      }
+    }
+  }
 
   .stat-card {
     display: flex;
     align-items: center;
-    gap: 15px;
+    gap: 16px;
 
     i {
-      font-size: 36px;
+      width: 56px;
+      height: 56px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      color: white;
+      flex-shrink: 0;
+
+      &.el-icon-user {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+
+      &.el-icon-document {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      }
+
+      &.el-icon-money {
+        background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+      }
+
+      &.el-icon-warning {
+        background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+      }
     }
 
     .stat-content {
       flex: 1;
 
       .stat-label {
-        font-size: 14px;
+        font-size: 13px;
         color: #909399;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
+        font-weight: 500;
       }
 
       .stat-value {
-        font-size: 24px;
-        font-weight: bold;
+        font-size: 28px;
+        font-weight: 700;
         color: #303133;
+        line-height: 1.2;
+        font-family: 'JetBrains Mono', monospace;
       }
     }
   }
 
+  // 标签页样式
+  ::v-deep .el-tabs--border-card {
+    border-radius: 12px;
+    border: none;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
+
+    > .el-tabs__header {
+      background: #fafafa;
+      border-bottom: 1px solid #f0f0f0;
+
+      .el-tabs__item {
+        height: 48px;
+        line-height: 48px;
+        font-weight: 500;
+        transition: all 0.2s ease;
+
+        &.is-active {
+          font-weight: 600;
+          color: $primary-color;
+        }
+
+        &:hover {
+          color: $primary-color;
+        }
+      }
+    }
+
+    > .el-tabs__content {
+      padding: 20px;
+    }
+  }
+
+  // 工具栏样式
+  .toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 16px;
+    background: #fafafa;
+    border-radius: 8px;
+  }
+
+  // 表格样式增强
+  ::v-deep .el-table {
+    border-radius: 8px;
+    overflow: hidden;
+
+    th {
+      background-color: #fafafa !important;
+      font-weight: 600;
+      color: #303133;
+    }
+
+    .el-table__row:hover > td {
+      background-color: rgba($primary-color, 0.04) !important;
+    }
+
+    // 方向标签
+    .el-tag--danger {
+      background-color: rgba($danger-color, 0.1);
+      border-color: transparent;
+      color: $danger-color;
+    }
+
+    .el-tag--success {
+      background-color: rgba($success-color, 0.1);
+      border-color: transparent;
+      color: $success-color;
+    }
+  }
+
+  // 订单流监控
   .order-flow-chart {
     overflow-y: auto;
+    padding-right: 8px;
+
+    &::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: #e4e7ed;
+      border-radius: 3px;
+    }
 
     .order-flow-item {
       display: flex;
       align-items: center;
-      padding: 10px;
-      border-bottom: 1px solid #EBEEF5;
-      gap: 15px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      background: #fafafa;
+      gap: 16px;
+      transition: all 0.2s ease;
 
       &:hover {
-        background-color: #F5F7FA;
+        background-color: #f0f2f5;
+        transform: translateX(4px);
       }
 
       .order-time {
-        width: 80px;
+        width: 70px;
         color: #909399;
         font-size: 12px;
+        font-family: 'JetBrains Mono', monospace;
       }
 
       .order-info {
         flex: 1;
         display: flex;
         align-items: center;
+        font-size: 13px;
+        font-family: 'JetBrains Mono', monospace;
       }
 
       .order-account {
-        width: 150px;
+        width: 120px;
         text-align: right;
         color: #606266;
-        font-size: 13px;
+        font-size: 12px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+    }
+  }
+
+  // 实时监控区域
+  .realtime-monitor {
+    ::v-deep .el-card {
+      border-radius: 12px;
+      border: none;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+
+      .el-card__header {
+        border-bottom: 1px solid #f0f0f0;
+        padding: 16px 20px;
+        font-weight: 600;
+        color: #303133;
+      }
+    }
+  }
+
+  // 风险标签样式
+  ::v-deep .el-tag--warning {
+    background-color: rgba($warning-color, 0.1);
+    border-color: transparent;
+    color: darken($warning-color, 10%);
+  }
+
+  ::v-deep .el-tag--primary {
+    background-color: rgba($primary-color, 0.1);
+    border-color: transparent;
+    color: $primary-color;
+  }
+
+  ::v-deep .el-tag--info {
+    background-color: rgba(#909399, 0.1);
+    border-color: transparent;
+    color: #909399;
+  }
+
+  // 按钮样式
+  ::v-deep .el-button--primary {
+    background: linear-gradient(135deg, $primary-color 0%, #096dd9 100%);
+    border: none;
+
+    &:hover {
+      background: linear-gradient(135deg, #40a9ff 0%, $primary-color 100%);
+    }
+  }
+
+  // 输入框样式
+  ::v-deep .el-input__inner {
+    border-radius: 8px;
+    border-color: #e4e7ed;
+
+    &:focus {
+      border-color: $primary-color;
+      box-shadow: 0 0 0 2px rgba($primary-color, 0.1);
+    }
+  }
+
+  // 分页器样式
+  ::v-deep .el-pagination {
+    margin-top: 20px;
+    text-align: center;
+
+    .el-pager li.active {
+      background-color: $primary-color;
+    }
+  }
+}
+
+// 响应式调整
+@media (max-width: 768px) {
+  .market-overview {
+    .stat-card {
+      .stat-value {
+        font-size: 22px;
+      }
+
+      i {
+        width: 48px;
+        height: 48px;
+        font-size: 24px;
       }
     }
   }

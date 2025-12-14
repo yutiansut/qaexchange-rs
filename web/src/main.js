@@ -4,6 +4,8 @@ import router from './router'
 import store from './store'
 import ElementUI from 'element-ui'
 import 'element-ui/lib/theme-chalk/index.css'
+// @yutiansut @quantaxis - 全局主题样式
+import './styles/index.scss'
 // 暂时注释掉 vxe-table 以避免兼容性问题
 // import VXETable from 'vxe-table'
 // import 'vxe-table/lib/style.css'

@@ -128,8 +128,10 @@ export default {
       deep: true
     },
 
-    // 监听K线数据更新（WebSocket实时推送）
+    // 监听K线数据更新（WebSocket实时推送）@yutiansut @quantaxis
+    // ✨ 添加 immediate: true 确保数据到达时立即触发
     'snapshot.klines': {
+      immediate: true,
       handler(newKlines) {
         console.log('[ChartPage] 📊 snapshot.klines watcher triggered:', {
           hasKlines: !!newKlines,

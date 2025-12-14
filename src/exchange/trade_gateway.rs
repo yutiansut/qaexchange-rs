@@ -732,6 +732,7 @@ impl TradeGateway {
         volume: f64,
         price: f64,
         opposite_order_id: Option<i64>, // 对手方订单号（如果可用）
+        opposite_user_id: Option<&str>, // ✨ 对手方user_id，用于成交记录正确区分买卖方 @yutiansut @quantaxis
         qa_order_id: &str, // ✨ qars内部订单ID，用于调用receive_deal_sim @yutiansut @quantaxis
     ) -> Result<i64, ExchangeError> {
         // 生成成交ID（统一事件序列）
@@ -790,16 +791,29 @@ impl TradeGateway {
         })?;
 
         // 记录成交到 TradeRecorder（用于查询）
+        // ✨ 修复：正确设置 buy_user_id 和 sell_user_id @yutiansut @quantaxis
         if let Some(recorder) = &self.trade_recorder {
-            // 注意：这里的 user_id 实际上是 account_id
-            // 由于没有对手方信息，暂时两边都用同一个 account_id
-            // 在完整实现中，应该从 opposite_order_id 查找对手方 account_id
             let trading_day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+            // 根据 direction 确定买卖方的 user_id
+            let (buy_user_id, sell_user_id) = match direction {
+                "BUY" => {
+                    // 当前方是买方，对手方是卖方
+                    let sell_id = opposite_user_id.unwrap_or(user_id).to_string();
+                    (user_id.to_string(), sell_id)
+                }
+                "SELL" => {
+                    // 当前方是卖方，对手方是买方
+                    let buy_id = opposite_user_id.unwrap_or(user_id).to_string();
+                    (buy_id, user_id.to_string())
+                }
+                _ => (user_id.to_string(), user_id.to_string()), // fallback
+            };
 
             recorder.record_trade(
                 instrument_id.to_string(),
-                user_id.to_string(), // buy_account_id (如果是BUY方)
-                user_id.to_string(), // sell_account_id (如果是SELL方，应该从对手方获取)
+                buy_user_id,  // ✨ 正确的买方user_id
+                sell_user_id, // ✨ 正确的卖方user_id
                 order_id.to_string(),
                 format!("opposite_{}", opposite_order_id.unwrap_or(0)),
                 price,
@@ -1199,13 +1213,17 @@ impl TradeGateway {
     fn push_account_update(&self, account_id: &str) -> Result<(), ExchangeError> {
         // ✨ 修复：使用 get_account 而非 get_default_account，因为传入的是 account_id
         let account = self.account_mgr.get_account(account_id)?;
-        let acc = account.read();
+        // ✨ 使用 write() 以便调用 get_margin() 动态计算 @yutiansut @quantaxis
+        let mut acc = account.write();
+
+        // ✨ 动态计算 margin：从所有持仓累加，确保成交后数据准确 @yutiansut @quantaxis
+        let margin = acc.get_margin();
 
         let notification = AccountUpdateNotification {
             user_id: account_id.to_string(), // ✨ 使用 account_id @yutiansut @quantaxis
             balance: acc.accounts.balance,
             available: acc.money,
-            margin: acc.accounts.margin,
+            margin,  // ✨ 修复: 使用动态计算的 margin
             position_profit: acc.accounts.position_profit,
             risk_ratio: acc.accounts.risk_ratio,
             timestamp: Utc::now().timestamp_nanos_opt().unwrap_or(0),
@@ -1220,7 +1238,7 @@ impl TradeGateway {
                     account_id: {  // ✨ 使用 account_id @yutiansut @quantaxis
                         "balance": acc.accounts.balance,
                         "available": acc.money,
-                        "margin": acc.accounts.margin,
+                        "margin": margin,  // ✨ 修复: 使用动态计算的 margin
                         "position_profit": acc.accounts.position_profit,
                         "risk_ratio": acc.accounts.risk_ratio,
                     }

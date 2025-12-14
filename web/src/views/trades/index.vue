@@ -231,28 +231,349 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+// @yutiansut @quantaxis - 专业量化交易系统成交记录页面样式
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$primary-color: #1890ff;
+$buy-color: #f5222d;
+$sell-color: #52c41a;
+
 .trades-page {
-  padding: 20px;
+  min-height: 100%;
+  background: $dark-bg-primary;
+  padding: 0;
+
+  // 主卡片
+  ::v-deep > .el-card {
+    background: $dark-bg-card;
+    border: 1px solid $dark-border;
+    border-radius: 12px;
+
+    .el-card__header {
+      background: $dark-bg-secondary;
+      border-bottom: 1px solid $dark-border;
+      padding: 16px 20px;
+    }
+
+    .el-card__body {
+      padding: 20px;
+    }
+  }
 
   .card-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    color: $dark-text-primary;
+    font-size: 16px;
+    font-weight: 600;
+
+    .el-button {
+      background: linear-gradient(135deg, $primary-color 0%, #096dd9 100%);
+      border: none;
+      font-weight: 500;
+
+      &:hover {
+        opacity: 0.9;
+        transform: translateY(-1px);
+      }
+    }
+  }
+
+  // 筛选表单
+  ::v-deep .el-form {
+    margin-bottom: 20px;
+    padding: 16px;
+    background: $dark-bg-secondary;
+    border-radius: 8px;
+    border: 1px solid $dark-border;
+
+    .el-form-item {
+      margin-bottom: 0;
+      margin-right: 16px;
+
+      .el-form-item__label {
+        color: $dark-text-secondary;
+        font-size: 13px;
+      }
+    }
+
+    .el-input__inner,
+    .el-select .el-input__inner {
+      background: $dark-bg-tertiary;
+      border: 1px solid $dark-border;
+      color: $dark-text-primary;
+
+      &:focus {
+        border-color: $primary-color;
+      }
+
+      &::placeholder {
+        color: $dark-text-secondary;
+      }
+    }
+
+    .el-date-editor {
+      .el-range-input {
+        background: transparent;
+        color: $dark-text-primary;
+
+        &::placeholder {
+          color: $dark-text-secondary;
+        }
+      }
+
+      .el-range-separator {
+        color: $dark-text-secondary;
+      }
+    }
+
+    .el-button--primary {
+      background: $primary-color;
+      border-color: $primary-color;
+    }
+
+    .el-button--default {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-secondary;
+
+      &:hover {
+        border-color: $primary-color;
+        color: $primary-color;
+      }
+    }
+  }
+
+  // 统计卡片区域
+  .el-row {
+    margin-bottom: 20px;
+  }
+
+  ::v-deep .el-col .el-card {
+    background: $dark-bg-secondary;
+    border: 1px solid $dark-border;
+    border-radius: 10px;
+    transition: all 0.3s ease;
+
+    &:hover {
+      border-color: rgba($primary-color, 0.5);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+    }
+
+    .el-card__body {
+      padding: 20px;
+    }
   }
 
   .stat-item {
     text-align: center;
 
     .stat-label {
-      font-size: 14px;
-      color: #909399;
-      margin-bottom: 10px;
+      font-size: 13px;
+      color: $dark-text-secondary;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
 
     .stat-value {
-      font-size: 24px;
+      font-size: 26px;
+      font-weight: 700;
+      color: $dark-text-primary;
+      font-family: 'JetBrains Mono', monospace;
+    }
+  }
+
+  // 表格样式
+  ::v-deep .el-table {
+    background: transparent;
+    border-radius: 8px;
+    overflow: hidden;
+
+    &::before {
+      display: none;
+    }
+
+    th.el-table__cell {
+      background: $dark-bg-secondary;
+      border-bottom: 1px solid $dark-border;
+      color: $dark-text-secondary;
       font-weight: 600;
-      color: #303133;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 14px 0;
+    }
+
+    td.el-table__cell {
+      background: $dark-bg-card;
+      border-bottom: 1px solid $dark-border;
+      color: $dark-text-primary;
+      padding: 12px 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+    }
+
+    tr:hover td.el-table__cell {
+      background: $dark-bg-tertiary !important;
+    }
+
+    .el-table__body-wrapper {
+      &::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      &::-webkit-scrollbar-track {
+        background: $dark-bg-secondary;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: $dark-border;
+        border-radius: 4px;
+
+        &:hover {
+          background: #484f58;
+        }
+      }
+    }
+
+    .el-table__fixed-right {
+      background: transparent;
+
+      th.el-table__cell,
+      td.el-table__cell {
+        background: $dark-bg-card;
+      }
+    }
+
+    .el-table__empty-block {
+      background: $dark-bg-card;
+    }
+
+    .el-table__empty-text {
+      color: $dark-text-secondary;
+    }
+  }
+
+  // 标签样式
+  ::v-deep .el-tag {
+    border: none;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+
+    &--danger {
+      background: rgba($buy-color, 0.15);
+      color: $buy-color;
+    }
+
+    &--success {
+      background: rgba($sell-color, 0.15);
+      color: $sell-color;
+    }
+  }
+
+  // 操作按钮
+  ::v-deep .el-button--text {
+    color: $primary-color;
+    font-size: 13px;
+
+    &:hover {
+      color: lighten($primary-color, 10%);
+    }
+  }
+}
+
+// 日期选择器弹出框
+::v-deep .el-picker-panel {
+  background: $dark-bg-card;
+  border: 1px solid $dark-border;
+  color: $dark-text-primary;
+
+  .el-date-range-picker__content {
+    .el-date-range-picker__header {
+      color: $dark-text-primary;
+
+      div {
+        color: $dark-text-primary;
+      }
+
+      button {
+        color: $dark-text-secondary;
+
+        &:hover {
+          color: $primary-color;
+        }
+      }
+    }
+
+    .el-date-table {
+      th {
+        color: $dark-text-secondary;
+      }
+
+      td {
+        &.available {
+          color: $dark-text-primary;
+
+          &:hover {
+            color: $primary-color;
+          }
+        }
+
+        &.in-range {
+          background: rgba($primary-color, 0.2);
+        }
+
+        &.start-date,
+        &.end-date {
+          .el-date-table-cell__text {
+            background: $primary-color;
+          }
+        }
+
+        &.today {
+          .el-date-table-cell__text {
+            color: $primary-color;
+          }
+        }
+      }
+    }
+  }
+
+  .el-date-range-picker__time-header {
+    border-color: $dark-border;
+
+    .el-input__inner {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-primary;
+    }
+  }
+}
+
+// 下拉菜单全局
+::v-deep .el-select-dropdown {
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border !important;
+
+  .el-select-dropdown__item {
+    color: $dark-text-primary;
+
+    &:hover {
+      background: $dark-bg-tertiary;
+    }
+
+    &.selected {
+      color: $primary-color;
     }
   }
 }

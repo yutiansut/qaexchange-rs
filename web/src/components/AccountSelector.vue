@@ -101,10 +101,10 @@ export default {
         try {
           this.switchAccount(this.selectedAccountId)
           this.$emit('account-changed', this.selectedAccountId)
-          this.$message?.success('账户切换成功')
+          this.$message.success('账户切换成功')
         } catch (error) {
           console.error('Failed to switch account:', error)
-          this.$message?.error('账户切换失败: ' + error.message)
+          this.$message.error('账户切换失败: ' + error.message)
           // 恢复到之前的选择
           this.selectedAccountId = this.currentAccountId
         }

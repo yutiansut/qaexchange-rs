@@ -1,0 +1,307 @@
+// @yutiansut @quantaxis - QAExchange 全局样式
+// 专业量化交易系统主题样式
+
+@import './variables.scss';
+
+// ============= 全局重置 =============
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  font-family: $font-family;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  height: 100%;
+}
+
+// ============= 滚动条美化 =============
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(144, 147, 153, 0.3);
+  border-radius: 4px;
+
+  &:hover {
+    background: rgba(144, 147, 153, 0.5);
+  }
+}
+
+// ============= Element UI 主题覆盖 =============
+
+// 按钮
+.el-button--primary {
+  background-color: $primary-color;
+  border-color: $primary-color;
+
+  &:hover, &:focus {
+    background-color: $primary-light;
+    border-color: $primary-light;
+  }
+}
+
+.el-button--success {
+  background-color: $success-color;
+  border-color: $success-color;
+}
+
+.el-button--danger {
+  background-color: $error-color;
+  border-color: $error-color;
+}
+
+// 输入框
+.el-input__inner {
+  border-radius: $radius-sm;
+  transition: all $transition-fast;
+
+  &:focus {
+    border-color: $primary-color;
+  }
+}
+
+// 卡片
+.el-card {
+  border-radius: $radius-md;
+  border: none;
+  box-shadow: $shadow-sm;
+
+  &:hover {
+    box-shadow: $shadow-md;
+  }
+}
+
+// 表格
+.el-table {
+  font-size: 13px;
+
+  th {
+    background-color: $light-bg-primary !important;
+    font-weight: 600;
+  }
+
+  .el-table__row:hover > td {
+    background-color: rgba($primary-color, 0.05) !important;
+  }
+}
+
+// 消息提示
+.el-message {
+  border-radius: $radius-md;
+  box-shadow: $shadow-lg;
+}
+
+// 对话框
+.el-dialog {
+  border-radius: $radius-lg;
+
+  .el-dialog__header {
+    border-bottom: 1px solid $light-border;
+    padding: $spacing-md $spacing-lg;
+  }
+
+  .el-dialog__body {
+    padding: $spacing-lg;
+  }
+}
+
+// 标签页
+.el-tabs__item {
+  font-size: 14px;
+
+  &.is-active {
+    color: $primary-color;
+    font-weight: 600;
+  }
+}
+
+.el-tabs__active-bar {
+  background-color: $primary-color;
+}
+
+// ============= 交易相关样式 =============
+.price-up, .buy-color {
+  color: $buy-color !important;
+}
+
+.price-down, .sell-color {
+  color: $sell-color !important;
+}
+
+.price-up-bg {
+  background-color: $buy-bg !important;
+}
+
+.price-down-bg {
+  background-color: $sell-bg !important;
+}
+
+// ============= 数字字体 =============
+.mono {
+  font-family: $font-mono;
+}
+
+// ============= 常用工具类 =============
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.text-left { text-align: left; }
+
+.text-primary { color: $primary-color; }
+.text-success { color: $success-color; }
+.text-warning { color: $warning-color; }
+.text-danger { color: $error-color; }
+.text-muted { color: $light-text-muted; }
+
+.font-bold { font-weight: 600; }
+.font-medium { font-weight: 500; }
+
+.mt-xs { margin-top: $spacing-xs; }
+.mt-sm { margin-top: $spacing-sm; }
+.mt-md { margin-top: $spacing-md; }
+.mt-lg { margin-top: $spacing-lg; }
+
+.mb-xs { margin-bottom: $spacing-xs; }
+.mb-sm { margin-bottom: $spacing-sm; }
+.mb-md { margin-bottom: $spacing-md; }
+.mb-lg { margin-bottom: $spacing-lg; }
+
+.ml-sm { margin-left: $spacing-sm; }
+.mr-sm { margin-right: $spacing-sm; }
+
+.p-sm { padding: $spacing-sm; }
+.p-md { padding: $spacing-md; }
+.p-lg { padding: $spacing-lg; }
+
+// ============= Flex 布局 =============
+.flex { display: flex; }
+.flex-1 { flex: 1; }
+.flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.gap-sm { gap: $spacing-sm; }
+.gap-md { gap: $spacing-md; }
+
+// ============= 深色主题类 =============
+.dark-theme {
+  background-color: $dark-bg-primary;
+  color: $dark-text-primary;
+
+  .el-card {
+    background-color: $dark-bg-card;
+    border: 1px solid $dark-border;
+
+    .el-card__header {
+      border-bottom-color: $dark-border;
+    }
+  }
+
+  .el-table {
+    background-color: transparent;
+    color: $dark-text-primary;
+
+    th {
+      background-color: $dark-bg-secondary !important;
+      color: $dark-text-secondary;
+    }
+
+    tr {
+      background-color: transparent;
+    }
+
+    .el-table__row:hover > td {
+      background-color: $dark-bg-tertiary !important;
+    }
+
+    td, th.is-leaf {
+      border-bottom-color: $dark-border;
+    }
+
+    &::before {
+      background-color: $dark-border;
+    }
+  }
+
+  .el-input__inner {
+    background-color: $dark-bg-tertiary;
+    border-color: $dark-border;
+    color: $dark-text-primary;
+
+    &::placeholder {
+      color: $dark-text-muted;
+    }
+  }
+
+  .el-select-dropdown {
+    background-color: $dark-bg-secondary;
+    border-color: $dark-border;
+
+    .el-select-dropdown__item {
+      color: $dark-text-primary;
+
+      &:hover {
+        background-color: $dark-bg-tertiary;
+      }
+    }
+  }
+
+  .el-tabs__item {
+    color: $dark-text-secondary;
+
+    &.is-active {
+      color: $primary-color;
+    }
+  }
+
+  .el-tabs__nav-wrap::after {
+    background-color: $dark-border;
+  }
+}
+
+// ============= 页面过渡动画 =============
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity $transition-normal;
+}
+
+.fade-enter,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.slide-fade-enter-active {
+  transition: all $transition-normal ease;
+}
+
+.slide-fade-leave-active {
+  transition: all $transition-fast ease;
+}
+
+.slide-fade-enter,
+.slide-fade-leave-to {
+  transform: translateX(-10px);
+  opacity: 0;
+}

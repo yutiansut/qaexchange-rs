@@ -1489,13 +1489,13 @@ pub struct HeartbeatRequest {
     pub timestamp: i64,
 }
 
-// 节点状态监控
+// 节点状态监控 (✨ disk_usage 已实现 @yutiansut @quantaxis)
 pub struct NodeStatus {
-    pub cpu_usage: f32,
-    pub memory_usage: f32,
-    pub disk_usage: f32,
-    pub pending_logs: u64,
-    pub replication_lag_ms: u64,
+    pub cpu_usage: f32,       // CPU 使用率 (%)
+    pub memory_usage: f32,    // 内存使用率 (%)
+    pub disk_usage: f32,      // ✨ 磁盘使用率 (%) - 聚合所有磁盘
+    pub pending_logs: u64,    // 待复制日志数
+    pub replication_lag_ms: u64, // 复制延迟 (ms)
 }
 
 // 投票请求

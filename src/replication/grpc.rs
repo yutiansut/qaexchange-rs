@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::RwLock;
-use sysinfo::System;
+use sysinfo::{Disks, System};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{transport::Server, Request, Response, Status};
@@ -192,6 +192,25 @@ impl ReplicationContext {
             0.0
         };
 
+        // ✨ 采集磁盘使用率 (所有磁盘的平均使用率) @yutiansut @quantaxis
+        let disks = Disks::new_with_refreshed_list();
+        let disk_usage = if disks.list().is_empty() {
+            0.0
+        } else {
+            let mut total_space: u64 = 0;
+            let mut available_space: u64 = 0;
+            for disk in disks.list() {
+                total_space += disk.total_space();
+                available_space += disk.available_space();
+            }
+            if total_space > 0 {
+                let used_space = total_space - available_space;
+                (used_space as f64 / total_space as f64 * 100.0) as f32
+            } else {
+                0.0
+            }
+        };
+
         // 获取待复制日志数量
         let pending_logs = self.replicator.pending_count() as u64;
 
@@ -203,7 +222,7 @@ impl ReplicationContext {
         NodeStatus {
             cpu_usage,
             memory_usage,
-            disk_usage: 0.0, // TODO: 实现磁盘使用率采集
+            disk_usage,
             pending_logs,
             replication_lag_ms,
         }

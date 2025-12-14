@@ -537,15 +537,48 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-.trade-page {
-  padding: 20px;
-  background: #f5f5f5;
+// @yutiansut @quantaxis - 专业量化交易页面深色主题
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-tertiary: #21262d;
+$dark-bg-card: #1c2128;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
 
-  .el-card {
-    margin-bottom: 20px;
+$buy-color: #f5222d;
+$buy-light: #ff4d4f;
+$buy-bg: rgba(245, 34, 45, 0.1);
+$sell-color: #52c41a;
+$sell-light: #73d13d;
+$sell-bg: rgba(82, 196, 26, 0.1);
+$primary-color: #1890ff;
+
+.trade-page {
+  padding: 16px;
+  background: $dark-bg-primary;
+  min-height: calc(100vh - 56px);
+
+  ::v-deep .el-card {
+    background: $dark-bg-card;
+    border: 1px solid $dark-border;
+    border-radius: 8px;
+    margin-bottom: 16px;
 
     &:last-child {
       margin-bottom: 0;
+    }
+
+    .el-card__header {
+      border-bottom: 1px solid $dark-border;
+      padding: 12px 16px;
+      color: $dark-text-primary;
+      font-weight: 600;
+    }
+
+    .el-card__body {
+      padding: 16px;
     }
   }
 
@@ -553,12 +586,26 @@ export default {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    color: $dark-text-primary;
   }
 
   // 合约选择器
   .instrument-selector {
     ::v-deep .el-card__body {
-      padding: 15px;
+      padding: 12px 16px;
+    }
+
+    ::v-deep .el-select {
+      .el-input__inner {
+        background: $dark-bg-tertiary;
+        border-color: $dark-border;
+        color: $dark-text-primary;
+        font-weight: 600;
+
+        &:focus {
+          border-color: $primary-color;
+        }
+      }
     }
   }
 
@@ -566,31 +613,38 @@ export default {
   .market-info {
     .price-display {
       text-align: center;
-      padding: 10px 0;
+      padding: 16px 0;
 
       .last-price {
-        font-size: 36px;
-        font-weight: 600;
-        color: #303133;
+        font-size: 42px;
+        font-weight: 700;
+        font-family: 'JetBrains Mono', monospace;
+        color: $dark-text-primary;
+        letter-spacing: -1px;
 
         &.price-up {
-          color: #f56c6c;
+          color: $buy-color;
+          text-shadow: 0 0 20px rgba(245, 34, 45, 0.3);
         }
 
         &.price-down {
-          color: #67c23a;
+          color: $sell-color;
+          text-shadow: 0 0 20px rgba(82, 196, 26, 0.3);
         }
       }
 
       .price-change {
         font-size: 14px;
-        margin-top: 5px;
-        color: #909399;
+        margin-top: 8px;
+        color: $dark-text-secondary;
+        font-family: 'JetBrains Mono', monospace;
       }
     }
 
     .tick-info {
-      margin-top: 15px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid $dark-border;
 
       .info-item {
         display: flex;
@@ -599,20 +653,24 @@ export default {
 
         .label {
           font-size: 12px;
-          color: #909399;
-          margin-bottom: 5px;
+          color: $dark-text-muted;
+          margin-bottom: 6px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
 
         .value {
           font-size: 18px;
           font-weight: 600;
+          font-family: 'JetBrains Mono', monospace;
+          color: $dark-text-primary;
 
           &.bid {
-            color: #f56c6c;
+            color: $buy-color;
           }
 
           &.ask {
-            color: #67c23a;
+            color: $sell-color;
           }
         }
       }
@@ -622,28 +680,35 @@ export default {
   // 订单簿
   .orderbook {
     .orderbook-content {
-      font-family: 'Monaco', 'Consolas', monospace;
+      font-family: 'JetBrains Mono', 'Monaco', monospace;
       font-size: 13px;
 
       .header-row {
         display: flex;
         justify-content: space-between;
-        padding: 8px 10px;
-        background: #f5f7fa;
+        padding: 8px 12px;
+        background: $dark-bg-tertiary;
         font-weight: 600;
-        color: #606266;
+        color: $dark-text-muted;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        border-radius: 4px;
+        margin-bottom: 4px;
       }
 
       .order-row {
         position: relative;
         display: flex;
         justify-content: space-between;
-        padding: 6px 10px;
+        padding: 6px 12px;
         cursor: pointer;
-        transition: background 0.2s;
+        transition: all 0.15s ease;
+        border-radius: 4px;
+        margin: 1px 0;
 
         &:hover {
-          background: #f5f7fa;
+          background: $dark-bg-tertiary;
         }
 
         .price,
@@ -656,48 +721,44 @@ export default {
           font-weight: 600;
         }
 
+        .volume {
+          color: $dark-text-secondary;
+        }
+
         .volume-bar {
           position: absolute;
           right: 0;
           top: 0;
           height: 100%;
-          opacity: 0.2;
+          opacity: 0.15;
+          border-radius: 4px;
         }
 
         &.ask-row {
-          color: #67c23a;
-
-          .volume-bar {
-            background: #67c23a;
-          }
+          .price { color: $sell-color; }
+          .volume-bar { background: $sell-color; }
         }
 
         &.bid-row {
-          color: #f56c6c;
-
-          .volume-bar {
-            background: #f56c6c;
-          }
+          .price { color: $buy-color; }
+          .volume-bar { background: $buy-color; }
         }
       }
 
       .last-price-separator {
-        padding: 10px;
+        padding: 12px;
         text-align: center;
-        background: #f0f0f0;
-        margin: 5px 0;
+        background: linear-gradient(90deg, transparent, $dark-bg-tertiary, transparent);
+        margin: 8px 0;
+        border-radius: 4px;
 
         .price {
-          font-size: 16px;
-          font-weight: 600;
+          font-size: 18px;
+          font-weight: 700;
+          color: $dark-text-primary;
 
-          &.price-up {
-            color: #f56c6c;
-          }
-
-          &.price-down {
-            color: #67c23a;
-          }
+          &.price-up { color: $buy-color; }
+          &.price-down { color: $sell-color; }
         }
       }
     }
@@ -706,43 +767,53 @@ export default {
   // 最新成交
   .recent-trades {
     .trades-list {
-      font-family: 'Monaco', 'Consolas', monospace;
+      font-family: 'JetBrains Mono', 'Monaco', monospace;
       font-size: 12px;
-      max-height: 300px;
+      max-height: 280px;
       overflow-y: auto;
+
+      &::-webkit-scrollbar {
+        width: 4px;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: $dark-border;
+        border-radius: 2px;
+      }
 
       .header-row {
         display: grid;
-        grid-template-columns: 80px 1fr 60px;
-        padding: 8px 10px;
-        background: #f5f7fa;
+        grid-template-columns: 70px 1fr 60px;
+        padding: 8px 12px;
+        background: $dark-bg-tertiary;
         font-weight: 600;
-        color: #606266;
+        color: $dark-text-muted;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
         position: sticky;
         top: 0;
         z-index: 1;
+        border-radius: 4px;
       }
 
       .trade-row {
         display: grid;
-        grid-template-columns: 80px 1fr 60px;
-        padding: 6px 10px;
+        grid-template-columns: 70px 1fr 60px;
+        padding: 6px 12px;
+        border-radius: 4px;
+        transition: background 0.15s ease;
 
-        &.buy-trade .price {
-          color: #f56c6c;
+        &:hover {
+          background: $dark-bg-tertiary;
         }
 
-        &.sell-trade .price {
-          color: #67c23a;
-        }
+        &.buy-trade .price { color: $buy-color; }
+        &.sell-trade .price { color: $sell-color; }
 
-        .time {
-          color: #909399;
-        }
-
-        .price {
-          font-weight: 600;
-        }
+        .time { color: $dark-text-muted; }
+        .price { font-weight: 600; }
+        .volume { color: $dark-text-secondary; }
       }
     }
   }
@@ -750,18 +821,154 @@ export default {
   // 订单面板
   .order-panel {
     min-height: 400px;
+
+    ::v-deep .el-tabs {
+      .el-tabs__header {
+        border-bottom: 1px solid $dark-border;
+        margin: 0;
+      }
+
+      .el-tabs__nav-wrap::after {
+        background: $dark-border;
+      }
+
+      .el-tabs__item {
+        color: $dark-text-secondary;
+        font-weight: 500;
+
+        &:hover { color: $dark-text-primary; }
+
+        &.is-active {
+          color: $primary-color;
+          font-weight: 600;
+        }
+      }
+
+      .el-tabs__active-bar {
+        background: $primary-color;
+      }
+
+      .el-tabs__content {
+        padding: 16px 0;
+      }
+    }
+
+    ::v-deep .el-input__inner,
+    ::v-deep .el-input-number__decrease,
+    ::v-deep .el-input-number__increase {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-primary;
+    }
+
+    ::v-deep .el-button--primary {
+      background: linear-gradient(135deg, $primary-color 0%, #096dd9 100%);
+      border: none;
+
+      &:hover {
+        background: linear-gradient(135deg, #40a9ff 0%, $primary-color 100%);
+      }
+    }
   }
 
   // 当前委托
   .pending-orders {
+    ::v-deep .el-table {
+      background: transparent;
+      color: $dark-text-primary;
+
+      &::before { background: $dark-border; }
+
+      th {
+        background: $dark-bg-tertiary !important;
+        color: $dark-text-secondary;
+        border-bottom: 1px solid $dark-border;
+        font-weight: 600;
+      }
+
+      tr {
+        background: transparent;
+
+        &:hover > td { background: $dark-bg-tertiary !important; }
+      }
+
+      td {
+        border-bottom: 1px solid $dark-border;
+        color: $dark-text-primary;
+      }
+
+      .el-table__empty-block {
+        background: transparent;
+      }
+
+      .el-table__empty-text {
+        color: $dark-text-muted;
+      }
+    }
+
     .buy-text {
-      color: #f56c6c;
+      color: $buy-color;
       font-weight: 600;
     }
 
     .sell-text {
-      color: #67c23a;
+      color: $sell-color;
       font-weight: 600;
+    }
+  }
+}
+
+// Element UI 深色主题覆盖
+::v-deep .el-button-group {
+  .el-button {
+    background: $dark-bg-tertiary;
+    border-color: $dark-border;
+    color: $dark-text-secondary;
+
+    &:hover {
+      color: $primary-color;
+      border-color: $primary-color;
+    }
+
+    &.el-button--primary {
+      background: $primary-color;
+      border-color: $primary-color;
+      color: white;
+    }
+  }
+}
+
+::v-deep .el-tag {
+  border: none;
+
+  &.el-tag--warning {
+    background: rgba(250, 173, 20, 0.15);
+    color: #faad14;
+  }
+
+  &.el-tag--success {
+    background: rgba(82, 196, 26, 0.15);
+    color: $sell-color;
+  }
+
+  &.el-tag--info {
+    background: rgba(139, 148, 158, 0.15);
+    color: $dark-text-secondary;
+  }
+
+  &.el-tag--danger {
+    background: rgba(245, 34, 45, 0.15);
+    color: $buy-color;
+  }
+}
+
+// 响应式
+@media (max-width: 1200px) {
+  .trade-page {
+    padding: 12px;
+
+    .market-info .price-display .last-price {
+      font-size: 32px;
     }
   }
 }

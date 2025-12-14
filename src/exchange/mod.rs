@@ -32,9 +32,13 @@ pub mod id_generator;
 /// 优先级订单队列
 pub mod priority_queue;
 
+/// 条件单引擎 @yutiansut @quantaxis
+pub mod conditional_order;
+
 // 重导出核心类型
 pub use account_mgr::AccountManager;
 pub use capital_mgr::{CapitalManager, FundTransaction, TransactionStatus, TransactionType};
+pub use conditional_order::{ConditionalOrderEngine, ConditionalOrderStatistics, CONDITIONAL_ORDER_ENGINE};
 pub use exchange_types::{ExchangeOrderRecord, ExchangeResponse, ExchangeTradeRecord};
 pub use id_generator::ExchangeIdGenerator;
 pub use instrument_registry::InstrumentRegistry;

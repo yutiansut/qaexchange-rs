@@ -6,16 +6,17 @@
 //! - 状态序列化/反序列化
 //! - 快照保存与恢复
 //! - 检查点管理
-//! - 状态压缩
+//! - 状态压缩 (ZSTD)
 
 use dashmap::DashMap;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use zstd; // ✨ ZSTD 压缩支持 @yutiansut @quantaxis
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 可序列化的因子状态
@@ -124,6 +125,10 @@ pub enum StateStoreError {
     VersionMismatch { expected: u32, found: u32 },
     CheckpointNotFound(u64),
     CorruptedData(String),
+    /// ✨ ZSTD 压缩错误 @yutiansut @quantaxis
+    CompressionError(String),
+    /// ✨ ZSTD 解压错误 @yutiansut @quantaxis
+    DecompressionError(String),
 }
 
 impl From<std::io::Error> for StateStoreError {
@@ -145,6 +150,8 @@ impl std::fmt::Display for StateStoreError {
                 write!(f, "Checkpoint not found: {}", id)
             }
             StateStoreError::CorruptedData(s) => write!(f, "Corrupted data: {}", s),
+            StateStoreError::CompressionError(s) => write!(f, "Compression error: {}", s),
+            StateStoreError::DecompressionError(s) => write!(f, "Decompression error: {}", s),
         }
     }
 }
@@ -247,8 +254,19 @@ impl StateStore {
         let mut writer = BufWriter::new(file);
 
         if self.config.compress {
-            // TODO: 添加 zstd 压缩
-            writer.write_all(&bytes)?;
+            // ✨ ZSTD 压缩 (Level 3 - 平衡压缩比和速度) @yutiansut @quantaxis
+            let compressed = zstd::encode_all(Cursor::new(&bytes), 3)
+                .map_err(|e| StateStoreError::CompressionError(e.to_string()))?;
+
+            log::debug!(
+                "Checkpoint {} compressed: {} -> {} bytes ({:.1}% ratio)",
+                checkpoint_id,
+                bytes.len(),
+                compressed.len(),
+                (compressed.len() as f64 / bytes.len() as f64) * 100.0
+            );
+
+            writer.write_all(&compressed)?;
         } else {
             writer.write_all(&bytes)?;
         }
@@ -273,14 +291,25 @@ impl StateStore {
 
         let file = File::open(&path)?;
         let mut reader = BufReader::new(file);
-        let mut bytes = Vec::new();
+        let mut compressed_bytes = Vec::new();
+        reader.read_to_end(&mut compressed_bytes)?;
 
-        if self.config.compress {
-            // TODO: 添加 zstd 解压
-            reader.read_to_end(&mut bytes)?;
+        // ✨ ZSTD 解压 @yutiansut @quantaxis
+        let bytes = if self.config.compress {
+            let decompressed = zstd::decode_all(Cursor::new(&compressed_bytes))
+                .map_err(|e| StateStoreError::DecompressionError(e.to_string()))?;
+
+            log::debug!(
+                "Checkpoint {} decompressed: {} -> {} bytes",
+                checkpoint_id,
+                compressed_bytes.len(),
+                decompressed.len()
+            );
+
+            decompressed
         } else {
-            reader.read_to_end(&mut bytes)?;
-        }
+            compressed_bytes
+        };
 
         // 反序列化 (rkyv 0.7 API)
         let archived = unsafe { rkyv::archived_root::<GlobalStateSnapshot>(&bytes) };

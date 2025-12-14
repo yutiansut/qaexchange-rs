@@ -6812,6 +6812,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "uuid 1.18.1",
+ "zstd 0.13.3",
 ]
 
 [[package]]

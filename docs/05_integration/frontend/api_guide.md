@@ -336,13 +336,13 @@ console.log(detail);
   "account_id": "ACC_custom_123",  // 可选，不填则自动生成
   "account_name": "My Trading Account",
   "account_type": "Individual",
-  "init_balance": 1000000.0
+  "init_cash": 1000000.0
 }
 ```
 
 **前端示例**:
 ```javascript
-async function createAccount(accountName, accountType, initBalance) {
+async function createAccount(accountName, accountType, initCash) {
   const user_id = localStorage.getItem('user_id');
 
   const response = await fetch(
@@ -353,7 +353,7 @@ async function createAccount(accountName, accountType, initBalance) {
       body: JSON.stringify({
         account_name: accountName,
         account_type: accountType,
-        init_balance: initBalance
+        init_cash: initCash  // ✨ 统一使用 init_cash @yutiansut @quantaxis
       })
     }
   );
@@ -771,7 +771,7 @@ export default {
             body: JSON.stringify({
               account_name: this.newAccount.name,
               account_type: this.newAccount.type,
-              init_balance: this.newAccount.balance
+              init_cash: this.newAccount.init_cash  // ✨ 统一使用 init_cash @yutiansut @quantaxis
             })
           }
         );

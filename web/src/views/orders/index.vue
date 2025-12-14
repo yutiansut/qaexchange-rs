@@ -359,13 +359,365 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+// @yutiansut @quantaxis - 专业量化交易系统订单页面样式
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$primary-color: #1890ff;
+$buy-color: #f5222d;
+$sell-color: #52c41a;
+$warning-color: #faad14;
+
 .orders-page {
-  padding: 20px;
+  min-height: 100%;
+  background: $dark-bg-primary;
+  padding: 0;
+
+  // 卡片样式
+  ::v-deep .el-card {
+    background: $dark-bg-card;
+    border: 1px solid $dark-border;
+    border-radius: 12px;
+
+    .el-card__header {
+      background: $dark-bg-secondary;
+      border-bottom: 1px solid $dark-border;
+      padding: 16px 20px;
+    }
+
+    .el-card__body {
+      padding: 20px;
+    }
+  }
 
   .card-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    color: $dark-text-primary;
+    font-size: 16px;
+    font-weight: 600;
+
+    .el-button {
+      background: linear-gradient(135deg, $primary-color 0%, #096dd9 100%);
+      border: none;
+      font-weight: 500;
+
+      &:hover {
+        opacity: 0.9;
+        transform: translateY(-1px);
+      }
+    }
+  }
+
+  // 筛选表单
+  ::v-deep .el-form {
+    margin-bottom: 20px;
+    padding: 16px;
+    background: $dark-bg-secondary;
+    border-radius: 8px;
+    border: 1px solid $dark-border;
+
+    .el-form-item {
+      margin-bottom: 0;
+      margin-right: 16px;
+
+      .el-form-item__label {
+        color: $dark-text-secondary;
+        font-size: 13px;
+      }
+    }
+
+    .el-input__inner,
+    .el-select .el-input__inner {
+      background: $dark-bg-tertiary;
+      border: 1px solid $dark-border;
+      color: $dark-text-primary;
+
+      &:focus {
+        border-color: $primary-color;
+      }
+
+      &::placeholder {
+        color: $dark-text-secondary;
+      }
+    }
+
+    .el-select-dropdown {
+      background: $dark-bg-card;
+      border: 1px solid $dark-border;
+    }
+
+    .el-button--primary {
+      background: $primary-color;
+      border-color: $primary-color;
+    }
+
+    .el-button--default {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-secondary;
+
+      &:hover {
+        border-color: $primary-color;
+        color: $primary-color;
+      }
+    }
+  }
+
+  // 表格样式
+  ::v-deep .el-table {
+    background: transparent;
+    border-radius: 8px;
+    overflow: hidden;
+
+    &::before {
+      display: none;
+    }
+
+    th.el-table__cell {
+      background: $dark-bg-secondary;
+      border-bottom: 1px solid $dark-border;
+      color: $dark-text-secondary;
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 14px 0;
+    }
+
+    td.el-table__cell {
+      background: $dark-bg-card;
+      border-bottom: 1px solid $dark-border;
+      color: $dark-text-primary;
+      padding: 12px 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+    }
+
+    tr:hover td.el-table__cell {
+      background: $dark-bg-tertiary !important;
+    }
+
+    .el-table__body-wrapper {
+      &::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      &::-webkit-scrollbar-track {
+        background: $dark-bg-secondary;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: $dark-border;
+        border-radius: 4px;
+
+        &:hover {
+          background: #484f58;
+        }
+      }
+    }
+
+    // 固定列
+    .el-table__fixed-right {
+      background: transparent;
+
+      th.el-table__cell,
+      td.el-table__cell {
+        background: $dark-bg-card;
+      }
+    }
+
+    // 空数据
+    .el-table__empty-block {
+      background: $dark-bg-card;
+    }
+
+    .el-table__empty-text {
+      color: $dark-text-secondary;
+    }
+  }
+
+  // 标签样式
+  ::v-deep .el-tag {
+    border: none;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+
+    &--danger {
+      background: rgba($buy-color, 0.15);
+      color: $buy-color;
+    }
+
+    &--success {
+      background: rgba($sell-color, 0.15);
+      color: $sell-color;
+    }
+
+    &--warning {
+      background: rgba($warning-color, 0.15);
+      color: $warning-color;
+    }
+
+    &--info {
+      background: rgba($dark-text-secondary, 0.15);
+      color: $dark-text-secondary;
+    }
+  }
+
+  // 操作按钮
+  ::v-deep .el-button--text {
+    color: $primary-color;
+    font-size: 13px;
+
+    &:hover {
+      color: lighten($primary-color, 10%);
+    }
+  }
+}
+
+// 下单对话框
+::v-deep .el-dialog {
+  background: $dark-bg-card;
+  border-radius: 12px;
+  border: 1px solid $dark-border;
+
+  .el-dialog__header {
+    background: $dark-bg-secondary;
+    border-bottom: 1px solid $dark-border;
+    padding: 16px 20px;
+    border-radius: 12px 12px 0 0;
+
+    .el-dialog__title {
+      color: $dark-text-primary;
+      font-weight: 600;
+    }
+
+    .el-dialog__headerbtn .el-dialog__close {
+      color: $dark-text-secondary;
+
+      &:hover {
+        color: $dark-text-primary;
+      }
+    }
+  }
+
+  .el-dialog__body {
+    padding: 24px;
+    background: $dark-bg-card;
+  }
+
+  .el-dialog__footer {
+    background: $dark-bg-secondary;
+    border-top: 1px solid $dark-border;
+    padding: 16px 20px;
+    border-radius: 0 0 12px 12px;
+
+    .el-button--default {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-secondary;
+
+      &:hover {
+        border-color: $primary-color;
+        color: $primary-color;
+      }
+    }
+
+    .el-button--primary {
+      background: linear-gradient(135deg, $primary-color 0%, #096dd9 100%);
+      border: none;
+    }
+  }
+
+  .el-form-item__label {
+    color: $dark-text-secondary;
+  }
+
+  .el-input__inner,
+  .el-select .el-input__inner {
+    background: $dark-bg-tertiary;
+    border: 1px solid $dark-border;
+    color: $dark-text-primary;
+
+    &:focus {
+      border-color: $primary-color;
+    }
+  }
+
+  .el-input-number {
+    .el-input__inner {
+      background: $dark-bg-tertiary;
+      border: 1px solid $dark-border;
+      color: $dark-text-primary;
+    }
+
+    .el-input-number__decrease,
+    .el-input-number__increase {
+      background: $dark-bg-secondary;
+      border-color: $dark-border;
+      color: $dark-text-secondary;
+
+      &:hover {
+        color: $primary-color;
+      }
+    }
+  }
+
+  .el-radio {
+    color: $dark-text-secondary;
+
+    &.is-checked .el-radio__label {
+      color: $primary-color;
+    }
+
+    .el-radio__inner {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+    }
+
+    &.is-checked .el-radio__inner {
+      background: $primary-color;
+      border-color: $primary-color;
+    }
+  }
+
+  // 选项下拉样式
+  .el-select-dropdown__item {
+    color: $dark-text-primary;
+
+    &:hover {
+      background: $dark-bg-tertiary;
+    }
+
+    &.selected {
+      color: $primary-color;
+      font-weight: 600;
+    }
+  }
+}
+
+// 下拉菜单全局
+::v-deep .el-select-dropdown {
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border !important;
+
+  .el-select-dropdown__item {
+    color: $dark-text-primary;
+
+    &:hover {
+      background: $dark-bg-tertiary;
+    }
+
+    &.selected {
+      color: $primary-color;
+    }
   }
 }
 </style>

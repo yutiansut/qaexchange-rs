@@ -591,3 +591,393 @@ export function getSettlementDetail(date) {
     method: 'get'
   })
 }
+
+// ============= 银期转账 API @yutiansut @quantaxis =============
+
+/**
+ * 执行转账（入金/出金）
+ * @param {Object} data - 转账信息
+ * @param {string} data.account_id - 账户ID
+ * @param {string} data.bank_id - 银行ID
+ * @param {number} data.amount - 金额（正数入金，负数出金）
+ * @param {string} data.bank_password - 银行密码
+ * @param {string} data.future_password - 期货密码
+ */
+export function doTransfer(data) {
+  return request({
+    url: '/account/transfer',
+    method: 'post',
+    data
+  })
+}
+
+/**
+ * 获取账户签约银行列表
+ */
+export function getBanks(accountId) {
+  return request({
+    url: `/account/${accountId}/banks`,
+    method: 'get'
+  })
+}
+
+/**
+ * 获取账户转账记录
+ */
+export function getTransferRecords(accountId) {
+  return request({
+    url: `/account/${accountId}/transfers`,
+    method: 'get'
+  })
+}
+
+// ============= 批量下单 API @yutiansut @quantaxis =============
+
+/**
+ * 批量提交订单
+ * @param {Object} data - 批量下单请求
+ * @param {string} data.account_id - 账户ID
+ * @param {Array} data.orders - 订单列表
+ * @param {string} data.orders[].instrument_id - 合约ID
+ * @param {string} data.orders[].direction - 方向 BUY/SELL
+ * @param {string} data.orders[].offset - 开平 OPEN/CLOSE/CLOSE_TODAY/CLOSE_YESTERDAY
+ * @param {number} data.orders[].volume - 数量
+ * @param {number} data.orders[].price - 价格
+ * @param {string} data.orders[].order_type - 订单类型 LIMIT/MARKET
+ */
+export function batchSubmitOrders(data) {
+  return request({
+    url: '/order/batch',
+    method: 'post',
+    data
+  })
+}
+
+/**
+ * 批量撤单
+ * @param {Object} data - 批量撤单请求
+ * @param {string} data.account_id - 账户ID
+ * @param {Array<string>} data.order_ids - 订单ID列表
+ */
+export function batchCancelOrders(data) {
+  return request({
+    url: '/order/batch-cancel',
+    method: 'post',
+    data
+  })
+}
+
+// ============= 订单修改 API @yutiansut @quantaxis =============
+
+/**
+ * 修改订单
+ * @param {string} orderId - 订单ID
+ * @param {Object} data - 修改信息
+ * @param {string} data.account_id - 账户ID
+ * @param {number} data.new_price - 新价格（可选）
+ * @param {number} data.new_volume - 新数量（可选）
+ */
+export function modifyOrder(orderId, data) {
+  return request({
+    url: `/order/modify/${orderId}`,
+    method: 'put',
+    data
+  })
+}
+
+// ============= 条件单 API @yutiansut @quantaxis =============
+
+/**
+ * 创建条件单
+ * @param {Object} data - 条件单信息
+ * @param {string} data.account_id - 账户ID
+ * @param {string} data.instrument_id - 合约ID
+ * @param {string} data.direction - 方向 BUY/SELL
+ * @param {string} data.offset - 开平 OPEN/CLOSE/CLOSE_TODAY/CLOSE_YESTERDAY
+ * @param {number} data.volume - 数量
+ * @param {string} data.order_type - 订单类型 LIMIT/MARKET
+ * @param {number} data.limit_price - 限价（order_type为LIMIT时必填）
+ * @param {string} data.condition_type - 条件类型 StopLoss/TakeProfit/PriceTouch
+ * @param {number} data.trigger_price - 触发价
+ * @param {string} data.trigger_condition - 触发条件 GreaterOrEqual/LessOrEqual
+ * @param {number} data.valid_until - 有效期（时间戳，可选）
+ */
+export function createConditionalOrder(data) {
+  return request({
+    url: '/order/conditional',
+    method: 'post',
+    data
+  })
+}
+
+/**
+ * 获取条件单列表
+ * @param {string} accountId - 账户ID
+ */
+export function getConditionalOrders(accountId) {
+  return request({
+    url: '/order/conditional/list',
+    method: 'get',
+    params: { account_id: accountId }
+  })
+}
+
+/**
+ * 取消条件单
+ * @param {string} conditionalOrderId - 条件单ID
+ */
+export function cancelConditionalOrder(conditionalOrderId) {
+  return request({
+    url: `/order/conditional/${conditionalOrderId}`,
+    method: 'delete'
+  })
+}
+
+/**
+ * 获取条件单统计
+ */
+export function getConditionalOrderStatistics() {
+  return request({
+    url: '/order/conditional/statistics',
+    method: 'get'
+  })
+}
+
+// ============= K线数据 API @yutiansut @quantaxis =============
+
+/**
+ * 获取K线数据
+ * @param {string} instrumentId - 合约ID
+ * @param {Object} params - 查询参数
+ * @param {string} params.period - 周期（1m/5m/15m/30m/1h/4h/1d）
+ * @param {number} params.limit - 数量（默认100）
+ * @param {number} params.start_time - 开始时间戳（可选）
+ * @param {number} params.end_time - 结束时间戳（可选）
+ */
+export function getKlineData(instrumentId, params = {}) {
+  return request({
+    url: `/market/kline/${instrumentId}`,
+    method: 'get',
+    params
+  })
+}
+
+// ============= Phase 12: 密码管理 API @yutiansut @quantaxis =============
+
+/**
+ * 修改密码
+ * @param {Object} data - 密码修改信息
+ * @param {string} data.account_id - 账户ID
+ * @param {string} data.old_password - 旧密码
+ * @param {string} data.new_password - 新密码
+ * @param {string} data.password_type - 密码类型 Trading/Fund
+ */
+export function changePassword(data) {
+  return request({
+    url: '/account-admin/password/change',
+    method: 'post',
+    data
+  })
+}
+
+/**
+ * 重置密码（管理员）
+ * @param {Object} data - 密码重置信息
+ * @param {string} data.admin_token - 管理员令牌
+ * @param {string} data.account_id - 账户ID
+ * @param {string} data.new_password - 新密码
+ * @param {string} data.password_type - 密码类型 Trading/Fund
+ */
+export function resetPassword(data) {
+  return request({
+    url: '/account-admin/password/reset',
+    method: 'post',
+    data
+  })
+}
+
+// ============= Phase 12: 手续费查询 API @yutiansut @quantaxis =============
+
+/**
+ * 查询手续费率
+ * @param {Object} params - 查询参数
+ * @param {string} params.product_id - 品种ID（可选）
+ */
+export function getCommissionRates(params = {}) {
+  return request({
+    url: '/account-admin/commission/rates',
+    method: 'get',
+    params
+  })
+}
+
+/**
+ * 查询账户手续费统计
+ * @param {string} accountId - 账户ID
+ */
+export function getCommissionStatistics(accountId) {
+  return request({
+    url: `/account-admin/commission/statistics/${accountId}`,
+    method: 'get'
+  })
+}
+
+// ============= Phase 12: 保证金率管理 API @yutiansut @quantaxis =============
+
+/**
+ * 查询保证金率
+ * @param {Object} params - 查询参数
+ * @param {string} params.instrument_id - 合约ID（可选）
+ */
+export function getMarginRates(params = {}) {
+  return request({
+    url: '/account-admin/margin/rates',
+    method: 'get',
+    params
+  })
+}
+
+/**
+ * 查询账户保证金汇总
+ * @param {string} accountId - 账户ID
+ */
+export function getAccountMarginSummary(accountId) {
+  return request({
+    url: `/account-admin/margin/summary/${accountId}`,
+    method: 'get'
+  })
+}
+
+// ============= Phase 13: 账户冻结 API @yutiansut @quantaxis =============
+
+/**
+ * 查询账户状态
+ * @param {string} accountId - 账户ID
+ */
+export function getAccountStatus(accountId) {
+  return request({
+    url: `/account-admin/status/${accountId}`,
+    method: 'get'
+  })
+}
+
+/**
+ * 冻结账户
+ * @param {Object} data - 冻结信息
+ * @param {string} data.admin_token - 管理员令牌
+ * @param {string} data.account_id - 账户ID
+ * @param {string} data.freeze_type - 冻结类型 TradingOnly/WithdrawOnly/Full
+ * @param {string} data.reason - 冻结原因
+ */
+export function freezeAccount(data) {
+  return request({
+    url: '/account-admin/freeze',
+    method: 'post',
+    data
+  })
+}
+
+/**
+ * 解冻账户
+ * @param {Object} data - 解冻信息
+ * @param {string} data.admin_token - 管理员令牌
+ * @param {string} data.account_id - 账户ID
+ * @param {string} data.reason - 解冻原因
+ */
+export function unfreezeAccount(data) {
+  return request({
+    url: '/account-admin/unfreeze',
+    method: 'post',
+    data
+  })
+}
+
+// ============= Phase 13: 审计日志 API @yutiansut @quantaxis =============
+
+/**
+ * 查询审计日志
+ * @param {Object} params - 查询参数
+ * @param {string} params.account_id - 账户ID（可选）
+ * @param {string} params.log_type - 日志类型（可选）
+ * @param {number} params.start_time - 开始时间戳（可选）
+ * @param {number} params.end_time - 结束时间戳（可选）
+ * @param {number} params.page - 页码
+ * @param {number} params.page_size - 每页数量
+ */
+export function queryAuditLogs(params = {}) {
+  return request({
+    url: '/audit/logs',
+    method: 'get',
+    params
+  })
+}
+
+/**
+ * 获取单条审计日志
+ * @param {string} logId - 日志ID
+ */
+export function getAuditLog(logId) {
+  return request({
+    url: `/audit/logs/${logId}`,
+    method: 'get'
+  })
+}
+
+// ============= Phase 13: 系统公告 API @yutiansut @quantaxis =============
+
+/**
+ * 查询公告列表
+ * @param {Object} params - 查询参数
+ * @param {string} params.announcement_type - 公告类型（可选）
+ * @param {boolean} params.active_only - 仅有效公告（默认true）
+ * @param {number} params.page - 页码
+ * @param {number} params.page_size - 每页数量
+ */
+export function queryAnnouncements(params = {}) {
+  return request({
+    url: '/announcements',
+    method: 'get',
+    params
+  })
+}
+
+/**
+ * 获取单条公告
+ * @param {string} announcementId - 公告ID
+ */
+export function getAnnouncement(announcementId) {
+  return request({
+    url: `/announcements/${announcementId}`,
+    method: 'get'
+  })
+}
+
+/**
+ * 创建公告（管理员）
+ * @param {Object} data - 公告信息
+ * @param {string} data.admin_token - 管理员令牌
+ * @param {string} data.title - 标题
+ * @param {string} data.content - 内容
+ * @param {string} data.announcement_type - 公告类型 System/Maintenance/Trading/Risk/Promotion
+ * @param {string} data.priority - 优先级 Low/Normal/High/Urgent
+ * @param {number} data.effective_from - 生效时间戳（可选）
+ * @param {number} data.effective_until - 失效时间戳（可选）
+ */
+export function createAnnouncement(data) {
+  return request({
+    url: '/announcements',
+    method: 'post',
+    data
+  })
+}
+
+/**
+ * 删除公告（管理员）
+ * @param {string} announcementId - 公告ID
+ */
+export function deleteAnnouncement(announcementId) {
+  return request({
+    url: `/announcements/${announcementId}`,
+    method: 'delete'
+  })
+}

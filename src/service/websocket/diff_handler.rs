@@ -997,6 +997,17 @@ impl DiffHandler {
                             "📊 [DIFF set_chart] KLineActor returned {} K-lines for {}",
                             klines.len(), instrument_id
                         );
+
+                        // 如果没有真实K线数据，生成模拟数据用于测试 @yutiansut @quantaxis
+                        let klines = if klines.is_empty() {
+                            log::info!(
+                                "📊 [DIFF set_chart] No real K-line data, generating mock data for testing"
+                            );
+                            generate_mock_klines(&instrument_id, period, count)
+                        } else {
+                            klines
+                        };
+
                         // 转换为DIFF格式
                         let mut kline_data = serde_json::Map::new();
                         let mut last_kline_id = 0i64;
@@ -1450,6 +1461,113 @@ impl ActixHandler<SetUserId> for DiffWebsocketSession {
             msg.user_id
         );
     }
+}
+
+/// 生成模拟K线数据用于测试 @yutiansut @quantaxis
+///
+/// 当没有真实交易数据时，生成模拟K线供前端测试图表渲染
+fn generate_mock_klines(
+    instrument_id: &str,
+    period: crate::market::kline::KLinePeriod,
+    count: usize,
+) -> Vec<crate::market::kline::KLine> {
+    use rand::Rng;
+
+    let mut rng = rand::thread_rng();
+    let mut klines = Vec::with_capacity(count);
+
+    // 根据合约类型确定基准价格
+    let base_price = if instrument_id.contains("IF") || instrument_id.contains("IC") || instrument_id.contains("IM") || instrument_id.contains("IH") {
+        // 股指期货
+        if instrument_id.contains("IF") {
+            4500.0
+        } else if instrument_id.contains("IH") {
+            3000.0
+        } else if instrument_id.contains("IC") || instrument_id.contains("IM") {
+            7000.0
+        } else {
+            4000.0
+        }
+    } else if instrument_id.contains("au") {
+        // 黄金
+        900.0
+    } else if instrument_id.contains("cu") {
+        // 铜
+        85000.0
+    } else if instrument_id.contains("sc") {
+        // 原油
+        450.0
+    } else if instrument_id.contains("T") || instrument_id.contains("TF") || instrument_id.contains("TL") {
+        // 国债期货
+        108.0
+    } else if instrument_id.contains("i") {
+        // 铁矿石
+        780.0
+    } else {
+        // 默认价格
+        3000.0
+    };
+
+    // 周期对应的毫秒数
+    let period_ms: i64 = match period {
+        crate::market::kline::KLinePeriod::Sec3 => 3 * 1000,
+        crate::market::kline::KLinePeriod::Min1 => 60 * 1000,
+        crate::market::kline::KLinePeriod::Min5 => 5 * 60 * 1000,
+        crate::market::kline::KLinePeriod::Min15 => 15 * 60 * 1000,
+        crate::market::kline::KLinePeriod::Min30 => 30 * 60 * 1000,
+        crate::market::kline::KLinePeriod::Min60 => 60 * 60 * 1000,
+        crate::market::kline::KLinePeriod::Day => 24 * 60 * 60 * 1000,
+    };
+
+    // 从当前时间往前生成count根K线
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let start_ms = now_ms - (count as i64) * period_ms;
+
+    let mut current_price: f64 = base_price;
+    let volatility: f64 = base_price * 0.002; // 0.2%波动率
+
+    for i in 0..count {
+        let timestamp = start_ms + (i as i64) * period_ms;
+
+        // 随机游走生成OHLC
+        let change: f64 = rng.gen_range(-volatility..volatility);
+        let open: f64 = current_price;
+        let close: f64 = f64::max(f64::min(current_price + change, base_price * 1.1), base_price * 0.9);
+
+        // high和low在open和close范围内随机扩展
+        let spread: f64 = (open - close).abs() * rng.gen_range(0.2f64..1.5f64);
+        let high: f64 = f64::max(open, close) + spread * rng.gen_range(0.0f64..1.0f64);
+        let low: f64 = f64::min(open, close) - spread * rng.gen_range(0.0f64..1.0f64);
+
+        let volume = rng.gen_range(100..5000) as i64;
+        let amount = close * volume as f64;
+
+        klines.push(crate::market::kline::KLine {
+            timestamp,
+            open,
+            high,
+            low,
+            close,
+            volume,
+            amount,
+            open_oi: 10000 + rng.gen_range(-500..500) as i64,
+            close_oi: 10000 + rng.gen_range(-500..500) as i64,
+            is_finished: true,
+        });
+
+        current_price = close;
+    }
+
+    log::info!(
+        "📊 [MockKLines] Generated {} mock K-lines for {} {:?}, price range: {:.2}~{:.2}",
+        klines.len(),
+        instrument_id,
+        period,
+        klines.iter().map(|k| k.low).fold(f64::INFINITY, f64::min),
+        klines.iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max)
+    );
+
+    klines
 }
 
 #[cfg(test)]

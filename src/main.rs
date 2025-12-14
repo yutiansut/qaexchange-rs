@@ -146,6 +146,9 @@ struct ExchangeServer {
     /// K线Actor地址（独立Actor处理K线聚合）
     kline_actor: actix::Addr<qaexchange::market::KLineActor>,
 
+    /// K线WAL管理器（用于历史K线查询）@yutiansut @quantaxis
+    kline_wal_manager: Arc<qaexchange::storage::wal::WalManager>,
+
     /// 快照生成器线程句柄
     snapshot_generator_handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -410,6 +413,7 @@ impl ExchangeServer {
             conversion_mgr: None,
             iceoryx_manager,
             kline_actor,
+            kline_wal_manager,
             snapshot_generator_handle: None,
         }
     }
@@ -647,6 +651,9 @@ impl ExchangeServer {
             user_mgr: self.user_mgr.clone(),
             storage_stats: self.storage_stats.clone(),
             conversion_mgr: self.conversion_mgr.clone(),
+            // Phase 14: 数据查询存储组件 @yutiansut @quantaxis
+            market_data_storage: Some(self.market_data_storage.clone()),
+            kline_wal_manager: Some(self.kline_wal_manager.clone()),
         });
 
         // 创建市场数据服务（解耦：业务逻辑与网络层分离）

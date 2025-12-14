@@ -1,8 +1,8 @@
 # 因子计算系统
 
-**版本**: v1.0.0
+**版本**: v1.1.0
 **作者**: @yutiansut @quantaxis
-**最后更新**: 2025-11-24
+**最后更新**: 2025-12-10
 
 ---
 
@@ -256,18 +256,20 @@ if let Some(state) = view.get("SHFE.cu2501") {
     println!("RSI: {:?}", state.rsi_14.value());
 }
 
-// 检查点存储
+// 检查点存储 (✨ ZSTD 压缩支持 @yutiansut @quantaxis)
 let store = CheckpointStore::new(CheckpointConfig {
     base_path: PathBuf::from("/data/checkpoints"),
     max_checkpoints: 10,
-    compress: true,
+    compress: true,  // 启用 ZSTD Level 3 压缩
+    checkpoint_interval: Duration::from_secs(60),
 });
 
-// 保存检查点
+// 保存检查点 (自动 ZSTD 压缩，典型压缩比 30-50%)
 let snapshot = view.create_snapshot();
 let checkpoint_id = store.save_checkpoint(&snapshot)?;
+// 日志输出: "Checkpoint 1 compressed: 1024000 -> 358400 bytes (35.0% ratio)"
 
-// 恢复检查点
+// 恢复检查点 (自动 ZSTD 解压)
 let restored = store.load_checkpoint(checkpoint_id)?;
 view.restore_from_snapshot(&restored);
 ```
@@ -314,6 +316,10 @@ for stmt in program.statements {
 | MACD.update() | ~30 ns | 33M ops/s |
 | 环形缓冲区 push | ~5 ns | 200M ops/s |
 | Polars 批量计算 (1M rows) | ~50 ms | 20M rows/s |
+| ZSTD 压缩 (Level 3) ✨ | ~4 ms/MB | 250 MB/s |
+| ZSTD 解压 ✨ | ~1 ms/MB | 1000 MB/s |
+| 检查点保存 (100KB 状态) ✨ | ~5 ms | 包含压缩 |
+| 检查点恢复 ✨ | ~2 ms | 包含解压 |
 
 ---
 

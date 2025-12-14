@@ -1,7 +1,7 @@
 # QAExchange-RS 文档中心
 
-**版本**: v1.2.0
-**最后更新**: 2025-11-26
+**版本**: v1.3.0
+**最后更新**: 2025-12-15
 
 欢迎使用 QAExchange-RS 文档！本文档中心提供完整的系统架构、API 参考、集成指南和开发文档。
 
@@ -65,6 +65,9 @@
 
 ### 📡 [04. API 参考](./04_api/)
 完整的 API 文档和协议规范。
+
+#### **前后端交互协议** ✨ **新增**
+- [完整协议文档](./protocol/README.md) - HTTP REST API + WebSocket DIFF 协议完整规范
 
 #### WebSocket API
 - [协议规范](./04_api/websocket/protocol.md) - DIFF 协议完整定义
@@ -149,10 +152,11 @@
 - **架构师**: [高性能架构](./02_architecture/high_performance.md) → [高级主题](./08_advanced/)
 
 ### 按主题查找
+- **前后端协议**: [完整协议文档](./protocol/README.md) - HTTP REST API + WebSocket DIFF 协议完整规范 ✨ **推荐**
 - **性能优化**: [高性能架构](./02_architecture/high_performance.md), [解耦存储](./02_architecture/decoupled_storage.md), [压缩策略](./03_core_modules/storage/compression.md), [二级索引](./03_core_modules/storage/index.md)
 - **数据持久化**: [WAL](./03_core_modules/storage/wal.md), [SSTable](./03_core_modules/storage/sstable.md), [压缩策略](./03_core_modules/storage/compression.md)
 - **市场数据**: [快照生成器](./03_core_modules/market/snapshot_generator.md), [K线聚合系统](./03_core_modules/market/kline.md), [K线实时推送](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md)
-- **协议集成**: [DIFF 协议](./04_api/websocket/diff_protocol.md), [数据模型](./02_architecture/data_models.md)
+- **协议集成**: [完整协议文档](./protocol/README.md), [DIFF 协议](./04_api/websocket/diff_protocol.md), [数据模型](./02_architecture/data_models.md)
 - **WebSocket**: [协议规范](./04_api/websocket/protocol.md), [前端集成](./05_integration/frontend/integration_guide.md), [K线推送](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md)
 - **测试部署**: [测试指南](./06_development/testing.md), [K线测试](./06_development/KLINE_TESTING_GUIDE.md), [部署指南](./06_development/deployment.md)
 - **因子计算**: [因子系统](./03_core_modules/factor/README.md), [因子 WAL 集成](./03_core_modules/factor/wal_persister.md) - 流批一体化、增量算子、DAG 依赖、异步持久化 ✨ **更新**
@@ -169,6 +173,7 @@
 | 快速开始 | v1.0.0 | 2025-10-06 | ✅ 完整 |
 | 系统架构 | v0.4.0 | 2025-11-24 | ✅ 完整（新增因子/集群/DSL层） |
 | 核心模块 | v1.2.0 | 2025-11-26 | ✅ 完整（新增压缩策略/二级索引/因子WAL） |
+| **协议文档** | **v1.0.0** | **2025-12-15** | ✅ **新增（HTTP REST + WebSocket DIFF）** |
 | API 参考 | v1.0.0 | 2025-10-06 | ✅ 完整 |
 | 集成指南 | v1.0.0 | 2025-10-06 | ✅ 完整 |
 | 开发指南 | v1.0.0 | 2025-10-07 | ✅ 完整（新增K线测试） |
@@ -192,5 +197,5 @@
 
 ---
 
-**最后更新**: 2025-11-26
-**维护者**: QAExchange-RS 开发团队
+**最后更新**: 2025-12-15
+**维护者**: @yutiansut @quantaxis

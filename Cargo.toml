@@ -107,6 +107,7 @@ crossbeam-skiplist = "0.1.3"
 arrow2 = { version = "0.18", features = ["io_parquet", "io_parquet_compression"] }
 parquet2 = { version = "0.17", default-features = false }  # 与 arrow2 版本匹配
 memmap2 = "0.9"  # mmap 零拷贝文件映射
+zstd = "0.13"  # ✨ ZSTD压缩，用于 factor state checkpoint @yutiansut @quantaxis
 
 # 查询引擎
 polars = { version = "0.51", features = ["lazy", "sql", "parquet", "dtype-full", "is_in"] }

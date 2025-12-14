@@ -674,6 +674,11 @@ impl OltpHybridStorage {
         self.olap_files.read().clone()
     }
 
+    /// 获取 WAL 管理器引用（用于历史数据查询）@yutiansut @quantaxis
+    pub fn get_wal_manager(&self) -> Arc<WalManager> {
+        self.wal.clone()
+    }
+
     /// 获取 OLAP 时间边界
     ///
     /// 早于此时间的数据应该查询 OLAP

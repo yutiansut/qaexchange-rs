@@ -270,15 +270,17 @@ impl WsMessageHandler {
 
             ClientMessage::QueryAccount => match self.account_mgr.get_account(user_id) {
                 Ok(account) => {
-                    let acc = account.read();
+                    // ✨ 使用 write() 以便调用 get_margin() 动态计算 @yutiansut @quantaxis
+                    let mut acc = account.write();
                     let frozen = acc.accounts.balance - acc.money;
+                    let margin = acc.get_margin();  // ✨ 修复: 使用动态计算的 margin
                     let data = serde_json::json!({
                         "account": {
                             "user_id": acc.account_cookie,
                             "balance": acc.accounts.balance,
                             "available": acc.money,
                             "frozen": frozen,
-                            "margin": acc.accounts.margin,
+                            "margin": margin,  // ✨ 使用动态计算的值
                             "profit": acc.accounts.close_profit,
                             "risk_ratio": acc.accounts.risk_ratio,
                         }

@@ -1,12 +1,15 @@
 //! HTTP API 路由配置
 
 use super::admin;
+use super::account_admin;  // Phase 12-13: 密码/手续费/保证金/冻结/审计/公告 @yutiansut @quantaxis
 use super::auth;
+use super::data_query;  // 数据查询和导出 @yutiansut @quantaxis
 use super::handlers;
 use super::kline;
 use super::management;
 use super::market;
 use super::monitoring;
+use super::transfer;  // 银期转账 @yutiansut @quantaxis
 use actix_web::web;
 
 /// 配置所有路由
@@ -44,7 +47,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(
                     "/{user_id}/equity-curve",
                     web::get().to(handlers::get_equity_curve),
-                ),
+                )
+                // Phase 11: 银期转账 @yutiansut @quantaxis
+                .route("/transfer", web::post().to(transfer::do_transfer))  // 执行转账
+                .route("/{account_id}/banks", web::get().to(transfer::get_banks))  // 签约银行
+                .route("/{account_id}/transfers", web::get().to(transfer::get_transfers)),  // 转账记录
         )
         // 订单管理
         .service(
@@ -55,7 +62,17 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(
                     "/user/{user_id}",
                     web::get().to(handlers::query_user_orders),
-                ),
+                )
+                // Phase 11: 批量下单/撤单 @yutiansut @quantaxis
+                .route("/batch", web::post().to(handlers::batch_submit_orders))
+                .route("/batch-cancel", web::post().to(handlers::batch_cancel_orders))
+                // Phase 11: 订单修改 @yutiansut @quantaxis
+                .route("/modify/{order_id}", web::put().to(handlers::modify_order))
+                // Phase 11: 条件单 @yutiansut @quantaxis
+                .route("/conditional", web::post().to(handlers::create_conditional_order))
+                .route("/conditional/list", web::get().to(handlers::get_conditional_orders))
+                .route("/conditional/statistics", web::get().to(handlers::get_conditional_order_statistics))
+                .route("/conditional/{conditional_order_id}", web::delete().to(handlers::cancel_conditional_order)),
         )
         // 持仓查询
         .service(
@@ -203,5 +220,58 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                     "/risk/force-liquidate",
                     web::post().to(management::force_liquidate_account),
                 ),
+        )
+        // ==================== Phase 12-13: 账户管理扩展功能 ====================
+        // @yutiansut @quantaxis
+        .service(
+            web::scope("/api/account-admin")
+                // Phase 12: 密码管理
+                .route("/password/change", web::post().to(account_admin::change_password))
+                .route("/password/reset", web::post().to(account_admin::reset_password))
+                // Phase 12: 手续费查询
+                .route("/commission/rates", web::get().to(account_admin::get_commission_rates))
+                .route("/commission/statistics/{account_id}", web::get().to(account_admin::get_commission_statistics))
+                // Phase 12: 保证金率管理
+                .route("/margin/rates", web::get().to(account_admin::get_margin_rates))
+                .route("/margin/summary/{account_id}", web::get().to(account_admin::get_margin_summary))
+                // Phase 13: 账户冻结
+                .route("/status/{account_id}", web::get().to(account_admin::get_account_status))
+                .route("/freeze", web::post().to(account_admin::freeze_account))
+                .route("/unfreeze", web::post().to(account_admin::unfreeze_account))
+        )
+        // Phase 13: 审计日志
+        .service(
+            web::scope("/api/audit")
+                .route("/logs", web::get().to(account_admin::query_audit_logs))
+                .route("/logs/{log_id}", web::get().to(account_admin::get_audit_log))
+        )
+        // Phase 13: 系统公告
+        .service(
+            web::scope("/api/announcements")
+                .route("", web::get().to(account_admin::query_announcements))
+                .route("", web::post().to(account_admin::create_announcement))
+                .route("/{announcement_id}", web::get().to(account_admin::get_announcement))
+                .route("/{announcement_id}", web::delete().to(account_admin::delete_announcement))
+        )
+        // ==================== 数据查询和分析 API ====================
+        // @yutiansut @quantaxis
+        .service(
+            web::scope("/api/data")
+                // 历史数据查询
+                .route("/history/ticks", web::get().to(data_query::query_history_ticks))
+                .route("/history/klines", web::get().to(data_query::query_batch_klines))
+                // 交易统计分析
+                .route("/statistics/trades", web::get().to(data_query::get_trade_statistics))
+                .route("/statistics/pnl", web::get().to(data_query::get_pnl_analysis))
+                .route("/statistics/risk", web::get().to(data_query::get_risk_statistics))
+                .route("/statistics/rankings", web::get().to(data_query::get_trade_rankings))
+                // 持仓分析
+                .route("/analysis/position/{account_id}", web::get().to(data_query::get_position_analysis))
+                // 日结算单
+                .route("/settlement/statement", web::get().to(data_query::get_settlement_statement))
+                // 数据导出
+                .route("/export", web::get().to(data_query::export_data))
+                // 市场概览
+                .route("/overview/market", web::get().to(data_query::get_market_overview))
         );
 }

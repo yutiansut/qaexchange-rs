@@ -69,6 +69,27 @@ const routes = [
         component: () => import('@/views/trades/index.vue'),
         meta: { title: '成交记录', icon: 'el-icon-tickets', group: 'trading' }
       },
+      // Phase 11: 银期转账 @yutiansut @quantaxis
+      {
+        path: 'transfer',
+        name: 'Transfer',
+        component: () => import('@/views/trade/transfer.vue'),
+        meta: { title: '银期转账', icon: 'el-icon-refresh', group: 'trading' }
+      },
+      // Phase 11: 条件单 @yutiansut @quantaxis
+      {
+        path: 'conditional-orders',
+        name: 'ConditionalOrders',
+        component: () => import('@/views/trade/conditional.vue'),
+        meta: { title: '条件单', icon: 'el-icon-aim', group: 'trading' }
+      },
+      // Phase 11: 批量下单 @yutiansut @quantaxis
+      {
+        path: 'batch-orders',
+        name: 'BatchOrders',
+        component: () => import('@/views/trade/batch.vue'),
+        meta: { title: '批量下单', icon: 'el-icon-copy-document', group: 'trading' }
+      },
       {
         path: 'account-curve',
         name: 'AccountCurve',
@@ -129,6 +150,44 @@ const routes = [
         name: 'AdminTransactions',
         component: () => import('@/views/admin/transactions.vue'),
         meta: { title: '资金流水', icon: 'el-icon-notebook-2', group: 'admin', requireAdmin: true }
+      },
+      // Phase 12-13: 用户功能 @yutiansut @quantaxis
+      {
+        path: 'password',
+        name: 'Password',
+        component: () => import('@/views/user/password.vue'),
+        meta: { title: '密码管理', icon: 'el-icon-key', group: 'user' }
+      },
+      {
+        path: 'commission',
+        name: 'Commission',
+        component: () => import('@/views/user/commission.vue'),
+        meta: { title: '手续费查询', icon: 'el-icon-money', group: 'user' }
+      },
+      {
+        path: 'margin',
+        name: 'Margin',
+        component: () => import('@/views/user/margin.vue'),
+        meta: { title: '保证金查询', icon: 'el-icon-s-finance', group: 'user' }
+      },
+      // Phase 13: 管理端功能 @yutiansut @quantaxis
+      {
+        path: 'admin-account-freeze',
+        name: 'AdminAccountFreeze',
+        component: () => import('@/views/admin/account-freeze.vue'),
+        meta: { title: '账户状态管理', icon: 'el-icon-lock', group: 'admin', requireAdmin: true }
+      },
+      {
+        path: 'admin-audit-logs',
+        name: 'AdminAuditLogs',
+        component: () => import('@/views/admin/audit-logs.vue'),
+        meta: { title: '审计日志', icon: 'el-icon-document-checked', group: 'admin', requireAdmin: true }
+      },
+      {
+        path: 'admin-announcements',
+        name: 'AdminAnnouncements',
+        component: () => import('@/views/admin/announcements.vue'),
+        meta: { title: '系统公告', icon: 'el-icon-bell', group: 'admin', requireAdmin: true }
       },
       // WebSocket 测试页面
       {
