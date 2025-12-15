@@ -1,3 +1,7 @@
+/**
+ * Vuex Store @yutiansut @quantaxis
+ * RBAC 权限体系集成
+ */
 import Vue from 'vue'
 import Vuex from 'vuex'
 import { getSystemMonitoring, login as apiLogin, getCurrentUser } from '@/api'
@@ -6,6 +10,67 @@ import { getSystemMonitoring, login as apiLogin, getCurrentUser } from '@/api'
 import websocket from './modules/websocket'
 
 Vue.use(Vuex)
+
+// ==================== RBAC 角色和权限常量 @yutiansut @quantaxis ====================
+export const UserRoles = {
+  Admin: 'Admin',
+  Trader: 'Trader',
+  Analyst: 'Analyst',
+  ReadOnly: 'ReadOnly',
+  RiskManager: 'RiskManager',
+  Settlement: 'Settlement'
+}
+
+export const Permissions = {
+  // 交易权限
+  Trade: 'Trade',
+  CancelOrder: 'CancelOrder',
+  ModifyOrder: 'ModifyOrder',
+  BatchOrder: 'BatchOrder',
+  ConditionalOrder: 'ConditionalOrder',
+  Transfer: 'Transfer',
+  // 账户权限
+  ViewOwnAccount: 'ViewOwnAccount',
+  ViewAllAccounts: 'ViewAllAccounts',
+  OpenAccount: 'OpenAccount',
+  CloseAccount: 'CloseAccount',
+  FreezeAccount: 'FreezeAccount',
+  DepositWithdraw: 'DepositWithdraw',
+  // 订单/持仓/成交权限
+  ViewOwnOrders: 'ViewOwnOrders',
+  ViewAllOrders: 'ViewAllOrders',
+  ViewOwnPositions: 'ViewOwnPositions',
+  ViewAllPositions: 'ViewAllPositions',
+  ViewOwnTrades: 'ViewOwnTrades',
+  ViewAllTrades: 'ViewAllTrades',
+  // 市场数据权限
+  ViewMarketData: 'ViewMarketData',
+  ViewKline: 'ViewKline',
+  ViewOrderbook: 'ViewOrderbook',
+  // 风控权限
+  ViewRisk: 'ViewRisk',
+  ForceLiquidate: 'ForceLiquidate',
+  // 结算权限
+  ExecuteSettlement: 'ExecuteSettlement',
+  SetSettlementPrice: 'SetSettlementPrice',
+  ViewSettlementHistory: 'ViewSettlementHistory',
+  // 合约管理权限
+  ViewInstruments: 'ViewInstruments',
+  CreateInstrument: 'CreateInstrument',
+  ModifyInstrument: 'ModifyInstrument',
+  SuspendResumeInstrument: 'SuspendResumeInstrument',
+  // 用户管理权限
+  ViewUsers: 'ViewUsers',
+  CreateUser: 'CreateUser',
+  ModifyUserRole: 'ModifyUserRole',
+  FreezeUser: 'FreezeUser',
+  // 系统管理权限
+  ViewMonitoring: 'ViewMonitoring',
+  ViewAuditLogs: 'ViewAuditLogs',
+  ManageAnnouncements: 'ManageAnnouncements',
+  ViewStatistics: 'ViewStatistics',
+  ExportData: 'ExportData'
+}
 
 export default new Vuex.Store({
   modules: {
@@ -24,6 +89,12 @@ export default new Vuex.Store({
 
     // 是否已登录
     isLoggedIn: !!localStorage.getItem('token'),
+
+    // RBAC: 用户角色列表 @yutiansut @quantaxis
+    roles: JSON.parse(localStorage.getItem('roles') || '[]'),
+
+    // RBAC: 用户权限列表 @yutiansut @quantaxis
+    permissions: JSON.parse(localStorage.getItem('permissions') || '[]'),
 
     // 系统监控数据
     monitoring: {
@@ -97,6 +168,17 @@ export default new Vuex.Store({
 
     SET_REFRESH_TIMER(state, timer) {
       state.refreshTimer = timer
+    },
+
+    // RBAC mutations @yutiansut @quantaxis
+    SET_ROLES(state, roles) {
+      state.roles = roles || []
+      localStorage.setItem('roles', JSON.stringify(state.roles))
+    },
+
+    SET_PERMISSIONS(state, permissions) {
+      state.permissions = permissions || []
+      localStorage.setItem('permissions', JSON.stringify(state.permissions))
     }
   },
 
@@ -106,19 +188,24 @@ export default new Vuex.Store({
       commit('SET_CURRENT_USER', userId)
     },
 
-    // 用户登录
+    // 用户登录 @yutiansut @quantaxis
+    // 支持 RBAC 角色和权限
     async login({ commit }, loginData) {
       try {
         const data = await apiLogin(loginData)
-        const { token, user_id, username, is_admin } = data
+        const { token, user_id, username, is_admin, roles, permissions } = data
 
         // 保存 token
         commit('SET_TOKEN', token)
 
-        // 保存用户信息
-        const userInfo = { user_id, username, is_admin }
+        // 保存用户信息 (包含角色)
+        const userInfo = { user_id, username, is_admin, roles }
         commit('SET_USER_INFO', userInfo)
         commit('SET_CURRENT_USER', user_id)
+
+        // 保存 RBAC 信息 @yutiansut @quantaxis
+        commit('SET_ROLES', roles || [])
+        commit('SET_PERMISSIONS', permissions || [])
 
         return data
       } catch (error) {
@@ -127,11 +214,14 @@ export default new Vuex.Store({
       }
     },
 
-    // 用户登出
+    // 用户登出 @yutiansut @quantaxis
     logout({ commit }) {
       commit('SET_TOKEN', '')
       commit('SET_USER_INFO', null)
       commit('SET_CURRENT_USER', '')
+      // 清除 RBAC 信息
+      commit('SET_ROLES', [])
+      commit('SET_PERMISSIONS', [])
       localStorage.clear()
     },
 
@@ -202,6 +292,74 @@ export default new Vuex.Store({
       const balance = state.monitoring.accounts.total_balance
       const margin = state.monitoring.accounts.total_margin_used
       return balance > 0 ? ((margin / balance) * 100).toFixed(1) : '0.0'
+    },
+
+    // ==================== RBAC Getters @yutiansut @quantaxis ====================
+
+    // 获取用户角色列表
+    roles: state => state.roles,
+
+    // 获取用户权限列表
+    permissions: state => state.permissions,
+
+    // 检查用户是否拥有指定角色
+    hasRole: state => role => {
+      // Admin 拥有所有角色
+      if (state.roles.includes('Admin')) return true
+      return state.roles.includes(role)
+    },
+
+    // 检查用户是否拥有指定权限
+    hasPermission: state => permission => {
+      // Admin 拥有所有权限
+      if (state.roles.includes('Admin')) return true
+      return state.permissions.includes(permission)
+    },
+
+    // 检查用户是否拥有任一指定权限
+    hasAnyPermission: state => permissions => {
+      if (state.roles.includes('Admin')) return true
+      return permissions.some(p => state.permissions.includes(p))
+    },
+
+    // 检查用户是否拥有所有指定权限
+    hasAllPermissions: state => permissions => {
+      if (state.roles.includes('Admin')) return true
+      return permissions.every(p => state.permissions.includes(p))
+    },
+
+    // 获取用户主要角色 (优先级最高)
+    primaryRole: state => {
+      const rolePriority = {
+        Admin: 100,
+        RiskManager: 80,
+        Settlement: 70,
+        Trader: 50,
+        Analyst: 30,
+        ReadOnly: 10
+      }
+      if (state.roles.length === 0) return 'ReadOnly'
+      return state.roles.reduce((a, b) =>
+        (rolePriority[a] || 0) >= (rolePriority[b] || 0) ? a : b
+      )
+    },
+
+    // 是否是风控员
+    isRiskManager: state => state.roles.includes('RiskManager') || state.roles.includes('Admin'),
+
+    // 是否是结算员
+    isSettlement: state => state.roles.includes('Settlement') || state.roles.includes('Admin'),
+
+    // 是否有交易权限
+    canTrade: state => {
+      if (state.roles.includes('Admin')) return true
+      return state.permissions.includes('Trade')
+    },
+
+    // 是否有管理员权限 (ViewAllAccounts, etc.)
+    canManage: state => {
+      if (state.roles.includes('Admin')) return true
+      return state.permissions.includes('ViewAllAccounts')
     }
   }
 })

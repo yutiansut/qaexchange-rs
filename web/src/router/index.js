@@ -1,6 +1,11 @@
+/**
+ * Vue Router @yutiansut @quantaxis
+ * RBAC 权限路由守卫
+ */
 import Vue from 'vue'
 import VueRouter from 'vue-router'
 import store from '@/store'
+import { Permissions } from '@/store'
 
 Vue.use(VueRouter)
 
@@ -114,42 +119,43 @@ const routes = [
         component: () => import('@/views/monitoring/index.vue'),
         meta: { title: '系统监控', icon: 'el-icon-odometer', group: 'system' }
       },
-      // 管理端功能
+      // 管理端功能 @yutiansut @quantaxis
+      // RBAC: 使用 permissions 代替 requireAdmin
       {
         path: 'market-overview',
         name: 'MarketOverview',
         component: () => import('@/views/admin/market-overview.vue'),
-        meta: { title: '市场总览', icon: 'el-icon-view', group: 'system' }
+        meta: { title: '市场总览', icon: 'el-icon-view', group: 'system', permissions: ['ViewStatistics'] }
       },
       {
         path: 'admin-instruments',
         name: 'AdminInstruments',
         component: () => import('@/views/admin/instruments.vue'),
-        meta: { title: '合约管理', icon: 'el-icon-s-management', group: 'admin', requireAdmin: true }
+        meta: { title: '合约管理', icon: 'el-icon-s-management', group: 'admin', requireAdmin: true, permissions: ['ViewInstruments'] }
       },
       {
         path: 'admin-risk',
         name: 'AdminRisk',
         component: () => import('@/views/admin/risk.vue'),
-        meta: { title: '风控监控', icon: 'el-icon-warning', group: 'admin', requireAdmin: true }
+        meta: { title: '风控监控', icon: 'el-icon-warning', group: 'admin', requireAdmin: true, permissions: ['ViewRisk'], roles: ['Admin', 'RiskManager'] }
       },
       {
         path: 'admin-settlement',
         name: 'AdminSettlement',
         component: () => import('@/views/admin/settlement.vue'),
-        meta: { title: '结算管理', icon: 'el-icon-s-finance', group: 'admin', requireAdmin: true }
+        meta: { title: '结算管理', icon: 'el-icon-s-finance', group: 'admin', requireAdmin: true, permissions: ['ExecuteSettlement'], roles: ['Admin', 'Settlement'] }
       },
       {
         path: 'admin-accounts',
         name: 'AdminAccounts',
         component: () => import('@/views/admin/accounts.vue'),
-        meta: { title: '账户管理', icon: 'el-icon-user-solid', group: 'admin', requireAdmin: true }
+        meta: { title: '账户管理', icon: 'el-icon-user-solid', group: 'admin', requireAdmin: true, permissions: ['ViewAllAccounts'] }
       },
       {
         path: 'admin-transactions',
         name: 'AdminTransactions',
         component: () => import('@/views/admin/transactions.vue'),
-        meta: { title: '资金流水', icon: 'el-icon-notebook-2', group: 'admin', requireAdmin: true }
+        meta: { title: '资金流水', icon: 'el-icon-notebook-2', group: 'admin', requireAdmin: true, permissions: ['ViewAllAccounts'] }
       },
       // Phase 12-13: 用户功能 @yutiansut @quantaxis
       {
@@ -171,23 +177,24 @@ const routes = [
         meta: { title: '保证金查询', icon: 'el-icon-s-finance', group: 'user' }
       },
       // Phase 13: 管理端功能 @yutiansut @quantaxis
+      // RBAC: 精细化权限控制
       {
         path: 'admin-account-freeze',
         name: 'AdminAccountFreeze',
         component: () => import('@/views/admin/account-freeze.vue'),
-        meta: { title: '账户状态管理', icon: 'el-icon-lock', group: 'admin', requireAdmin: true }
+        meta: { title: '账户状态管理', icon: 'el-icon-lock', group: 'admin', requireAdmin: true, permissions: ['FreezeAccount'], roles: ['Admin', 'RiskManager'] }
       },
       {
         path: 'admin-audit-logs',
         name: 'AdminAuditLogs',
         component: () => import('@/views/admin/audit-logs.vue'),
-        meta: { title: '审计日志', icon: 'el-icon-document-checked', group: 'admin', requireAdmin: true }
+        meta: { title: '审计日志', icon: 'el-icon-document-checked', group: 'admin', requireAdmin: true, permissions: ['ViewAuditLogs'], roles: ['Admin', 'RiskManager'] }
       },
       {
         path: 'admin-announcements',
         name: 'AdminAnnouncements',
         component: () => import('@/views/admin/announcements.vue'),
-        meta: { title: '系统公告', icon: 'el-icon-bell', group: 'admin', requireAdmin: true }
+        meta: { title: '系统公告', icon: 'el-icon-bell', group: 'admin', requireAdmin: true, permissions: ['ManageAnnouncements'] }
       },
       // WebSocket 测试页面
       {
@@ -206,10 +213,13 @@ const router = new VueRouter({
   routes
 })
 
-// 路由守卫
+// 路由守卫 @yutiansut @quantaxis
+// RBAC: 支持角色和权限检查
 router.beforeEach((to, from, next) => {
   const isLoggedIn = store.getters.isLoggedIn
   const isAdmin = store.getters.isAdmin
+  const roles = store.getters.roles || []
+  const permissions = store.getters.permissions || []
 
   // 设置页面标题
   document.title = to.meta.title ? `${to.meta.title} - QAExchange` : 'QAExchange'
@@ -229,10 +239,46 @@ router.beforeEach((to, from, next) => {
     return
   }
 
-  // 如果访问管理员页面但不是管理员，拒绝访问
-  if (to.meta.requireAdmin && !isAdmin) {
+  // RBAC: 如果访问管理员页面但不是管理员，检查角色和权限
+  if (to.meta.requireAdmin) {
+    // Admin 角色可以访问所有管理页面
+    if (isAdmin) {
+      next()
+      return
+    }
+
+    // 检查是否有指定角色 (roles 数组)
+    if (to.meta.roles && to.meta.roles.length > 0) {
+      const hasRequiredRole = to.meta.roles.some(role => roles.includes(role))
+      if (hasRequiredRole) {
+        next()
+        return
+      }
+    }
+
+    // 检查是否有指定权限 (permissions 数组)
+    if (to.meta.permissions && to.meta.permissions.length > 0) {
+      const hasRequiredPermission = to.meta.permissions.some(perm => permissions.includes(perm))
+      if (hasRequiredPermission) {
+        next()
+        return
+      }
+    }
+
+    // 无权限，跳转到仪表盘
+    console.warn(`Access denied: ${to.path}, required roles: ${to.meta.roles}, permissions: ${to.meta.permissions}`)
     next('/dashboard')
     return
+  }
+
+  // 非管理页面但有权限要求
+  if (to.meta.permissions && to.meta.permissions.length > 0 && !isAdmin) {
+    const hasRequiredPermission = to.meta.permissions.some(perm => permissions.includes(perm))
+    if (!hasRequiredPermission) {
+      console.warn(`Access denied: ${to.path}, required permissions: ${to.meta.permissions}`)
+      next('/dashboard')
+      return
+    }
   }
 
   next()

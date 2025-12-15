@@ -2,7 +2,7 @@
 //!
 //! 负责用户的注册、登录、查询、账户绑定等管理功能
 
-use super::{User, UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserStatus};
+use super::{User, UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRole, UserStatus};
 use crate::ExchangeError;
 use dashmap::DashMap;
 use parking_lot::RwLock;
@@ -45,7 +45,8 @@ impl UserManager {
         self.storage = Some(storage);
     }
 
-    /// 注册新用户
+    /// 注册新用户 @yutiansut @quantaxis
+    /// 第一个注册的用户自动成为管理员
     pub fn register(&self, req: UserRegisterRequest) -> Result<User> {
         // 检查用户名是否已存在
         if self.username_index.contains_key(&req.username) {
@@ -79,8 +80,16 @@ impl UserManager {
         let password_hash = bcrypt::hash(&req.password, bcrypt::DEFAULT_COST)
             .map_err(|e| ExchangeError::InternalError(format!("Password hashing failed: {}", e)))?;
 
+        // 检查是否是第一个用户（自动成为管理员）@yutiansut @quantaxis
+        let is_first_user = self.users.is_empty();
+
         // 创建用户
-        let mut user = User::new(req.username.clone(), password_hash);
+        let mut user = if is_first_user {
+            log::info!("First user registration, granting Admin role");
+            User::new_admin(req.username.clone(), password_hash)
+        } else {
+            User::new(req.username.clone(), password_hash)
+        };
         user.phone = req.phone.clone();
         user.email = req.email.clone();
         user.real_name = req.real_name;
@@ -151,7 +160,8 @@ impl UserManager {
         }
     }
 
-    /// 用户登录
+    /// 用户登录 @yutiansut @quantaxis
+    /// 返回用户角色和权限信息
     pub fn login(&self, req: UserLoginRequest) -> Result<UserLoginResponse> {
         // 查找用户
         let user_id = self
@@ -175,6 +185,9 @@ impl UserManager {
                 username: None,
                 token: None,
                 message: "User is frozen or deleted".to_string(),
+                roles: None,
+                is_admin: None,
+                permissions: None,
             });
         }
 
@@ -186,6 +199,9 @@ impl UserManager {
                 username: None,
                 token: None,
                 message: "Invalid password".to_string(),
+                roles: None,
+                is_admin: None,
+                permissions: None,
             });
         }
 
@@ -195,12 +211,22 @@ impl UserManager {
                 ExchangeError::InternalError(format!("Failed to generate JWT token: {}", e))
             })?;
 
+        // 获取用户权限列表 (字符串格式用于前端)
+        let permissions: Vec<String> = user
+            .get_permissions()
+            .iter()
+            .map(|p| format!("{:?}", p))
+            .collect();
+
         Ok(UserLoginResponse {
             success: true,
             user_id: Some(user.user_id.clone()),
             username: Some(user.username.clone()),
             token: Some(token),
             message: "Login successful".to_string(),
+            roles: Some(user.roles.clone()),
+            is_admin: Some(user.is_admin()),
+            permissions: Some(permissions),
         })
     }
 
@@ -321,6 +347,124 @@ impl UserManager {
     /// 获取用户数量
     pub fn user_count(&self) -> usize {
         self.users.len()
+    }
+
+    // ==================== RBAC 角色管理方法 @yutiansut @quantaxis ====================
+
+    /// 为用户添加角色
+    pub fn add_user_role(&self, user_id: &str, role: UserRole) -> Result<()> {
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
+
+        let mut user = user_arc.write();
+        user.add_role(role);
+
+        log::info!("Role {:?} added to user {}", role, user_id);
+        Ok(())
+    }
+
+    /// 移除用户角色
+    pub fn remove_user_role(&self, user_id: &str, role: UserRole) -> Result<()> {
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
+
+        let mut user = user_arc.write();
+        user.remove_role(role);
+
+        log::info!("Role {:?} removed from user {}", role, user_id);
+        Ok(())
+    }
+
+    /// 设置用户角色列表
+    pub fn set_user_roles(&self, user_id: &str, roles: Vec<UserRole>) -> Result<()> {
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
+
+        let mut user = user_arc.write();
+        user.set_roles(roles.clone());
+
+        log::info!("Roles {:?} set for user {}", roles, user_id);
+        Ok(())
+    }
+
+    /// 获取用户角色
+    pub fn get_user_roles(&self, user_id: &str) -> Result<Vec<UserRole>> {
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
+
+        let user = user_arc.read();
+        Ok(user.roles.clone())
+    }
+
+    /// 检查用户是否拥有指定角色
+    pub fn user_has_role(&self, user_id: &str, role: UserRole) -> Result<bool> {
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
+
+        let user = user_arc.read();
+        Ok(user.has_role(role))
+    }
+
+    /// 检查用户是否是管理员
+    pub fn is_user_admin(&self, user_id: &str) -> Result<bool> {
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
+
+        let user = user_arc.read();
+        Ok(user.is_admin())
+    }
+
+    /// 检查用户是否拥有指定权限
+    pub fn user_has_permission(&self, user_id: &str, permission: super::Permission) -> Result<bool> {
+        let user_arc = self
+            .users
+            .get(user_id)
+            .ok_or_else(|| ExchangeError::UserError(format!("User not found: {}", user_id)))?;
+
+        let user = user_arc.read();
+        Ok(user.has_permission(permission))
+    }
+
+    /// 获取所有管理员用户
+    pub fn list_admins(&self) -> Vec<User> {
+        self.users
+            .iter()
+            .filter_map(|entry| {
+                let user = entry.value().read();
+                if user.is_admin() {
+                    Some(user.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// 按角色筛选用户
+    pub fn list_users_by_role(&self, role: UserRole) -> Vec<User> {
+        self.users
+            .iter()
+            .filter_map(|entry| {
+                let user = entry.value().read();
+                if user.has_role(role) {
+                    Some(user.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 

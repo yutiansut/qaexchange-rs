@@ -3,22 +3,37 @@
     <el-row :gutter="20">
       <!-- 左侧：订单簿和最新成交 -->
       <el-col :span="8">
-        <!-- 合约选择 -->
+        <!-- 合约选择 + WebSocket 状态 @yutiansut @quantaxis -->
         <el-card class="instrument-selector" shadow="hover">
-          <el-select
-            v-model="selectedInstrument"
-            @change="handleInstrumentChange"
-            placeholder="选择合约"
-            style="width: 100%"
-            size="medium"
-          >
-            <el-option
-              v-for="inst in instruments"
-              :key="inst.instrument_id"
-              :label="`${inst.instrument_id} - ${inst.name}`"
-              :value="inst.instrument_id"
-            />
-          </el-select>
+          <div class="selector-header">
+            <el-select
+              v-model="selectedInstrument"
+              @change="handleInstrumentChange"
+              placeholder="选择合约"
+              style="flex: 1"
+              size="medium"
+            >
+              <el-option
+                v-for="inst in instruments"
+                :key="inst.instrument_id"
+                :label="`${inst.instrument_id} - ${inst.name}`"
+                :value="inst.instrument_id"
+              />
+            </el-select>
+            <!-- WebSocket 连接状态指示器 -->
+            <el-tooltip :content="wsEnabled ? '点击切换到 HTTP 轮询' : '点击切换到 WebSocket'" placement="top">
+              <el-tag
+                :type="wsConnectionStatus.type"
+                size="small"
+                class="ws-status-tag"
+                @click="toggleWebSocket"
+                style="cursor: pointer; margin-left: 8px;"
+              >
+                <i :class="wsEnabled ? 'el-icon-connection' : 'el-icon-refresh'"></i>
+                {{ wsConnectionStatus.text }}
+              </el-tag>
+            </el-tooltip>
+          </div>
         </el-card>
 
         <!-- 实时行情 -->
@@ -239,6 +254,8 @@ import { getInstruments, getOrderBook, getTick, getRecentTrades, submitOrder, ca
 import { mapGetters } from 'vuex'
 import OrderForm from './components/OrderForm.vue'
 import CloseForm from './components/CloseForm.vue'
+// ✨ P1-3: WebSocket 实时数据集成 @yutiansut @quantaxis
+import WebSocketManager, { ConnectionState } from '@/websocket'
 
 export default {
   name: 'Trade',
@@ -272,6 +289,17 @@ export default {
       return this.orderbook.asks && this.orderbook.asks.length > 0
         ? this.orderbook.asks[0].price
         : (this.tickData.ask_price || null)
+    },
+    // ✨ WebSocket 连接状态显示
+    wsConnectionStatus() {
+      const statusMap = {
+        [ConnectionState.CONNECTED]: { text: '已连接', type: 'success' },
+        [ConnectionState.CONNECTING]: { text: '连接中', type: 'warning' },
+        [ConnectionState.RECONNECTING]: { text: '重连中', type: 'warning' },
+        [ConnectionState.DISCONNECTED]: { text: '未连接', type: 'danger' },
+        [ConnectionState.CLOSING]: { text: '关闭中', type: 'info' }
+      }
+      return statusMap[this.wsState] || { text: '未知', type: 'info' }
     }
   },
   data() {
@@ -296,15 +324,27 @@ export default {
       prevPrice: 0,
       priceChange: 0,
       priceChangePercent: 0,
-      refreshTimer: null
+      refreshTimer: null,
+      // ✨ P1-3: WebSocket 相关状态 @yutiansut @quantaxis
+      ws: null,
+      wsState: ConnectionState.DISCONNECTED,
+      wsEnabled: true,  // 是否启用 WebSocket（可在 UI 中切换）
+      snapshotUnsubscribe: null,  // 快照监听取消函数
+      ordersRefreshTimer: null  // 委托刷新定时器（委托仍用 HTTP 轮询）
     }
   },
   mounted() {
     this.loadInstruments()
-    this.startAutoRefresh()
+    // ✨ P1-3: 优先使用 WebSocket，回退到 HTTP 轮询
+    if (this.wsEnabled) {
+      this.initWebSocket()
+    } else {
+      this.startAutoRefresh()
+    }
   },
   beforeDestroy() {
     this.stopAutoRefresh()
+    this.destroyWebSocket()
   },
   methods: {
     async loadInstruments() {
@@ -429,6 +469,12 @@ export default {
     },
 
     handleInstrumentChange() {
+      // ✨ P1-3: WebSocket 模式下重新订阅行情 @yutiansut @quantaxis
+      if (this.ws && this.ws.isConnected()) {
+        this.ws.subscribeQuote([this.selectedInstrument])
+        console.log('[Trade] Subscribed to new instrument:', this.selectedInstrument)
+      }
+      // 同时加载订单簿和成交（HTTP 补充）
       this.loadOrderBook()
       this.loadTick()
       this.loadRecentTrades()
@@ -531,6 +577,237 @@ export default {
         clearInterval(this.refreshTimer)
         this.refreshTimer = null
       }
+      if (this.ordersRefreshTimer) {
+        clearInterval(this.ordersRefreshTimer)
+        this.ordersRefreshTimer = null
+      }
+    },
+
+    // ====================================================================
+    // ✨ P1-3: WebSocket 实时数据集成 @yutiansut @quantaxis
+    // ====================================================================
+
+    /**
+     * 初始化 WebSocket 连接
+     */
+    initWebSocket() {
+      // 获取用户ID用于连接
+      const userId = (this.currentUser && this.currentUser.user_id) || this.selectedAccountId || 'anonymous'
+
+      this.ws = new WebSocketManager({
+        autoConnect: false,
+        userId: userId,
+        logLevel: 'DEBUG'
+      })
+
+      // 监听连接状态变化
+      this.ws.on('stateChange', ({ newState }) => {
+        this.wsState = newState
+        console.log('[Trade] WebSocket state changed:', newState)
+      })
+
+      // 监听消息更新
+      this.ws.on('message', () => {
+        this.handleSnapshotUpdate()
+      })
+
+      // 监听连接打开
+      this.ws.on('open', () => {
+        console.log('[Trade] WebSocket connected, subscribing to quotes')
+        // 订阅当前选中合约的行情
+        if (this.selectedInstrument) {
+          this.ws.subscribeQuote([this.selectedInstrument])
+        }
+        // 初始加载订单簿和成交（HTTP 作为补充）
+        this.loadOrderBook()
+        this.loadRecentTrades()
+      })
+
+      // 监听错误
+      this.ws.on('error', (error) => {
+        console.error('[Trade] WebSocket error:', error)
+        this.$message.error('WebSocket 连接错误')
+      })
+
+      // 连接 WebSocket
+      this.ws.connect(userId).catch(error => {
+        console.error('[Trade] Failed to connect WebSocket:', error)
+        // 回退到 HTTP 轮询
+        this.$message.warning('WebSocket 连接失败，使用 HTTP 轮询')
+        this.startAutoRefresh()
+      })
+
+      // 委托单仍然使用 HTTP 轮询（频率降低到 5 秒）
+      this.loadPendingOrders()
+      this.ordersRefreshTimer = setInterval(() => {
+        this.loadPendingOrders()
+      }, 5000)
+    },
+
+    /**
+     * 销毁 WebSocket 连接
+     */
+    destroyWebSocket() {
+      if (this.snapshotUnsubscribe) {
+        this.snapshotUnsubscribe()
+        this.snapshotUnsubscribe = null
+      }
+      if (this.ws) {
+        this.ws.destroy()
+        this.ws = null
+      }
+    },
+
+    /**
+     * 处理快照更新
+     * 从 WebSocket snapshot 中提取行情数据更新 UI
+     */
+    handleSnapshotUpdate() {
+      if (!this.ws) return
+
+      const snapshot = this.ws.getSnapshot()
+      if (!snapshot) return
+
+      // 更新行情数据
+      this.updateTickFromSnapshot(snapshot)
+
+      // 更新订单簿（如果有）
+      this.updateOrderbookFromSnapshot(snapshot)
+
+      // 更新委托单（如果有）
+      this.updateOrdersFromSnapshot(snapshot)
+    },
+
+    /**
+     * 从快照更新 Tick 数据
+     */
+    updateTickFromSnapshot(snapshot) {
+      const quotes = snapshot.quotes || {}
+      const quote = quotes[this.selectedInstrument]
+
+      if (quote) {
+        // 计算价格变化
+        if (this.tickData.last_price && quote.last_price) {
+          this.prevPrice = this.tickData.last_price
+          this.priceChange = quote.last_price - this.prevPrice
+          if (this.prevPrice !== 0) {
+            this.priceChangePercent = (this.priceChange / this.prevPrice) * 100
+          }
+        }
+
+        // 更新 tick 数据
+        this.tickData = {
+          last_price: quote.last_price || 0,
+          bid_price: quote.bid_price1 || quote.bid_price || 0,
+          ask_price: quote.ask_price1 || quote.ask_price || 0,
+          volume: quote.volume || 0,
+          // 额外字段
+          open: quote.open,
+          high: quote.highest || quote.high,
+          low: quote.lowest || quote.low,
+          pre_close: quote.pre_close,
+          open_interest: quote.open_interest
+        }
+      }
+    },
+
+    /**
+     * 从快照更新订单簿
+     * 注意：DIFF 协议中 orderbook 数据可能在 quotes 或单独的 orderbook 字段
+     */
+    updateOrderbookFromSnapshot(snapshot) {
+      const quotes = snapshot.quotes || {}
+      const quote = quotes[this.selectedInstrument]
+
+      if (quote) {
+        // 从五档行情构建订单簿
+        const bids = []
+        const asks = []
+
+        // 解析买盘（bid_price1~5, bid_volume1~5）
+        for (let i = 1; i <= 5; i++) {
+          const price = quote[`bid_price${i}`]
+          const volume = quote[`bid_volume${i}`]
+          if (price && price > 0) {
+            bids.push({ price, volume: volume || 0 })
+          }
+        }
+
+        // 解析卖盘（ask_price1~5, ask_volume1~5）
+        for (let i = 1; i <= 5; i++) {
+          const price = quote[`ask_price${i}`]
+          const volume = quote[`ask_volume${i}`]
+          if (price && price > 0) {
+            asks.push({ price, volume: volume || 0 })
+          }
+        }
+
+        // 如果有五档数据则更新订单簿
+        if (bids.length > 0 || asks.length > 0) {
+          this.orderbook = {
+            bids: bids.slice(0, this.depth),
+            asks: asks.slice(0, this.depth)
+          }
+        }
+      }
+    },
+
+    /**
+     * 从快照更新委托单
+     */
+    updateOrdersFromSnapshot(snapshot) {
+      const trade = snapshot.trade || {}
+      const userData = trade[this.selectedAccountId] || {}
+      const orders = userData.orders || {}
+
+      if (Object.keys(orders).length > 0) {
+        // 转换为数组并过滤活跃订单
+        const orderList = Object.values(orders).filter(o => {
+          const status = o.status
+          return status !== 'FINISHED' && status !== 'Filled' && status !== 'Cancelled' && status !== 'Rejected'
+        })
+
+        // 格式转换以匹配前端期望的格式
+        this.pendingOrders = orderList.map(o => ({
+          order_id: o.order_id,
+          instrument_id: o.instrument_id,
+          direction: o.direction,
+          price: o.limit_price || o.price || 0,
+          volume: o.volume_orign || o.volume || 0,
+          filled_volume: (o.volume_orign || 0) - (o.volume_left || 0),
+          status: this.mapOrderStatus(o.status),
+          user_id: o.user_id
+        }))
+      }
+    },
+
+    /**
+     * 映射 QIFI 订单状态到前端状态
+     */
+    mapOrderStatus(qifiStatus) {
+      const statusMap = {
+        'ALIVE': 'Submitted',
+        'FINISHED': 'Filled',
+        'PENDING': 'PendingRisk'
+      }
+      return statusMap[qifiStatus] || qifiStatus
+    },
+
+    /**
+     * 切换 WebSocket 启用状态
+     */
+    toggleWebSocket() {
+      this.wsEnabled = !this.wsEnabled
+
+      if (this.wsEnabled) {
+        this.stopAutoRefresh()
+        this.initWebSocket()
+        this.$message.success('已切换到 WebSocket 实时推送')
+      } else {
+        this.destroyWebSocket()
+        this.startAutoRefresh()
+        this.$message.info('已切换到 HTTP 轮询模式')
+      }
     }
   }
 }
@@ -589,10 +866,28 @@ $primary-color: #1890ff;
     color: $dark-text-primary;
   }
 
-  // 合约选择器
+  // 合约选择器 + WebSocket 状态 @yutiansut @quantaxis
   .instrument-selector {
     ::v-deep .el-card__body {
       padding: 12px 16px;
+    }
+
+    .selector-header {
+      display: flex;
+      align-items: center;
+    }
+
+    .ws-status-tag {
+      white-space: nowrap;
+      transition: all 0.2s ease;
+
+      &:hover {
+        transform: scale(1.05);
+      }
+
+      i {
+        margin-right: 4px;
+      }
     }
 
     ::v-deep .el-select {

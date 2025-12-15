@@ -236,12 +236,21 @@ impl DiffHandler {
                             match user_mgr.get_user(&username) {
                                 Ok(user) => {
                                     log::info!("Token auth successful for user: {}", user.username);
+                                    // RBAC: 返回角色和权限信息 @yutiansut @quantaxis
+                                    let permissions: Vec<String> = user
+                                        .get_permissions()
+                                        .iter()
+                                        .map(|p| format!("{:?}", p))
+                                        .collect();
                                     Ok(crate::user::UserLoginResponse {
                                         success: true,
                                         user_id: Some(user.user_id.clone()),
                                         username: Some(user.username.clone()),
                                         token: Some(password.clone()),
                                         message: "Token authentication successful".to_string(),
+                                        roles: Some(user.roles.clone()),
+                                        is_admin: Some(user.is_admin()),
+                                        permissions: Some(permissions),
                                     })
                                 }
                                 Err(e) => {
@@ -252,6 +261,9 @@ impl DiffHandler {
                                         username: None,
                                         token: None,
                                         message: format!("User not found: {}", e),
+                                        roles: None,
+                                        is_admin: None,
+                                        permissions: None,
                                     })
                                 }
                             }
@@ -267,6 +279,9 @@ impl DiffHandler {
                                 username: None,
                                 token: None,
                                 message: "Token user_id mismatch".to_string(),
+                                roles: None,
+                                is_admin: None,
+                                permissions: None,
                             })
                         }
                     }
