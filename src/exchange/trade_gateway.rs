@@ -1828,6 +1828,7 @@ mod tests {
                 volume,
                 price,
                 Some(2i64),
+                Some("counter_party"),
                 "QA001",
             )
             .unwrap();
@@ -1848,6 +1849,7 @@ mod tests {
                 5.0,
                 50100.0,
                 Some(3i64),
+                Some("counter_party"),
                 "QA002",
             )
             .unwrap();
@@ -1875,6 +1877,7 @@ mod tests {
             "LIMIT",
             50000.0,
             5.0,
+            "QA001",
         );
 
         assert!(result.is_ok());
@@ -1936,6 +1939,7 @@ mod tests {
                 10.0,
                 50000.0,
                 Some(exchange_order_id + 1),
+                Some("counter_party"),
                 "QA001",
             )
             .unwrap();

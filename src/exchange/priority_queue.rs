@@ -322,6 +322,8 @@ mod tests {
             volume,
             price,
             order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
         }
     }
 

@@ -195,6 +195,8 @@ pub async fn submit_order(
         volume: req.volume,
         price: req.price,
         order_type: req.order_type.clone(),
+        time_condition: None,
+        volume_condition: None,
     };
 
     let response = state.order_router.submit_order(core_req);
@@ -960,6 +962,8 @@ pub async fn batch_submit_orders(
             volume: order.volume,
             price: order.price,
             order_type: order.order_type.clone(),
+            time_condition: None,
+            volume_condition: None,
         };
 
         let response = state.order_router.submit_order(core_req);
@@ -1128,6 +1132,8 @@ pub async fn modify_order(
         volume: new_volume,
         price: new_price,
         order_type: original.price_type.clone(),
+        time_condition: None,
+        volume_condition: None,
     };
 
     let response = state.order_router.submit_order(submit_req);

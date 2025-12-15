@@ -153,6 +153,8 @@ impl WsMessageHandler {
                     volume,
                     price,
                     order_type,
+                    time_condition: None,
+                    volume_condition: None,
                 };
 
                 let response = self.order_router.submit_order(req);

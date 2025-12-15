@@ -99,7 +99,46 @@ pub struct AccountSettlement {
     pub available: f64,
 }
 
+/// 强平订单状态
+/// @yutiansut @quantaxis
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForceLiquidationStatus {
+    /// 待提交
+    Pending,
+    /// 已提交
+    Submitted,
+    /// 部分成交
+    PartiallyFilled,
+    /// 全部成交
+    Filled,
+    /// 已撤销
+    Cancelled,
+    /// 拒绝
+    Rejected,
+    /// 失败
+    Failed,
+}
+
+impl ForceLiquidationStatus {
+    /// 是否为终态
+    pub fn is_final(&self) -> bool {
+        matches!(self,
+            ForceLiquidationStatus::Filled |
+            ForceLiquidationStatus::Cancelled |
+            ForceLiquidationStatus::Rejected |
+            ForceLiquidationStatus::Failed
+        )
+    }
+
+    /// 是否成功
+    pub fn is_success(&self) -> bool {
+        matches!(self, ForceLiquidationStatus::Filled)
+    }
+}
+
 /// 强平订单结果
+/// @yutiansut @quantaxis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForceLiquidationOrder {
     pub instrument_id: String,
@@ -108,15 +147,111 @@ pub struct ForceLiquidationOrder {
     pub volume: f64,
     pub price: f64,
     pub order_id: Option<String>,
-    pub status: String,
+    pub status: ForceLiquidationStatus,
     pub error: Option<String>,
+    /// 已成交数量
+    pub filled_volume: f64,
+    /// 成交均价
+    pub filled_price: f64,
+    /// 提交时间
+    pub submit_time: Option<String>,
+    /// 最后更新时间
+    pub update_time: Option<String>,
+    /// 重试次数
+    pub retry_count: u32,
+}
+
+impl ForceLiquidationOrder {
+    pub fn new(instrument_id: String, direction: String, offset: String, volume: f64, price: f64) -> Self {
+        Self {
+            instrument_id,
+            direction,
+            offset,
+            volume,
+            price,
+            order_id: None,
+            status: ForceLiquidationStatus::Pending,
+            error: None,
+            filled_volume: 0.0,
+            filled_price: 0.0,
+            submit_time: None,
+            update_time: None,
+            retry_count: 0,
+        }
+    }
 }
 
 /// 强平执行结果
+/// @yutiansut @quantaxis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForceLiquidationResult {
+    /// 强平ID
+    pub liquidation_id: String,
+    /// 账户ID
     pub account_id: String,
+    /// 强平订单列表
     pub orders: Vec<ForceLiquidationOrder>,
+    /// 触发风险率
+    pub trigger_risk_ratio: f64,
+    /// 强平前权益
+    pub balance_before: f64,
+    /// 强平后权益
+    pub balance_after: f64,
+    /// 开始时间
+    pub start_time: String,
+    /// 完成时间
+    pub complete_time: Option<String>,
+    /// 总体状态
+    pub overall_status: ForceLiquidationStatus,
+    /// 备注
+    pub remark: Option<String>,
+}
+
+impl ForceLiquidationResult {
+    /// 检查是否全部完成
+    pub fn is_complete(&self) -> bool {
+        self.orders.iter().all(|o| o.status.is_final())
+    }
+
+    /// 检查是否全部成功
+    pub fn is_all_success(&self) -> bool {
+        self.orders.iter().all(|o| o.status.is_success())
+    }
+
+    /// 获取成功订单数
+    pub fn success_count(&self) -> usize {
+        self.orders.iter().filter(|o| o.status.is_success()).count()
+    }
+
+    /// 获取失败订单数
+    pub fn failed_count(&self) -> usize {
+        self.orders.iter().filter(|o| matches!(o.status,
+            ForceLiquidationStatus::Rejected |
+            ForceLiquidationStatus::Failed |
+            ForceLiquidationStatus::Cancelled
+        )).count()
+    }
+
+    /// 更新总体状态
+    pub fn update_overall_status(&mut self) {
+        if self.orders.is_empty() {
+            self.overall_status = ForceLiquidationStatus::Filled;
+            return;
+        }
+
+        if self.is_all_success() {
+            self.overall_status = ForceLiquidationStatus::Filled;
+        } else if self.is_complete() {
+            // 有失败的
+            self.overall_status = ForceLiquidationStatus::Failed;
+        } else if self.orders.iter().any(|o| o.status == ForceLiquidationStatus::PartiallyFilled) {
+            self.overall_status = ForceLiquidationStatus::PartiallyFilled;
+        } else if self.orders.iter().any(|o| o.status == ForceLiquidationStatus::Submitted) {
+            self.overall_status = ForceLiquidationStatus::Submitted;
+        } else {
+            self.overall_status = ForceLiquidationStatus::Pending;
+        }
+    }
 }
 
 /// 结算引擎
@@ -125,6 +260,12 @@ pub struct ForceLiquidationResult {
 /// - 并行结算：使用 Rayon 实现多账户并行处理
 /// - 三阶段处理：预计算(只读) -> 应用(短写锁) -> 异步强平
 /// - 原子统计：无锁性能指标收集
+///
+/// ## 强平确认机制 (Phase P0-3)
+/// @yutiansut @quantaxis
+/// - 强平状态追踪：Pending → Submitted → Filled/Failed
+/// - 强平历史记录：保存所有强平执行结果
+/// - 失败重试机制：最多重试3次
 pub struct SettlementEngine {
     /// 账户管理器
     account_mgr: Arc<AccountManager>,
@@ -165,6 +306,19 @@ pub struct SettlementEngine {
 
     /// 强平线程是否已启动
     force_close_worker_started: AtomicBool,
+
+    // ========== 强平确认机制 (P0-3) ==========
+    /// 强平历史记录 (liquidation_id -> ForceLiquidationResult)
+    liquidation_history: Arc<DashMap<String, ForceLiquidationResult>>,
+
+    /// 账户强平索引 (account_id -> Vec<liquidation_id>)
+    account_liquidations: Arc<DashMap<String, Vec<String>>>,
+
+    /// 强平序列号
+    liquidation_seq: AtomicU64,
+
+    /// 最大重试次数
+    max_retry_count: u32,
 }
 
 /// 强平任务
@@ -206,7 +360,44 @@ impl SettlementEngine {
             force_close_queue: Arc::new(sender),
             force_close_receiver: Arc::new(receiver),
             force_close_worker_started: AtomicBool::new(false),
+            // P0-3: 强平确认机制
+            liquidation_history: Arc::new(DashMap::new()),
+            account_liquidations: Arc::new(DashMap::new()),
+            liquidation_seq: AtomicU64::new(1),
+            max_retry_count: 3,
         }
+    }
+
+    /// 生成强平ID
+    fn generate_liquidation_id(&self) -> String {
+        let seq = self.liquidation_seq.fetch_add(1, Ordering::SeqCst);
+        format!("LIQ{}{:08}", Utc::now().format("%Y%m%d"), seq)
+    }
+
+    /// 获取强平记录
+    pub fn get_liquidation(&self, liquidation_id: &str) -> Option<ForceLiquidationResult> {
+        self.liquidation_history.get(liquidation_id).map(|r| r.value().clone())
+    }
+
+    /// 获取账户的所有强平记录
+    pub fn get_account_liquidations(&self, account_id: &str) -> Vec<ForceLiquidationResult> {
+        self.account_liquidations
+            .get(account_id)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| self.liquidation_history.get(id).map(|r| r.value().clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 获取待处理的强平记录
+    pub fn get_pending_liquidations(&self) -> Vec<ForceLiquidationResult> {
+        self.liquidation_history
+            .iter()
+            .filter(|entry| !entry.value().is_complete())
+            .map(|entry| entry.value().clone())
+            .collect()
     }
 
     /// 启动异步强平处理线程
@@ -275,6 +466,8 @@ impl SettlementEngine {
                                 volume: plan.volume,
                                 price,
                                 order_type: "LIMIT".to_string(),
+                                time_condition: None,
+                                volume_condition: None,
                             };
 
                             let _ = router.submit_force_order(submit_req);
@@ -629,22 +822,39 @@ impl SettlementEngine {
     }
 
     /// 应用结算结果到账户（短暂写锁）
+    ///
+    /// **重要**: 调用 QA_Account::settle() 方法完成以下操作：
+    /// - 清空日订单 (dailyorders) 和日成交 (dailytrades)
+    /// - 持仓结转：今仓 → 昨仓 (volume_long_today → volume_long_his)
+    /// - 释放冻结资金
+    /// - 更新 pre_balance、重置 commission/close_profit
+    ///
+    /// @yutiansut @quantaxis
     fn apply_settlement(
         &self,
         account: &Arc<parking_lot::RwLock<qars::qaaccount::account::QA_Account>>,
         calc: &PreCalculatedSettlement,
         date: &str,
     ) -> Result<AccountSettlement, String> {
-        // 获取写锁并快速更新
+        // 获取写锁并执行结算
         {
             let mut acc = account.write();
 
-            // 应用结算结果
-            acc.accounts.balance = calc.new_balance;
-            acc.money = calc.new_balance - calc.new_margin;
-            acc.accounts.available = acc.money;
+            // 【关键】调用 QA_Account::settle() 完成完整结算流程
+            // 包括：清空日订单/成交、持仓结转、释放冻结资金、重置账户状态
+            acc.settle();
+
+            // settle() 已经更新了大部分字段，这里补充预计算的盈亏值
+            // 因为 settle() 使用账户内部状态计算，我们用预计算值确保一致性
+            acc.accounts.position_profit = calc.position_profit;
             acc.accounts.risk_ratio = calc.risk_ratio;
         } // 写锁在此释放
+
+        // 重新读取结算后的最终状态
+        let final_state = {
+            let acc = account.read();
+            (acc.accounts.balance, acc.accounts.available, acc.accounts.margin)
+        };
 
         Ok(AccountSettlement {
             user_id: calc.account_id.clone(),
@@ -653,11 +863,11 @@ impl SettlementEngine {
             position_profit: calc.position_profit,
             commission: calc.commission,
             pre_balance: calc.pre_balance,
-            balance: calc.new_balance,
+            balance: final_state.0,
             risk_ratio: calc.risk_ratio,
             force_close: calc.need_force_close,
-            margin: calc.new_margin,
-            available: calc.new_balance - calc.new_margin,
+            margin: final_state.2,
+            available: final_state.1,
         })
     }
 
@@ -671,59 +881,53 @@ impl SettlementEngine {
     }
 
     /// 结算单个账户
+    ///
+    /// **重要**: 调用 QA_Account::settle() 方法完成完整结算
+    /// @yutiansut @quantaxis
     fn settle_account(
         &self,
         user_id: &str,
         date: &str,
     ) -> Result<AccountSettlement, ExchangeError> {
-        let mut account = self.account_mgr.get_account(user_id)?;
-        let mut acc = account.write();
+        let account = self.account_mgr.get_account(user_id)?;
 
-        // 记录结算前权益
-        let pre_balance = acc.accounts.balance;
+        // 记录结算前状态
+        let (pre_balance, close_profit, commission, position_profit, margin) = {
+            let acc = account.read();
+            let pre_balance = acc.accounts.balance;
+            let close_profit = acc.accounts.close_profit;
+            let commission = acc.accounts.commission;
 
-        // 1. 计算持仓盈亏（盯市）
-        let mut position_profit = 0.0;
-        for (code, pos) in acc.hold.iter() {
-            if let Some(settlement_price) = self.settlement_prices.get(code) {
-                // 多头盈亏
-                let long_volume = pos.volume_long_today + pos.volume_long_his;
-                if long_volume > 0.0 {
-                    let long_profit =
-                        (settlement_price.value() - pos.open_price_long) * long_volume;
-                    position_profit += long_profit;
-                }
-
-                // 空头盈亏
-                let short_volume = pos.volume_short_today + pos.volume_short_his;
-                if short_volume > 0.0 {
-                    let short_profit =
-                        (pos.open_price_short - settlement_price.value()) * short_volume;
-                    position_profit += short_profit;
+            // 计算持仓盯市盈亏
+            let mut position_profit = 0.0;
+            for (code, pos) in acc.hold.iter() {
+                if let Some(settlement_price) = self.settlement_prices.get(code) {
+                    let long_volume = pos.volume_long_today + pos.volume_long_his;
+                    if long_volume > 0.0 {
+                        position_profit += (settlement_price.value() - pos.open_price_long) * long_volume;
+                    }
+                    let short_volume = pos.volume_short_today + pos.volume_short_his;
+                    if short_volume > 0.0 {
+                        position_profit += (pos.open_price_short - settlement_price.value()) * short_volume;
+                    }
                 }
             }
+            (pre_balance, close_profit, commission, position_profit, acc.accounts.margin)
+        };
+
+        // 【关键】调用 QA_Account::settle() 完成完整结算
+        {
+            let mut acc = account.write();
+            acc.settle();
         }
 
-        // 2. 获取平仓盈亏
-        let close_profit = acc.accounts.close_profit;
-
-        // 3. 获取累计手续费（账户交易过程中已实时累计）
-        let commission = acc.accounts.commission;
-
-        // 4. 更新账户权益
-        acc.accounts.balance = pre_balance + position_profit + close_profit - commission;
-        acc.money = acc.accounts.balance - acc.accounts.margin;
-        acc.accounts.available = acc.money; // 同步更新 QIFI 协议字段
-
-        // 5. 计算风险度
-        let risk_ratio = if acc.accounts.balance > 0.0 {
-            acc.accounts.margin / acc.accounts.balance
-        } else {
-            999.0 // 资金为0或负数，风险极高
+        // 读取结算后状态
+        let (balance, risk_ratio, available, final_margin) = {
+            let acc = account.read();
+            (acc.accounts.balance, acc.accounts.risk_ratio, acc.accounts.available, acc.accounts.margin)
         };
-        acc.accounts.risk_ratio = risk_ratio;
 
-        // 6. 检查是否需要强平
+        // 检查是否需要强平
         let mut force_close = false;
         if risk_ratio >= self.force_close_threshold {
             force_close = true;
@@ -733,12 +937,6 @@ impl SettlementEngine {
                 risk_ratio * 100.0
             );
 
-            // 执行强平逻辑：清空所有持仓
-            // 注意：实际生产环境应该通过 OrderRouter 提交市价单平仓
-            // 这里采用简化方案：直接清空持仓（适用于模拟交易）
-            drop(acc); // 释放写锁
-            drop(account); // 释放账户引用
-
             if let Err(e) =
                 self.force_liquidate_account(user_id, Some("Settlement risk threshold".to_string()))
             {
@@ -746,11 +944,13 @@ impl SettlementEngine {
             } else {
                 log::info!("Successfully force closed account {}", user_id);
             }
-
-            // 重新获取账户引用（用于后续返回结算信息）
-            account = self.account_mgr.get_account(user_id)?;
-            acc = account.write();
         }
+
+        // 重新读取最终状态（强平后可能变化）
+        let (final_balance, final_available, final_margin_after) = {
+            let acc = account.read();
+            (acc.accounts.balance, acc.accounts.available, acc.accounts.margin)
+        };
 
         let settlement = AccountSettlement {
             user_id: user_id.to_string(),
@@ -759,11 +959,11 @@ impl SettlementEngine {
             position_profit,
             commission,
             pre_balance,
-            balance: acc.accounts.balance,
+            balance: final_balance,
             risk_ratio,
             force_close,
-            margin: acc.accounts.margin,
-            available: acc.accounts.available,
+            margin: final_margin_after,
+            available: final_available,
         };
 
         self.account_history
@@ -789,6 +989,12 @@ impl SettlementEngine {
     }
 
     /// 强平账户（提交真实订单）
+    ///
+    /// ## 强平确认机制 (P0-3)
+    /// @yutiansut @quantaxis
+    /// - 生成唯一强平ID用于追踪
+    /// - 记录每个订单的提交状态
+    /// - 保存强平历史以便查询
     pub fn force_liquidate_account(
         &self,
         account_id: &str,
@@ -843,20 +1049,49 @@ impl SettlementEngine {
             }
         }
 
+        // 生成强平ID
+        let liquidation_id = self.generate_liquidation_id();
+        let start_time = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
         if plans.is_empty() {
             log::info!(
-                "Force liquidation skipped: account {} has no positions",
-                account_id
+                "[Liquidation {}] Skipped: account {} has no positions",
+                liquidation_id, account_id
             );
-            return Ok(ForceLiquidationResult {
+
+            let result = ForceLiquidationResult {
+                liquidation_id: liquidation_id.clone(),
                 account_id: account_id.to_string(),
                 orders: Vec::new(),
-            });
+                trigger_risk_ratio: risk_ratio_before,
+                balance_before,
+                balance_after: balance_before,
+                start_time: start_time.clone(),
+                complete_time: Some(start_time),
+                overall_status: ForceLiquidationStatus::Filled,
+                remark,
+            };
+
+            // 保存历史
+            self.liquidation_history.insert(liquidation_id.clone(), result.clone());
+            self.account_liquidations
+                .entry(account_id.to_string())
+                .or_insert_with(Vec::new)
+                .push(liquidation_id);
+
+            return Ok(result);
         }
 
         drop(acc); // 释放账户锁，避免阻塞撮合
 
+        log::info!(
+            "[Liquidation {}] Starting for account {}, {} positions to close, risk_ratio={:.2}%",
+            liquidation_id, account_id, plans.len(), risk_ratio_before * 100.0
+        );
+
         let mut orders = Vec::with_capacity(plans.len());
+        let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
         for plan in plans.into_iter() {
             let price = self.calculate_force_price(
                 &plan.instrument_id,
@@ -871,31 +1106,37 @@ impl SettlementEngine {
                 volume: plan.volume,
                 price,
                 order_type: "LIMIT".to_string(),
+                time_condition: None,
+                volume_condition: None,
             };
 
             let response = order_router.submit_force_order(submit_req);
             let (status, error) = if response.success {
-                (
-                    response.status.unwrap_or_else(|| "submitted".to_string()),
-                    None,
-                )
+                (ForceLiquidationStatus::Submitted, None)
             } else {
-                (
-                    response.status.unwrap_or_else(|| "rejected".to_string()),
-                    response.error_message.clone(),
-                )
+                (ForceLiquidationStatus::Rejected, response.error_message.clone())
             };
 
-            orders.push(ForceLiquidationOrder {
-                instrument_id: plan.instrument_id,
-                direction: plan.direction,
-                offset: plan.offset,
-                volume: plan.volume,
+            let mut order = ForceLiquidationOrder::new(
+                plan.instrument_id.clone(),
+                plan.direction.clone(),
+                plan.offset.clone(),
+                plan.volume,
                 price,
-                order_id: response.order_id,
-                status,
-                error,
-            });
+            );
+            order.order_id = response.order_id.clone();
+            order.status = status;
+            order.error = error;
+            order.submit_time = Some(now.clone());
+            order.update_time = Some(now.clone());
+
+            log::info!(
+                "[Liquidation {}] Order submitted: {} {} {} {} @ {:.2}, order_id={:?}, status={:?}",
+                liquidation_id, plan.direction, plan.offset, plan.volume, plan.instrument_id, price,
+                response.order_id, status
+            );
+
+            orders.push(order);
         }
 
         // 读取最新权益（下单完成后）
@@ -909,8 +1150,40 @@ impl SettlementEngine {
             })
             .unwrap_or(balance_before);
 
+        // 构建完整的强平结果
+        let mut result = ForceLiquidationResult {
+            liquidation_id: liquidation_id.clone(),
+            account_id: account_id.to_string(),
+            orders,
+            trigger_risk_ratio: risk_ratio_before,
+            balance_before,
+            balance_after,
+            start_time,
+            complete_time: None,
+            overall_status: ForceLiquidationStatus::Pending,
+            remark: remark.clone(),
+        };
+
+        // 更新总体状态
+        result.update_overall_status();
+
+        // 如果所有订单都已完成（成功或失败），标记完成时间
+        if result.is_complete() {
+            result.complete_time = Some(Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        }
+
+        // 保存强平历史
+        self.liquidation_history.insert(liquidation_id.clone(), result.clone());
+
+        // 更新账户强平索引
+        self.account_liquidations
+            .entry(account_id.to_string())
+            .or_insert_with(Vec::new)
+            .push(liquidation_id.clone());
+
+        // 记录到风控监控器
         if let Some(risk_monitor) = self.risk_monitor.read().clone() {
-            let instruments: Vec<String> = orders.iter().map(|o| o.instrument_id.clone()).collect();
+            let instruments: Vec<String> = result.orders.iter().map(|o| o.instrument_id.clone()).collect();
             risk_monitor.record_liquidation(
                 account_id.to_string(),
                 risk_ratio_before,
@@ -921,10 +1194,12 @@ impl SettlementEngine {
             );
         }
 
-        Ok(ForceLiquidationResult {
-            account_id: account_id.to_string(),
-            orders,
-        })
+        log::info!(
+            "[Liquidation {}] Completed for account {}: {} orders, overall_status={:?}, balance: {:.2} -> {:.2}",
+            liquidation_id, account_id, result.orders.len(), result.overall_status, balance_before, balance_after
+        );
+
+        Ok(result)
     }
 
     /// 获取所有结算历史
@@ -972,6 +1247,11 @@ impl Default for SettlementEngine {
             force_close_queue: Arc::new(sender),
             force_close_receiver: Arc::new(receiver),
             force_close_worker_started: AtomicBool::new(false),
+            // P0-3: 强平确认机制
+            liquidation_history: Arc::new(DashMap::new()),
+            account_liquidations: Arc::new(DashMap::new()),
+            liquidation_seq: AtomicU64::new(1),
+            max_retry_count: 3,
         }
     }
 }

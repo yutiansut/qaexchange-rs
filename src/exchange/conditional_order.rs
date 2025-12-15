@@ -89,6 +89,8 @@ impl ConditionalOrder {
             volume: self.volume,
             price: self.limit_price.unwrap_or(0.0),
             order_type: self.order_type.clone(),
+            time_condition: None,
+            volume_condition: None,
         }
     }
 }

@@ -148,10 +148,11 @@ impl DiffHandler {
                 time_condition,
             } => {
                 log::info!(
-                    "DIFF insert order: user_id={}, account_id={:?}, order_id={:?}",
+                    "DIFF insert order: user_id={}, account_id={:?}, order_id={:?}, time_cond={:?}",
                     order_user_id,
                     account_id,
-                    order_id
+                    order_id,
+                    time_condition
                 );
                 self.handle_insert_order(
                     user_id,
@@ -165,6 +166,8 @@ impl DiffHandler {
                     volume,
                     price_type,
                     limit_price,
+                    time_condition,  // ✨ IOC/FOK/GTC 支持 @yutiansut @quantaxis
+                    volume_condition, // ✨ ANY/MIN/ALL 支持 @yutiansut @quantaxis
                     ctx_addr,
                 )
                 .await;
@@ -530,6 +533,8 @@ impl DiffHandler {
         volume: i64,
         price_type: String,
         limit_price: Option<f64>,
+        time_condition: Option<String>,    // ✨ IOC/FOK/GTC 支持 @yutiansut @quantaxis
+        volume_condition: Option<String>,  // ✨ ANY/MIN/ALL 支持 @yutiansut @quantaxis
         ctx_addr: Addr<DiffWebsocketSession>,
     ) {
         // ✅ 自动生成 order_id（如果客户端未提供）
@@ -641,6 +646,13 @@ impl DiffHandler {
             };
 
             // 构造OrderRouter请求（交易层只关心 account_id）
+            // ✨ 支持 IOC/FOK/GTC 时间条件 和 ANY/MIN/ALL 数量条件 @yutiansut @quantaxis
+            use crate::exchange::order_router::{TimeCondition, VolumeCondition};
+            let time_cond = time_condition.as_ref()
+                .map(|s| TimeCondition::from_str(s));
+            let volume_cond = volume_condition.as_ref()
+                .map(|s| VolumeCondition::from_str(s));
+
             let req = crate::exchange::order_router::SubmitOrderRequest {
                 account_id,
                 instrument_id: instrument_id.clone(),
@@ -649,6 +661,8 @@ impl DiffHandler {
                 volume: volume as f64,
                 price: limit_price.unwrap_or(0.0),
                 order_type: order_type.to_string(),
+                time_condition: time_cond,
+                volume_condition: volume_cond,
             };
 
             // 提交订单

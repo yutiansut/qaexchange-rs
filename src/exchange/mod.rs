@@ -35,6 +35,9 @@ pub mod priority_queue;
 /// 条件单引擎 @yutiansut @quantaxis
 pub mod conditional_order;
 
+/// 交易状态机 @yutiansut @quantaxis
+pub mod trading_session;
+
 // 重导出核心类型
 pub use account_mgr::AccountManager;
 pub use capital_mgr::{CapitalManager, FundTransaction, TransactionStatus, TransactionType};
@@ -48,4 +51,7 @@ pub use priority_queue::{
 };
 pub use settlement::SettlementEngine;
 pub use trade_gateway::{Notification, TradeGateway};
+pub use trading_session::{
+    ExchangeType, OrderValidation, TradingCalendar, TradingSession, TradingStateMachine,
+};
 pub use user_mgr::{LoginRequest, LoginResponse, RegisterRequest, UserManager};

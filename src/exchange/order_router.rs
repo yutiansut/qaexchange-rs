@@ -18,7 +18,102 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// 时间条件枚举
+/// @yutiansut @quantaxis
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TimeCondition {
+    /// Immediate or Cancel - 立即成交剩余撤销
+    IOC,
+    /// Good for Session - 本节有效
+    GFS,
+    /// Good for Day - 当日有效 (默认)
+    GFD,
+    /// Good Till Date - 指定日期前有效
+    GTD,
+    /// Good Till Cancel - 撤销前有效
+    GTC,
+    /// Good for Auction - 集合竞价有效
+    GFA,
+}
+
+impl Default for TimeCondition {
+    fn default() -> Self {
+        TimeCondition::GFD
+    }
+}
+
+impl std::fmt::Display for TimeCondition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TimeCondition::IOC => write!(f, "IOC"),
+            TimeCondition::GFS => write!(f, "GFS"),
+            TimeCondition::GFD => write!(f, "GFD"),
+            TimeCondition::GTD => write!(f, "GTD"),
+            TimeCondition::GTC => write!(f, "GTC"),
+            TimeCondition::GFA => write!(f, "GFA"),
+        }
+    }
+}
+
+impl TimeCondition {
+    /// 从字符串解析
+    pub fn from_str(s: &str) -> Self {
+        match s.to_uppercase().as_str() {
+            "IOC" => TimeCondition::IOC,
+            "GFS" => TimeCondition::GFS,
+            "GFD" => TimeCondition::GFD,
+            "GTD" => TimeCondition::GTD,
+            "GTC" => TimeCondition::GTC,
+            "GFA" => TimeCondition::GFA,
+            _ => TimeCondition::GFD, // 默认当日有效
+        }
+    }
+}
+
+/// 数量条件枚举
+/// @yutiansut @quantaxis
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum VolumeCondition {
+    /// Any - 任何数量 (默认)
+    ANY,
+    /// Min - 最小数量
+    MIN,
+    /// All - 全部数量 (FOK)
+    ALL,
+}
+
+impl Default for VolumeCondition {
+    fn default() -> Self {
+        VolumeCondition::ANY
+    }
+}
+
+impl std::fmt::Display for VolumeCondition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VolumeCondition::ANY => write!(f, "ANY"),
+            VolumeCondition::MIN => write!(f, "MIN"),
+            VolumeCondition::ALL => write!(f, "ALL"),
+        }
+    }
+}
+
+impl VolumeCondition {
+    /// 从字符串解析
+    pub fn from_str(s: &str) -> Self {
+        match s.to_uppercase().as_str() {
+            "ANY" => VolumeCondition::ANY,
+            "MIN" => VolumeCondition::MIN,
+            "ALL" => VolumeCondition::ALL,
+            _ => VolumeCondition::ANY, // 默认任意数量
+        }
+    }
+}
+
 /// 订单提交请求（交易层 - 只关心账户）
+/// @yutiansut @quantaxis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitOrderRequest {
     pub account_id: String, // 交易系统只关心账户ID
@@ -28,6 +123,12 @@ pub struct SubmitOrderRequest {
     pub volume: f64,
     pub price: f64,
     pub order_type: String, // LIMIT/MARKET
+    /// 时间条件: IOC/GFS/GFD/GTD/GTC/GFA
+    #[serde(default)]
+    pub time_condition: Option<TimeCondition>,
+    /// 数量条件: ANY/MIN/ALL (ALL + IOC = FOK)
+    #[serde(default)]
+    pub volume_condition: Option<VolumeCondition>,
 }
 
 /// 撤单请求（交易层 - 只关心账户）
@@ -80,6 +181,7 @@ pub enum OrderStatus {
 }
 
 /// 订单路由信息
+/// @yutiansut @quantaxis
 #[derive(Debug, Clone)]
 struct OrderRouteInfo {
     order: Order,
@@ -89,6 +191,8 @@ struct OrderRouteInfo {
     filled_volume: f64,                    // 已成交数量
     qa_order_id: String,                   // qars 内部订单ID (用于 receive_deal_sim)
     matching_engine_order_id: Option<u64>, // 撮合引擎订单ID (用于撤单)
+    time_condition: TimeCondition,         // 时间条件 (IOC/GFD/GTC等)
+    volume_condition: VolumeCondition,     // 数量条件 (ANY/MIN/ALL)
 }
 
 /// 订单统计信息
@@ -176,6 +280,9 @@ pub struct OrderRouter {
 
     /// 是否启用优先级队列
     priority_queue_enabled: AtomicBool,
+
+    /// 交易状态机（可选） @yutiansut @quantaxis
+    trading_state_machine: Option<Arc<crate::exchange::TradingStateMachine>>,
 }
 
 impl OrderRouter {
@@ -210,6 +317,7 @@ impl OrderRouter {
             flush_stop_signal: Arc::new(AtomicBool::new(false)),
             priority_queue: None, // 默认不启用
             priority_queue_enabled: AtomicBool::new(false),
+            trading_state_machine: None, // 默认不启用
         }
     }
 
@@ -221,6 +329,19 @@ impl OrderRouter {
     /// 设置存储管理器（用于持久化行情数据）
     pub fn set_storage(&mut self, storage: Arc<crate::storage::hybrid::OltpHybridStorage>) {
         self.storage = Some(storage);
+    }
+
+    /// 设置交易状态机 @yutiansut @quantaxis
+    pub fn set_trading_state_machine(
+        &mut self,
+        state_machine: Arc<crate::exchange::TradingStateMachine>,
+    ) {
+        self.trading_state_machine = Some(state_machine);
+    }
+
+    /// 获取交易状态机
+    pub fn get_trading_state_machine(&self) -> Option<Arc<crate::exchange::TradingStateMachine>> {
+        self.trading_state_machine.clone()
     }
 
     /// 启用优先级队列
@@ -297,6 +418,7 @@ impl OrderRouter {
             flush_stop_signal: Arc::new(AtomicBool::new(false)),
             priority_queue: None, // 默认不启用
             priority_queue_enabled: AtomicBool::new(false),
+            trading_state_machine: None, // 默认不启用
         }
     }
 
@@ -327,6 +449,28 @@ impl OrderRouter {
         } else {
             estimated_commission
         };
+
+        // 2.5 交易状态检查 @yutiansut @quantaxis
+        if let Some(ref state_machine) = self.trading_state_machine {
+            use crate::exchange::OrderValidation;
+            match state_machine.validate_order(&req.instrument_id) {
+                OrderValidation::Allowed => {}
+                OrderValidation::Rejected(reason) => {
+                    log::warn!(
+                        "Order rejected by trading state: {} - {}",
+                        req.instrument_id,
+                        reason
+                    );
+                    return SubmitOrderResponse {
+                        success: false,
+                        order_id: Some(order_id.clone()),
+                        status: Some("rejected".to_string()),
+                        error_message: Some(reason),
+                        error_code: Some(4100), // 交易状态拒绝
+                    };
+                }
+            }
+        }
 
         // 3. 风控检查（无锁操作，风控器内部使用 DashMap）
         if !opts.force {
@@ -370,6 +514,34 @@ impl OrderRouter {
                 req.account_id,
                 req.instrument_id,
                 req.volume
+            );
+        }
+
+        // 3.5 FOK 前置检查: 如果是 FOK 订单，必须确保能全部成交
+        // @yutiansut @quantaxis
+        let time_cond = req.time_condition.unwrap_or(TimeCondition::GFD);
+        let volume_cond = req.volume_condition.unwrap_or(VolumeCondition::ANY);
+
+        // FOK = IOC + ALL (立即全部成交或撤销)
+        let is_fok = time_cond == TimeCondition::IOC && volume_cond == VolumeCondition::ALL;
+
+        if is_fok && !opts.force {
+            if !self.check_fok_fulfillable(&req.instrument_id, &req.direction, req.volume, req.price) {
+                log::warn!(
+                    "[FOK] Order rejected: cannot fill {} {} {} @ {} immediately",
+                    req.volume, req.direction, req.instrument_id, req.price
+                );
+                return SubmitOrderResponse {
+                    success: false,
+                    order_id: Some(order_id.clone()),
+                    status: Some("rejected".to_string()),
+                    error_message: Some("FOK order cannot be fully filled immediately".to_string()),
+                    error_code: Some(4010),
+                };
+            }
+            log::info!(
+                "[FOK] Pre-check passed: {} {} {} @ {}",
+                req.volume, req.direction, req.instrument_id, req.price
             );
         }
 
@@ -488,6 +660,8 @@ impl OrderRouter {
 
         // 4. 存储订单信息
         let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+        let time_cond = req.time_condition.unwrap_or(TimeCondition::GFD);
+        let volume_cond = req.volume_condition.unwrap_or(VolumeCondition::ANY);
         let route_info = OrderRouteInfo {
             order: order.clone(),
             status: OrderStatus::PendingRoute,
@@ -496,6 +670,8 @@ impl OrderRouter {
             filled_volume: 0.0,
             qa_order_id: qa_order_id.clone(), // 存储 qars 订单ID
             matching_engine_order_id: None,   // 撮合引擎订单ID (在 Accepted 事件中设置)
+            time_condition: time_cond,
+            volume_condition: volume_cond,
         };
 
         self.orders
@@ -547,6 +723,36 @@ impl OrderRouter {
                     );
                     "submitted"
                 };
+
+                // IOC 后置处理: 如果是 IOC 订单，自动撤销未成交部分
+                // @yutiansut @quantaxis
+                if time_cond == TimeCondition::IOC {
+                    self.handle_ioc_remaining(&order_id, &req.account_id);
+
+                    // 重新获取状态（可能已被撤销）
+                    let updated_status = if let Some(order_info) = self.orders.get(&order_id) {
+                        let info = order_info.read();
+                        match info.status {
+                            OrderStatus::Filled => "filled",
+                            OrderStatus::PartiallyFilled => "partially_filled",
+                            OrderStatus::Cancelled => "cancelled",
+                            OrderStatus::Rejected => "rejected",
+                            _ => "submitted",
+                        }
+                    } else {
+                        final_status
+                    };
+
+                    log::info!("[IOC] Order {} final status after IOC handling: {}", order_id, updated_status);
+
+                    return SubmitOrderResponse {
+                        success: true,
+                        order_id: Some(order_id),
+                        status: Some(updated_status.to_string()),
+                        error_message: None,
+                        error_code: None,
+                    };
+                }
 
                 SubmitOrderResponse {
                     success: true,
@@ -1182,6 +1388,20 @@ impl OrderRouter {
             ));
         }
 
+        // 2.5 交易状态检查 @yutiansut @quantaxis
+        if let Some(ref state_machine) = self.trading_state_machine {
+            use crate::exchange::OrderValidation;
+            match state_machine.validate_cancel(&info.order.instrument_id) {
+                OrderValidation::Allowed => {}
+                OrderValidation::Rejected(reason) => {
+                    return Err(ExchangeError::OrderError(format!(
+                        "Cancel rejected by trading state: {}",
+                        reason
+                    )));
+                }
+            }
+        }
+
         // 3. 检查订单状态是否可撤单
         if !matches!(
             info.status,
@@ -1270,6 +1490,128 @@ impl OrderRouter {
 
         log::info!("Order cancelled from matching engine: {}", req.order_id);
         Ok(())
+    }
+
+    /// IOC/FOK 处理：检查订单是否满足 FOK 条件
+    /// @yutiansut @quantaxis
+    ///
+    /// FOK (Fill or Kill) 要求订单必须全部成交，否则全部撤销
+    /// 此方法在订单提交前检查订单簿是否有足够的对手方挂单
+    fn check_fok_fulfillable(
+        &self,
+        instrument_id: &str,
+        direction: &str,
+        volume: f64,
+        price: f64,
+    ) -> bool {
+        // 获取订单簿
+        let orderbook = match self.matching_engine.get_orderbook(instrument_id) {
+            Some(ob) => ob,
+            None => {
+                log::warn!("[FOK] Orderbook not found for {}", instrument_id);
+                return false;
+            }
+        };
+
+        let ob = orderbook.read();
+
+        // 计算对手方可成交量
+        let available_volume = match direction {
+            "BUY" => {
+                // 买单需要检查卖单挂单量（价格 <= price）
+                if let Some(asks) = ob.ask_queue.get_sorted_orders() {
+                    asks.iter()
+                        .filter(|o| o.price <= price)
+                        .map(|o| o.volume)
+                        .sum()
+                } else {
+                    0.0
+                }
+            }
+            "SELL" => {
+                // 卖单需要检查买单挂单量（价格 >= price）
+                if let Some(bids) = ob.bid_queue.get_sorted_orders() {
+                    bids.iter()
+                        .filter(|o| o.price >= price)
+                        .map(|o| o.volume)
+                        .sum()
+                } else {
+                    0.0
+                }
+            }
+            _ => 0.0,
+        };
+
+        let fulfillable = available_volume >= volume;
+        log::debug!(
+            "[FOK] Check: instrument={}, direction={}, volume={}, price={}, available={}, fulfillable={}",
+            instrument_id, direction, volume, price, available_volume, fulfillable
+        );
+
+        fulfillable
+    }
+
+    /// IOC/FOK 处理：在匹配后处理 IOC 剩余订单
+    /// @yutiansut @quantaxis
+    ///
+    /// IOC (Immediate or Cancel) 要求立即成交可成交部分，剩余部分撤销
+    /// 此方法在订单匹配完成后，检查并撤销未成交部分
+    fn handle_ioc_remaining(&self, order_id: &str, account_id: &str) {
+        // 获取订单信息
+        let order_info = match self.orders.get(order_id) {
+            Some(info) => info,
+            None => {
+                log::warn!("[IOC] Order not found: {}", order_id);
+                return;
+            }
+        };
+
+        let (status, time_condition, filled_volume, original_volume) = {
+            let info = order_info.read();
+            (
+                info.status,
+                info.time_condition,
+                info.filled_volume,
+                info.order.volume_orign,
+            )
+        };
+
+        // 只处理 IOC 订单
+        if time_condition != TimeCondition::IOC {
+            return;
+        }
+
+        // 如果已完全成交或已撤销，不需要处理
+        if matches!(status, OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Rejected) {
+            log::debug!("[IOC] Order {} already in final status: {:?}", order_id, status);
+            return;
+        }
+
+        // 如果有未成交部分，自动撤销
+        let remaining_volume = original_volume - filled_volume;
+        if remaining_volume > 0.001 {  // 使用小数容差
+            log::info!(
+                "[IOC] Auto-cancelling remaining {} of order {} (filled: {}/{})",
+                remaining_volume, order_id, filled_volume, original_volume
+            );
+
+            // 发送撤单请求
+            let cancel_req = CancelOrderRequest {
+                account_id: account_id.to_string(),
+                order_id: order_id.to_string(),
+            };
+
+            match self.cancel_order(cancel_req) {
+                Ok(_) => {
+                    log::info!("[IOC] Successfully cancelled remaining order: {}", order_id);
+                }
+                Err(e) => {
+                    log::error!("[IOC] Failed to cancel remaining order {}: {:?}", order_id, e);
+                }
+            }
+        } else {
+            log::debug!("[IOC] Order {} fully filled, no cancellation needed", order_id);
+        }
     }
 
     /// 查询订单
@@ -1867,6 +2209,8 @@ mod tests {
             volume: 10.0,
             price: 120.0,
             order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
         };
 
         let response = router.submit_order(req);
@@ -1887,6 +2231,8 @@ mod tests {
             volume: 100000.0, // 超大数量
             price: 1000.0,
             order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
         };
 
         let response = router.submit_order(req);
@@ -1906,6 +2252,8 @@ mod tests {
             volume: 10.0,
             price: 120.0,
             order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
         };
 
         let response = router.submit_order(req);
@@ -1934,6 +2282,8 @@ mod tests {
                 volume: 10.0 + i as f64,
                 price: 120.0,
                 order_type: "LIMIT".to_string(),
+                time_condition: None,
+                volume_condition: None,
             };
             router.submit_order(req);
         }
@@ -1987,6 +2337,8 @@ mod tests {
             volume: 10.0,
             price: 120.0,
             order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
         };
 
         let buy_response = router.submit_order(buy_req);
@@ -2007,6 +2359,8 @@ mod tests {
             volume: 5.0,                // 部分成交
             price: 120.0,
             order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
         };
 
         let sell_response = router.submit_order(sell_req);
