@@ -914,6 +914,7 @@ impl SettlementEngine {
             }
             (pre_balance, close_profit, commission, position_profit, acc.accounts.margin)
         };
+        let _ = margin; // 暂未使用但保留以备后用
 
         // 【关键】调用 QA_Account::settle() 完成完整结算
         {
@@ -922,7 +923,7 @@ impl SettlementEngine {
         }
 
         // 读取结算后状态
-        let (balance, risk_ratio, available, final_margin) = {
+        let (_balance, risk_ratio, _available, _final_margin) = {
             let acc = account.read();
             (acc.accounts.balance, acc.accounts.risk_ratio, acc.accounts.available, acc.accounts.margin)
         };

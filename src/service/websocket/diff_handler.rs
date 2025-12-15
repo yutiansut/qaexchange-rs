@@ -925,7 +925,7 @@ impl DiffHandler {
         ins_list: String,
         duration: i64,
         view_width: i32,
-        ctx_addr: Addr<DiffWebsocketSession>,
+        _ctx_addr: Addr<DiffWebsocketSession>,
     ) {
         log::info!(
             "📊 [DIFF set_chart] Received request: user={}, chart_id={}, ins_list={}, duration={}, view_width={}",
@@ -1183,7 +1183,7 @@ impl DiffHandler {
                 instrument_id,
                 price,
                 volume,
-                direction,
+                direction: _,
                 timestamp,
             } => Some(serde_json::json!({
                 "quotes": {

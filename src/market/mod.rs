@@ -289,7 +289,7 @@ impl MarketDataService {
         log::trace!("❌ [L1 Cache] Miss for orderbook {}", instrument_id);
 
         // L2 缓存查询：从 WAL 恢复最近的快照（降低日志级别）
-        if let Some(ref storage) = self.storage {
+        if let Some(ref _storage) = self.storage {
             log::trace!("🔍 [L2 Storage] Querying WAL for orderbook {}", instrument_id);
             match self.load_orderbook_from_storage(instrument_id) {
                 Ok(snapshot) => {
@@ -435,7 +435,7 @@ impl MarketDataService {
         log::trace!("❌ [L1 Cache] Miss for tick {}", instrument_id);
 
         // L2 从 WAL 恢复最近的 Tick（降低日志级别）
-        if let Some(ref storage) = self.storage {
+        if let Some(ref _storage) = self.storage {
             log::trace!("🔍 [L2 Storage] Querying WAL for tick {}", instrument_id);
             match self.load_tick_from_storage(instrument_id) {
                 Ok(tick) => {

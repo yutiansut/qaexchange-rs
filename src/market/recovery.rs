@@ -67,7 +67,7 @@ impl MarketDataRecovery {
             end_ts
         );
 
-        for (timestamp, _sequence, record) in records {
+        for (_timestamp, _sequence, record) in records {
             stats.total_records += 1;
 
             match record {

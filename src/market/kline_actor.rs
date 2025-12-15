@@ -162,7 +162,7 @@ impl Actor for KLineActor {
         let aggregators = self.aggregators.clone();
         let broadcaster = self.broadcaster.clone();
         let wal_manager = self.wal_manager.clone();
-        let addr = ctx.address();
+        let _addr = ctx.address();
 
         let fut = async move {
             log::info!(

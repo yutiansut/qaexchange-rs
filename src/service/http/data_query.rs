@@ -409,7 +409,7 @@ pub async fn query_batch_klines(
                 amount,
                 open_oi,
                 close_oi,
-                timestamp,
+                timestamp: _,
             } = entry.record {
                 // 检查周期
                 if kline_period != period {
@@ -524,7 +524,7 @@ pub async fn get_trade_statistics(
     for account in accounts {
         let account_read = account.read();
 
-        for (trade_id, trade) in account_read.dailytrades.iter() {
+        for (_trade_id, trade) in account_read.dailytrades.iter() {
             // 合约过滤
             if let Some(ref inst_filter) = instrument_filter {
                 if &trade.instrument_id != inst_filter {

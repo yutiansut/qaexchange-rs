@@ -995,7 +995,7 @@ impl OrderRouter {
         success: Success,
     ) -> Result<(), ExchangeError> {
         match success {
-            Success::Accepted { id, order_type, ts } => {
+            Success::Accepted { id, order_type: _, ts } => {
                 // 订单被接受，等待撮合
                 log::info!("Order {} accepted at {}", order_id, ts);
 
@@ -1041,7 +1041,7 @@ impl OrderRouter {
                     if let Some(orderbook) =
                         self.matching_engine.get_orderbook(&order.instrument_id)
                     {
-                        let ob = orderbook.read();
+                        let _ob = orderbook.read();
                         let side = if order.direction == "BUY" {
                             "bid"
                         } else {
@@ -1061,8 +1061,8 @@ impl OrderRouter {
             }
             Success::Filled {
                 order_id: match_order_id,
-                direction,
-                order_type,
+                direction: _,
+                order_type: _,
                 price,
                 volume,
                 ts,
@@ -1165,8 +1165,8 @@ impl OrderRouter {
             }
             Success::PartiallyFilled {
                 order_id: match_order_id,
-                direction,
-                order_type,
+                direction: _,
+                order_type: _,
                 price,
                 volume,
                 ts,
@@ -1355,10 +1355,10 @@ impl OrderRouter {
                     .remove_active_order(&order.user_id, order_id);
             }
             Success::Amended {
-                id,
+                id: _,
                 price,
                 volume,
-                ts,
+                ts: _,
             } => {
                 // 订单修改 (暂不处理，预留)
                 log::info!(
@@ -1440,7 +1440,7 @@ impl OrderRouter {
         };
 
         // 创建撤单请求
-        let asset = InstrumentAsset::from_code(&instrument_id);
+        let _asset = InstrumentAsset::from_code(&instrument_id);
         let cancel_request = crate::matching::OrderRequest::CancelOrder {
             id: matching_engine_order_id,
             direction,
@@ -1719,7 +1719,7 @@ impl OrderRouter {
         price: f64,
         volume: f64,
     ) -> Result<(), ExchangeError> {
-        if let Some(ref storage) = self.storage {
+        if let Some(ref _storage) = self.storage {
             use crate::storage::wal::record::WalRecord;
 
             // 获取订单簿中的买卖价
@@ -1770,7 +1770,7 @@ impl OrderRouter {
     /// - persist_tick_data: 成交时调用，更新 last_price + bid/ask
     /// - persist_orderbook_tick: 订单簿变化时调用，只更新 bid/ask，保持 last_price 不变
     fn persist_orderbook_tick(&self, instrument_id: &str) -> Result<(), ExchangeError> {
-        if let Some(ref storage) = self.storage {
+        if let Some(ref _storage) = self.storage {
             use crate::storage::wal::record::WalRecord;
 
             // 获取订单簿中的买卖价

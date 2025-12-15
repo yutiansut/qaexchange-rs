@@ -848,7 +848,7 @@ impl ParallelDagExecutor {
             FactorDef::Ref { factor_id } => self.values.get(factor_id).map(|v| *v).unwrap_or(0.0),
             FactorDef::Bollinger {
                 source,
-                window,
+                window: _,
                 num_std,
             } => {
                 // 简化实现：使用均值 + std

@@ -438,6 +438,7 @@ impl ReplicationService for ReplicationServiceImpl {
         let mut stream = request.into_inner();
         let mut total_bytes = 0u64;
         let mut last_sequence = 0u64;
+        #[allow(unused_assignments)]
         let mut last_term = 0u64;
 
         while let Some(chunk) = stream.next().await {

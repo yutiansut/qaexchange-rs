@@ -355,14 +355,12 @@ pub async fn get_equity_curve(
     let mut account_responses = Vec::new();
     for account in accounts {
         // ✨ 使用 write() 以便调用 get_margin() 动态计算 @yutiansut @quantaxis
-        let (account_id, account_name, balance, available, margin) = {
-            let mut acc = account.write();
+        let (account_id, account_name, balance) = {
+            let acc = account.read();
             (
                 acc.account_cookie.clone(),
                 acc.user_cookie.clone(),
                 acc.accounts.balance,
-                acc.accounts.available,
-                acc.get_margin(),  // ✨ 修复: 使用动态计算的 margin
             )
         };
 
