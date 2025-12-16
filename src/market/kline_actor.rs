@@ -4,6 +4,12 @@
 //! 订阅MarketDataBroadcaster的tick事件，实现分级采样
 //! 支持持久化和恢复
 //!
+//! ## 方案A: 集成因子引擎 (2025-12-16)
+//!
+//! K线完成时自动触发因子计算并广播:
+//! - StreamFactorEngine 增量计算 MA, EMA, RSI, MACD 等
+//! - 广播 FactorUpdate 事件给 WebSocket 订阅者
+//!
 //! @yutiansut @quantaxis
 
 use actix::{Actor, Addr, AsyncContext, Context, Handler, Message};
@@ -14,9 +20,17 @@ use std::sync::Arc;
 use super::kline::{KLine, KLineAggregator, KLinePeriod};
 use super::MarketDataBroadcaster;
 use super::MarketDataEvent;
+use crate::factor::{FactorRegistry, StreamFactorEngine};
 use crate::storage::wal::{WalManager, WalRecord};
 
 /// K线Actor - 独立处理K线聚合，避免阻塞交易流程
+///
+/// ## 方案A集成因子引擎
+///
+/// K线完成时自动触发因子计算:
+/// ```text
+/// Tick → KLineAggregator → KLineFinished → StreamFactorEngine → FactorUpdate
+/// ```
 pub struct KLineActor {
     /// 各合约的K线聚合器
     aggregators: Arc<RwLock<HashMap<String, KLineAggregator>>>,
@@ -29,7 +43,21 @@ pub struct KLineActor {
 
     /// WAL管理器（用于K线持久化和恢复）
     wal_manager: Arc<WalManager>,
+
+    /// ✨ 方案A: 各合约的流式因子引擎
+    /// @yutiansut @quantaxis
+    factor_engines: Arc<RwLock<HashMap<String, StreamFactorEngine>>>,
+
+    /// 启用的因子列表 (默认: ma5, ma10, ma20, ema12, ema26, rsi14, macd)
+    enabled_factors: Vec<String>,
+
+    /// 是否启用因子计算
+    enable_factor_compute: bool,
 }
+
+/// 默认启用的因子列表
+/// @yutiansut @quantaxis
+const DEFAULT_FACTORS: &[&str] = &["ma5", "ma10", "ma20", "ema12", "ema26", "rsi14", "macd"];
 
 impl KLineActor {
     /// 创建新的K线Actor
@@ -39,6 +67,9 @@ impl KLineActor {
             broadcaster,
             subscribed_instruments: Vec::new(), // 默认订阅所有
             wal_manager,
+            factor_engines: Arc::new(RwLock::new(HashMap::new())),
+            enabled_factors: DEFAULT_FACTORS.iter().map(|s| s.to_string()).collect(),
+            enable_factor_compute: false, // 默认关闭，需要显式启用
         }
     }
 
@@ -46,6 +77,82 @@ impl KLineActor {
     pub fn with_instruments(mut self, instruments: Vec<String>) -> Self {
         self.subscribed_instruments = instruments;
         self
+    }
+
+    /// ✨ 方案A: 启用因子计算
+    /// @yutiansut @quantaxis
+    ///
+    /// # Example
+    /// ```ignore
+    /// let actor = KLineActor::new(broadcaster, wal_manager)
+    ///     .with_factor_compute(true)
+    ///     .with_factors(vec!["ma5", "rsi14", "macd"]);
+    /// ```
+    pub fn with_factor_compute(mut self, enable: bool) -> Self {
+        self.enable_factor_compute = enable;
+        if enable {
+            log::info!("📈 [KLineActor] Factor computation enabled with factors: {:?}", self.enabled_factors);
+        }
+        self
+    }
+
+    /// 设置启用的因子列表
+    pub fn with_factors(mut self, factors: Vec<&str>) -> Self {
+        self.enabled_factors = factors.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    /// 获取或创建合约的因子引擎
+    /// @yutiansut @quantaxis
+    fn get_or_create_factor_engine(&self, instrument_id: &str) -> Option<()> {
+        if !self.enable_factor_compute {
+            return None;
+        }
+
+        let mut engines = self.factor_engines.write();
+        if !engines.contains_key(instrument_id) {
+            // 创建新的因子引擎
+            let registry = FactorRegistry::with_standard_factors();
+            let mut engine = StreamFactorEngine::new(registry);
+
+            // 初始化所有启用的因子
+            for factor_id in &self.enabled_factors {
+                if let Err(e) = engine.init_factor(factor_id) {
+                    log::warn!(
+                        "📈 [KLineActor] Failed to init factor {} for {}: {}",
+                        factor_id, instrument_id, e
+                    );
+                }
+            }
+
+            engines.insert(instrument_id.to_string(), engine);
+            log::info!(
+                "📈 [KLineActor] Created factor engine for {} with {} factors",
+                instrument_id, self.enabled_factors.len()
+            );
+        }
+
+        Some(())
+    }
+
+    /// 更新因子并返回因子值映射
+    /// @yutiansut @quantaxis
+    fn update_factors(&self, instrument_id: &str, close_price: f64) -> HashMap<String, f64> {
+        if !self.enable_factor_compute {
+            return HashMap::new();
+        }
+
+        // 确保因子引擎已创建
+        self.get_or_create_factor_engine(instrument_id);
+
+        let mut engines = self.factor_engines.write();
+        if let Some(engine) = engines.get_mut(instrument_id) {
+            // 使用收盘价更新所有因子
+            let factor_ids: Vec<&str> = self.enabled_factors.iter().map(|s| s.as_str()).collect();
+            engine.update_all(close_price, &factor_ids)
+        } else {
+            HashMap::new()
+        }
     }
 
     /// 从WAL恢复历史K线数据
@@ -162,6 +269,10 @@ impl Actor for KLineActor {
         let aggregators = self.aggregators.clone();
         let broadcaster = self.broadcaster.clone();
         let wal_manager = self.wal_manager.clone();
+        // ✨ 方案A: 因子引擎相关数据
+        let factor_engines = self.factor_engines.clone();
+        let enabled_factors = self.enabled_factors.clone();
+        let enable_factor_compute = self.enable_factor_compute;
         let _addr = ctx.address();
 
         let fut = async move {
@@ -169,6 +280,13 @@ impl Actor for KLineActor {
                 "📊 [KLineActor] Subscribed to tick events (subscriber_id={})",
                 subscriber_id
             );
+
+            if enable_factor_compute {
+                log::info!(
+                    "📈 [KLineActor] Factor computation enabled with factors: {:?}",
+                    enabled_factors
+                );
+            }
 
             loop {
                 // 使用spawn_blocking避免阻塞Tokio执行器
@@ -211,6 +329,51 @@ impl Actor for KLineActor {
                                     kline: kline.clone(),
                                     timestamp,
                                 });
+
+                                // ✨ 方案A: K线完成时计算因子并广播
+                                // @yutiansut @quantaxis
+                                if enable_factor_compute {
+                                    // 确保因子引擎已创建
+                                    let mut engines = factor_engines.write();
+                                    if !engines.contains_key(&instrument_id) {
+                                        let registry = FactorRegistry::with_standard_factors();
+                                        let mut engine = StreamFactorEngine::new(registry);
+                                        for factor_id in &enabled_factors {
+                                            if let Err(e) = engine.init_factor(factor_id) {
+                                                log::warn!(
+                                                    "📈 [KLineActor] Failed to init factor {}: {}",
+                                                    factor_id, e
+                                                );
+                                            }
+                                        }
+                                        engines.insert(instrument_id.clone(), engine);
+                                        log::info!(
+                                            "📈 [KLineActor] Created factor engine for {}",
+                                            instrument_id
+                                        );
+                                    }
+
+                                    // 使用收盘价更新因子
+                                    if let Some(engine) = engines.get_mut(&instrument_id) {
+                                        let factor_ids: Vec<&str> = enabled_factors.iter().map(|s| s.as_str()).collect();
+                                        let factor_values = engine.update_all(kline.close, &factor_ids);
+
+                                        if !factor_values.is_empty() {
+                                            log::debug!(
+                                                "📈 [KLineActor] Factor update for {}: {:?}",
+                                                instrument_id, factor_values
+                                            );
+
+                                            // 广播因子更新事件
+                                            broadcaster.broadcast(MarketDataEvent::FactorUpdate {
+                                                instrument_id: instrument_id.clone(),
+                                                factors: factor_values,
+                                                period: period.to_int(),
+                                                timestamp,
+                                            });
+                                        }
+                                    }
+                                }
 
                                 // 持久化K线到WAL
                                 let wal_record = WalRecord::KLineFinished {

@@ -240,6 +240,36 @@ pub struct TickSeries {
     pub data: HashMap<String, TickBar>,
 }
 
+/// 因子数据
+///
+/// 实时计算的技术因子值（MA, EMA, RSI, MACD 等）。
+///
+/// # 字段说明
+///
+/// - `period`: K线周期（0=日线, 4=1min, 5=5min, 6=15min, 7=30min, 8=60min）
+/// - `timestamp`: 计算时间戳（毫秒）
+/// - `values`: 因子值映射（key = 因子ID，value = 因子值）
+///
+/// # 因子ID 命名规范
+///
+/// - MA系列: "ma5", "ma10", "ma20", "ma60"
+/// - EMA系列: "ema12", "ema26"
+/// - RSI: "rsi14"
+/// - MACD: "macd_dif", "macd_dea", "macd_hist"
+///
+/// @yutiansut @quantaxis
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FactorData {
+    /// K线周期
+    pub period: i32,
+
+    /// 计算时间戳（毫秒）
+    pub timestamp: i64,
+
+    /// 因子值（key = 因子ID，value = 因子值）
+    pub values: HashMap<String, f64>,
+}
+
 /// 通知数据
 ///
 /// 系统通知、错误消息、警告等。
@@ -362,6 +392,11 @@ pub struct BusinessSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ticks: Option<HashMap<String, TickSeries>>,
 
+    /// 因子数据（实时计算的技术指标）
+    /// key = instrument_id, value = FactorData
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub factors: Option<HashMap<String, FactorData>>,
+
     /// 通知数据
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notify: Option<HashMap<String, Notify>>,
@@ -475,6 +510,7 @@ impl BusinessSnapshot {
             && self.quotes.is_none()
             && self.klines.is_none()
             && self.ticks.is_none()
+            && self.factors.is_none()
             && self.notify.is_none()
     }
 }

@@ -98,6 +98,17 @@ pub enum MarketDataEvent {
         kline: super::kline::KLine,
         timestamp: i64,
     },
+
+    /// 因子更新事件（K线完成后触发）
+    /// @yutiansut @quantaxis
+    FactorUpdate {
+        instrument_id: String,
+        /// 因子ID -> 因子值 的映射
+        factors: std::collections::HashMap<String, f64>,
+        /// K线周期（与触发的K线关联）
+        period: i32,
+        timestamp: i64,
+    },
 }
 
 /// 广播器配置
@@ -447,6 +458,7 @@ impl MarketDataBroadcaster {
             MarketDataEvent::Tick { instrument_id, .. } => instrument_id,
             MarketDataEvent::LastPrice { instrument_id, .. } => instrument_id,
             MarketDataEvent::KLineFinished { instrument_id, .. } => instrument_id,
+            MarketDataEvent::FactorUpdate { instrument_id, .. } => instrument_id,
         };
 
         let channel = match &event {
@@ -455,7 +467,8 @@ impl MarketDataBroadcaster {
             }
             MarketDataEvent::Tick { .. } => "tick",
             MarketDataEvent::LastPrice { .. } => "last_price",
-            MarketDataEvent::KLineFinished { .. } => "kline",
+            MarketDataEvent::KLineFinished { .. } => "kline_finished",
+            MarketDataEvent::FactorUpdate { .. } => "factor",
         };
 
         let mut sent_count = 0u64;
@@ -533,6 +546,7 @@ impl MarketDataBroadcaster {
                 MarketDataEvent::Tick { instrument_id, .. } => instrument_id.clone(),
                 MarketDataEvent::LastPrice { instrument_id, .. } => instrument_id.clone(),
                 MarketDataEvent::KLineFinished { instrument_id, .. } => instrument_id.clone(),
+                MarketDataEvent::FactorUpdate { instrument_id, .. } => instrument_id.clone(),
             };
             events_by_instrument
                 .entry(instrument_id)
@@ -579,7 +593,8 @@ impl MarketDataBroadcaster {
                             | MarketDataEvent::OrderBookUpdate { .. } => "orderbook",
                             MarketDataEvent::Tick { .. } => "tick",
                             MarketDataEvent::LastPrice { .. } => "last_price",
-                            MarketDataEvent::KLineFinished { .. } => "kline",
+                            MarketDataEvent::KLineFinished { .. } => "kline_finished",
+                            MarketDataEvent::FactorUpdate { .. } => "factor",
                         };
 
                         let channel_match =

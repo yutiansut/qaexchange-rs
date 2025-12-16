@@ -1267,6 +1267,25 @@ impl DiffHandler {
                     }
                 }))
             }
+
+            MarketDataEvent::FactorUpdate {
+                instrument_id,
+                factors,
+                period,
+                timestamp,
+            } => {
+                // 转换为 DIFF factors 格式
+                // factors 字段包含计算完成的因子值
+                Some(serde_json::json!({
+                    "factors": {
+                        instrument_id: {
+                            "period": period,
+                            "timestamp": timestamp,
+                            "values": factors,
+                        }
+                    }
+                }))
+            }
         }
     }
 

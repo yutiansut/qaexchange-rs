@@ -9,6 +9,7 @@
 //! - 依赖DAG管理 (dag) - 拓扑排序计算
 //! - 统一引擎 (engine) - 流批一体化执行引擎，集成 Polars
 //! - WAL持久化 (wal_persister) - 因子数据流批存储
+//! - 因子Actor (factor_actor) - 独立的因子计算Actor (方案B)
 
 pub mod operators;
 pub mod view;
@@ -16,6 +17,7 @@ pub mod state;
 pub mod dag;
 pub mod engine;
 pub mod wal_persister;
+pub mod factor_actor;
 
 pub use operators::*;
 pub use view::*;
@@ -23,3 +25,4 @@ pub use state::*;
 pub use dag::*;
 pub use engine::*;
 pub use wal_persister::*;
+pub use factor_actor::*;
