@@ -251,7 +251,7 @@
 
 <script>
 import { getInstruments, getOrderBook, getTick, getRecentTrades, submitOrder, cancelOrder, queryUserOrders } from '@/api'
-import { mapGetters } from 'vuex'
+import { mapGetters, mapActions } from 'vuex'
 import OrderForm from './components/OrderForm.vue'
 import CloseForm from './components/CloseForm.vue'
 // ✨ P1-3: WebSocket 实时数据集成 @yutiansut @quantaxis
@@ -347,6 +347,9 @@ export default {
     this.destroyWebSocket()
   },
   methods: {
+    // ✨ 映射 Vuex websocket 模块的 actions @yutiansut @quantaxis
+    ...mapActions('websocket', ['fetchUserAccounts']),
+
     async loadInstruments() {
       try {
         this.instruments = await getInstruments()
@@ -521,12 +524,25 @@ export default {
 
     async handleCancelOrder(row) {
       try {
+        // ✨ 交易所模式：user_id 和 account_id 都使用账户ID @yutiansut @quantaxis
         await cancelOrder({
-          user_id: row.user_id,  // 使用订单所属的账户ID
+          user_id: row.user_id,     // 账户ID (交易所模式)
+          account_id: row.user_id,  // 必须传递
           order_id: row.order_id
         })
         this.$message.success('撤单成功')
         this.loadPendingOrders()
+
+        // ✨ 撤单后刷新账户数据，更新可用资金显示 @yutiansut @quantaxis
+        const userInfo = this.$store.state.userInfo
+        const userId = userInfo && userInfo.user_id
+        if (userId) {
+          try {
+            await this.fetchUserAccounts(userId)
+          } catch (err) {
+            console.warn('[Trade] Failed to refresh account after cancel:', err)
+          }
+        }
       } catch (error) {
         this.$message.error('撤单失败: ' + ((error.response && error.response.data && error.response.data.error) || error.message))
       }

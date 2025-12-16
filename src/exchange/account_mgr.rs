@@ -602,7 +602,11 @@ impl AccountManager {
         }
 
         // 从QIFI创建QA_Account
-        let account = QA_Account::new_from_qifi(qifi);
+        // ⚠️ 重要修复：new_from_qifi 默认设置 environment="real"，会导致 send_order 立即成交
+        // 必须重置为 "sim" 以支持正常的订单生命周期：send_order → frozen → cancel_order/receive_deal
+        // @yutiansut @quantaxis
+        let mut account = QA_Account::new_from_qifi(qifi);
+        account.environment = "sim".to_string(); // 重置为 sim 模式
 
         // 存储账户
         self.accounts

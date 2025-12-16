@@ -193,19 +193,31 @@ export default new Vuex.Store({
     async login({ commit }, loginData) {
       try {
         const data = await apiLogin(loginData)
+
+        // ✨ 检查内层登录结果 @yutiansut @quantaxis
+        // 后端返回 { success: true, data: { success: false, message: "..." } }
+        // 外层 success 表示 HTTP 请求成功，内层 success 表示登录业务成功
+        if (!data.success) {
+          throw new Error(data.message || '登录失败')
+        }
+
         const { token, user_id, username, is_admin, roles, permissions } = data
 
-        // 保存 token
-        commit('SET_TOKEN', token)
+        // ✨ 重要：先保存用户信息，再保存 token @yutiansut @quantaxis
+        // 因为 SET_TOKEN 会触发 isLoggedIn 变化，进而触发 WebSocket 初始化
+        // 必须确保 userInfo.user_id (UUID) 在 WebSocket 初始化前已设置
 
-        // 保存用户信息 (包含角色)
+        // 1. 保存用户信息 (包含 user_id UUID)
         const userInfo = { user_id, username, is_admin, roles }
         commit('SET_USER_INFO', userInfo)
         commit('SET_CURRENT_USER', user_id)
 
-        // 保存 RBAC 信息 @yutiansut @quantaxis
+        // 2. 保存 RBAC 信息
         commit('SET_ROLES', roles || [])
         commit('SET_PERMISSIONS', permissions || [])
+
+        // 3. 最后保存 token（触发 isLoggedIn 变化和 WebSocket 初始化）
+        commit('SET_TOKEN', token)
 
         return data
       } catch (error) {

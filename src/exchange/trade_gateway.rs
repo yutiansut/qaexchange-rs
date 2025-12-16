@@ -901,27 +901,48 @@ impl TradeGateway {
         // user_id 在 qaexchange 中实际是 account_id
         if let Ok(account) = self.account_mgr.get_account(user_id) {
             let mut acc = account.write();
-            match acc.cancel_order(qa_order_id) {
-                Ok(cancelled_order) => {
-                    log::info!(
-                        "Frozen funds released for cancelled order: qa_order_id={}, account={}, released_order={}",
-                        qa_order_id,
-                        user_id,
-                        cancelled_order.order_id
-                    );
+
+            // Debug: 打印frozen HashMap中的所有order_id @yutiansut @quantaxis
+            let frozen_keys: Vec<String> = acc.frozen.keys().cloned().collect();
+            log::info!(
+                "🔍 [DEBUG] Attempting to release frozen funds: qa_order_id={}, account={}, frozen_keys={:?}",
+                qa_order_id,
+                user_id,
+                frozen_keys
+            );
+
+            let money_before = acc.money;
+            // 使用作用域限制借用范围
+            let cancel_success = {
+                match acc.cancel_order(qa_order_id) {
+                    Ok(cancelled_order) => Some(cancelled_order.order_id.clone()),
+                    Err(_) => None,
                 }
-                Err(_) => {
-                    // 可能订单已经成交或已被取消，frozen 中不存在
-                    log::warn!(
-                        "Failed to release frozen funds (may already be released): qa_order_id={}, account={}",
-                        qa_order_id,
-                        user_id
-                    );
-                }
+            };
+            // 借用已结束，可以安全访问 acc.money
+            let money_after = acc.money;
+
+            if let Some(released_order_id) = cancel_success {
+                log::info!(
+                    "✅ Frozen funds released for cancelled order: qa_order_id={}, account={}, released_order={}, money_before={}, money_after={}",
+                    qa_order_id,
+                    user_id,
+                    released_order_id,
+                    money_before,
+                    money_after
+                );
+            } else {
+                // 可能订单已经成交或已被取消，frozen 中不存在
+                log::warn!(
+                    "⚠️ Failed to release frozen funds: qa_order_id={} NOT FOUND in frozen HashMap (keys: {:?}), account={}",
+                    qa_order_id,
+                    frozen_keys,
+                    user_id
+                );
             }
         } else {
             log::error!(
-                "Account not found when releasing frozen funds: user_id={}",
+                "❌ Account not found when releasing frozen funds: user_id={}",
                 user_id
             );
         }

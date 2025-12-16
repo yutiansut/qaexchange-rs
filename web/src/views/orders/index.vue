@@ -169,7 +169,7 @@
 
 <script>
 import { submitOrder, cancelOrder, queryUserOrders, getUserAccounts } from '@/api'
-import { mapGetters } from 'vuex'
+import { mapGetters, mapActions } from 'vuex'
 
 export default {
   name: 'Orders',
@@ -211,6 +211,9 @@ export default {
     this.loadOrders()
   },
   methods: {
+    // ✨ 映射 Vuex websocket 模块的 actions @yutiansut @quantaxis
+    ...mapActions('websocket', ['fetchUserAccounts']),
+
     async loadAccounts() {
       if (!this.currentUser) {
         return
@@ -335,13 +338,25 @@ export default {
       this.$confirm('确认撤销该订单?', '提示', {
         type: 'warning'
       }).then(() => {
+        // ✨ 交易所模式：user_id 和 account_id 都使用账户ID @yutiansut @quantaxis
+        // 后端 verify_account_ownership 会检测 user_id == account_id，自动跳过所有权验证
         cancelOrder({
-          user_id: row.user_id,  // 使用订单所属的账户ID
+          user_id: row.user_id,     // 账户ID (交易所模式)
+          account_id: row.user_id,  // 必须传递，否则后端会走 get_default_account 失败
           order_id: row.order_id
         })
           .then(() => {
             this.$message.success('撤单成功')
             this.loadOrders()
+
+            // ✨ 撤单后刷新账户数据，更新可用资金显示 @yutiansut @quantaxis
+            const userInfo = this.$store.state.userInfo
+            const userId = userInfo && userInfo.user_id
+            if (userId) {
+              this.fetchUserAccounts(userId).catch(err => {
+                console.warn('[Orders] Failed to refresh account after cancel:', err)
+              })
+            }
           })
           .catch(() => {
             this.$message.error('撤单失败')

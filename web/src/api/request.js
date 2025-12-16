@@ -30,8 +30,9 @@ service.interceptors.response.use(
       if (res.success) {
         return res.data
       } else {
-        Message.error(res.error && res.error.message || '请求失败')
-        return Promise.reject(new Error(res.error && res.error.message || '请求失败'))
+        const errorMsg = res.error && res.error.message || '请求失败'
+        Message.error(errorMsg)
+        return Promise.reject(new Error(errorMsg))
       }
     }
 
@@ -40,7 +41,8 @@ service.interceptors.response.use(
   },
   error => {
     console.error('Response error:', error)
-    Message.error(error.message || '网络错误')
+    const errorMsg = (error.response && error.response.data && error.response.data.error && error.response.data.error.message) || error.message
+    Message.error(errorMsg || '网络错误')
     return Promise.reject(error)
   }
 )

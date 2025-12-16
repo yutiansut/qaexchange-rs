@@ -2,9 +2,11 @@
  * WebSocket Vuex 模块
  *
  * 管理 WebSocket 连接、业务截面和实时数据
+ * @yutiansut @quantaxis
  */
 
 import WebSocketManager from '@/websocket'
+import request from '@/api/request'
 
 const state = {
   // WebSocket 管理器实例
@@ -124,8 +126,9 @@ const actions = {
     // ✨ 设置初始化标志
     commit('SET_INITIALIZING', true)
 
-    // 获取当前用户 ID
-    const userId = rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id)
+    // 获取当前用户 ID @yutiansut @quantaxis
+    // 优先使用 userInfo.user_id (UUID)，避免使用 username
+    const userId = (rootState.userInfo && rootState.userInfo.user_id) || rootState.currentUser
     if (!userId) {
       console.error('[WebSocket] No user ID available')
       commit('SET_INITIALIZING', false)  // ✨ 清除标志
@@ -287,9 +290,10 @@ const actions = {
       throw new Error('WebSocket not connected')
     }
 
-    // ✨ Phase 10: 自动填充 user_id 和 account_id
+    // ✨ Phase 10: 自动填充 user_id 和 account_id @yutiansut @quantaxis
+    // 优先使用 userInfo.user_id (UUID)，避免使用 username
     const orderWithMeta = {
-      user_id: rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id),
+      user_id: (rootState.userInfo && rootState.userInfo.user_id) || rootState.currentUser,
       account_id: state.currentAccountId,  // ✨ 明确传递账户ID
       order_id: `order_${Date.now()}`,
       ...order
@@ -316,7 +320,8 @@ const actions = {
       throw new Error('WebSocket not connected')
     }
 
-    const userId = rootState.currentUser || (rootState.userInfo && rootState.userInfo.user_id)
+    // 优先使用 userInfo.user_id (UUID)，避免使用 username @yutiansut @quantaxis
+    const userId = (rootState.userInfo && rootState.userInfo.user_id) || rootState.currentUser
     const accountId = state.currentAccountId  // ✨ Phase 10: 传递账户ID
 
     // 验证 account_id
@@ -430,35 +435,29 @@ const actions = {
   // ✨ Phase 10: 账户管理 actions
 
   /**
-   * 获取用户账户列表
+   * 获取用户账户列表 @yutiansut @quantaxis
+   * 使用 axios request 实例，通过代理访问 API
    */
-  async fetchUserAccounts({ commit }, userId) {
+  async fetchUserAccounts({ commit, state }, userId) {
     try {
       console.log('[WebSocket] Fetching accounts for user:', userId)
 
-      // 调用 HTTP API 获取账户列表
-      const apiUrl = process.env.VUE_APP_API_URL || 'http://localhost:8094'
-      const response = await fetch(`${apiUrl}/api/user/${userId}/accounts`)
+      // 使用 axios request 实例，URL 会通过 vue.config.js 代理
+      const result = await request({
+        url: `/user/${userId}/accounts`,
+        method: 'get'
+      })
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      // request 拦截器已处理 success 检查，直接返回 data
+      const accounts = result.accounts || []
+      commit('SET_USER_ACCOUNTS', accounts)
+
+      // 自动选择第一个账户（如果有）
+      if (accounts.length > 0 && !state.currentAccountId) {
+        commit('SET_CURRENT_ACCOUNT', accounts[0].account_id)
       }
 
-      const result = await response.json()
-
-      if (result.success && result.data) {
-        const accounts = result.data.accounts || []
-        commit('SET_USER_ACCOUNTS', accounts)
-
-        // 自动选择第一个账户（如果有）
-        if (accounts.length > 0 && !state.currentAccountId) {
-          commit('SET_CURRENT_ACCOUNT', accounts[0].account_id)
-        }
-
-        return accounts
-      } else {
-        throw new Error(result.error || 'Failed to fetch accounts')
-      }
+      return accounts
     } catch (error) {
       console.error('[WebSocket] Error fetching accounts:', error)
       throw error
@@ -497,14 +496,66 @@ const getters = {
   // ✨ Phase 10: 账户管理 getters
   currentAccountId: state => state.currentAccountId,
 
-  userAccounts: state => state.userAccounts,
-
-  currentAccount: state => {
-    if (!state.currentAccountId) return null
-    return state.userAccounts.find(acc => acc.account_id === state.currentAccountId)
+  // ✨ 修复：合并 userAccounts 和 snapshot.accounts @yutiansut @quantaxis
+  userAccounts: state => {
+    // 如果有 HTTP API 获取的账户列表，直接返回
+    if (state.userAccounts && state.userAccounts.length > 0) {
+      return state.userAccounts
+    }
+    // 否则从 snapshot.accounts 构建账户列表
+    if (state.snapshot.accounts) {
+      return Object.entries(state.snapshot.accounts).map(([currency, acc]) => ({
+        account_id: acc.user_id || state.snapshot.user_id || 'default',
+        account_name: `${acc.user_id || '交易账户'} (${currency})`,
+        currency: currency,
+        balance: acc.balance || 0,
+        available: acc.available || 0,
+        margin: acc.margin || 0,
+        risk_ratio: acc.risk_ratio || 0,
+        ...acc
+      }))
+    }
+    return []
   },
 
-  hasAccounts: state => state.userAccounts.length > 0,
+  currentAccount: state => {
+    // 先从 userAccounts 查找
+    if (state.currentAccountId && state.userAccounts && state.userAccounts.length > 0) {
+      const found = state.userAccounts.find(acc => acc.account_id === state.currentAccountId)
+      if (found) return found
+    }
+    // 否则从 snapshot.accounts 获取（默认 CNY）
+    if (state.snapshot.accounts) {
+      const cnyAccount = state.snapshot.accounts['CNY']
+      if (cnyAccount) {
+        return {
+          account_id: cnyAccount.user_id || state.snapshot.user_id || 'default',
+          account_name: `${cnyAccount.user_id || '交易账户'} (CNY)`,
+          currency: 'CNY',
+          balance: cnyAccount.balance || 0,
+          available: cnyAccount.available || 0,
+          margin: cnyAccount.margin || 0,
+          risk_ratio: cnyAccount.risk_ratio || 0,
+          ...cnyAccount
+        }
+      }
+    }
+    return null
+  },
+
+  // ✨ 修复：同时检查 userAccounts 和 snapshot.accounts @yutiansut @quantaxis
+  // userAccounts 来自 HTTP API，snapshot.accounts 来自 WebSocket QIFI
+  hasAccounts: state => {
+    // 优先检查 userAccounts（HTTP API 获取的账户列表）
+    if (state.userAccounts && state.userAccounts.length > 0) {
+      return true
+    }
+    // 其次检查 snapshot.accounts（WebSocket QIFI 数据）
+    if (state.snapshot.accounts && Object.keys(state.snapshot.accounts).length > 0) {
+      return true
+    }
+    return false
+  },
 
   // 账户信息
   account: state => (currency = 'CNY') => {
@@ -552,7 +603,45 @@ const getters = {
   subscribedInstruments: state => state.subscribedInstruments,
 
   // 通知信息
-  notifications: state => state.snapshot.notify || {}
+  notifications: state => state.snapshot.notify || {},
+
+  // ============================================================================
+  // ✨ 因子数据 Getters @yutiansut @quantaxis
+  // ============================================================================
+
+  // 所有因子数据
+  factors: state => state.snapshot.factors || {},
+
+  // 获取特定合约的因子数据
+  factor: state => (instrumentId) => {
+    return state.snapshot.factors && state.snapshot.factors[instrumentId]
+  },
+
+  // 获取特定因子值
+  factorValue: state => (instrumentId, factorId) => {
+    const factors = state.snapshot.factors && state.snapshot.factors[instrumentId]
+    if (factors && factors.values) {
+      return factors.values[factorId]
+    }
+    return null
+  },
+
+  // 获取合约的所有因子值（便捷访问）
+  factorValues: state => (instrumentId) => {
+    const factors = state.snapshot.factors && state.snapshot.factors[instrumentId]
+    return (factors && factors.values) || {}
+  },
+
+  // 获取因子更新时间戳
+  factorTimestamp: state => (instrumentId) => {
+    const factors = state.snapshot.factors && state.snapshot.factors[instrumentId]
+    return factors && factors.timestamp
+  },
+
+  // 检查是否有因子数据
+  hasFactors: state => {
+    return state.snapshot.factors && Object.keys(state.snapshot.factors).length > 0
+  }
 }
 
 export default {

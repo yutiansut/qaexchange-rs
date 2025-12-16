@@ -250,7 +250,7 @@ impl PreTradeCheck {
         let acc = account.read();
         let config = self.config.read();
 
-        // 如果是开仓，检查持仓限额
+        // 如果是开仓，检查持仓限额 @yutiansut @quantaxis
         if req.offset == "OPEN" {
             let current_position = acc
                 .hold
@@ -264,7 +264,20 @@ impl PreTradeCheck {
                 .unwrap_or(0.0);
 
             let new_position = current_position + req.volume;
-            let total_value = acc.accounts.balance;
+            // 使用可用资金作为总价值参考，避免除零
+            // 对于新账户，使用 money（可用资金）而非 balance（可能为0）
+            let total_value = if acc.accounts.balance > 0.0 {
+                acc.accounts.balance
+            } else if acc.money > 0.0 {
+                acc.money
+            } else {
+                // 账户无资金时，拒绝开仓
+                return Ok(Some(RiskCheckResult::Reject {
+                    reason: "Insufficient funds: account balance is zero, please deposit first".to_string(),
+                    code: RiskCheckCode::InsufficientFunds,
+                }));
+            };
+
             let position_ratio = (new_position * req.price) / total_value;
 
             if position_ratio > config.max_position_ratio {

@@ -50,6 +50,13 @@ const routes = [
         component: () => import('@/views/chart/index.vue'),
         meta: { title: 'K线图表', icon: 'el-icon-data-line', group: 'trading' }
       },
+      // ✨ 因子分析系统 @yutiansut @quantaxis
+      {
+        path: 'factors',
+        name: 'Factors',
+        component: () => import('@/views/factors/index.vue'),
+        meta: { title: '因子分析', icon: 'el-icon-data-analysis', group: 'analysis' }
+      },
       {
         path: 'accounts',
         name: 'Accounts',

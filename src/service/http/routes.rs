@@ -17,13 +17,17 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg
         // 健康检查
         .route("/health", web::get().to(handlers::health_check))
-        // 用户认证
+        // 用户认证 @yutiansut @quantaxis
         .service(
             web::scope("/api/auth")
                 .route("/register", web::post().to(auth::register))
                 .route("/login", web::post().to(auth::login))
                 .route("/user/{user_id}", web::get().to(auth::get_current_user))
-                .route("/users", web::get().to(auth::list_users)), // 获取所有用户列表（管理员）
+                .route("/users", web::get().to(auth::list_users)) // 获取所有用户列表（管理员）
+                // 角色管理 API @yutiansut @quantaxis
+                .route("/user/roles", web::post().to(auth::set_user_roles)) // 设置用户角色
+                .route("/user/role/add", web::post().to(auth::add_user_role)) // 添加用户角色
+                .route("/user/{user_id}/make-admin", web::post().to(auth::make_admin)), // 升级为管理员
         )
         // 用户账户管理 (Phase 10)
         .service(

@@ -24,7 +24,8 @@ pub struct SystemMonitoring {
     pub storage: StorageStats,
 }
 
-/// 账户统计
+/// 账户统计 @yutiansut @quantaxis
+/// 包含"中央银行"视角的资金流入/流出统计
 #[derive(Debug, Serialize)]
 pub struct AccountStats {
     /// 总账户数
@@ -41,6 +42,12 @@ pub struct AccountStats {
 
     /// 总占用保证金
     pub total_margin_used: f64,
+
+    /// 今日总入金（中央银行视角）@yutiansut @quantaxis
+    pub total_deposit: f64,
+
+    /// 今日总出金（中央银行视角）@yutiansut @quantaxis
+    pub total_withdraw: f64,
 }
 
 /// 订单统计
@@ -264,6 +271,9 @@ fn get_account_stats(account_mgr: &AccountManager) -> AccountStats {
     let mut total_balance = 0.0;
     let mut total_available = 0.0;
     let mut total_margin_used = 0.0;
+    // 中央银行视角：汇总所有账户的入金/出金 @yutiansut @quantaxis
+    let mut total_deposit = 0.0;
+    let mut total_withdraw = 0.0;
 
     for account in accounts {
         let acc = account.read();
@@ -275,6 +285,10 @@ fn get_account_stats(account_mgr: &AccountManager) -> AccountStats {
 
         // QA_Account 字段：money（可用资金）, accounts.balance（总权益）
         total_available += acc.money;
+
+        // 汇总 QIFI 的 deposit/withdraw 字段 @yutiansut @quantaxis
+        total_deposit += acc.accounts.deposit;
+        total_withdraw += acc.accounts.withdraw;
 
         // 计算总权益和保证金（简化版本）
         let mut account_balance = acc.money;
@@ -298,6 +312,8 @@ fn get_account_stats(account_mgr: &AccountManager) -> AccountStats {
         total_balance,
         total_available,
         total_margin_used,
+        total_deposit,
+        total_withdraw,
     }
 }
 

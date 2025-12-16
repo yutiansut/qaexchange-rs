@@ -633,7 +633,19 @@ impl OrderRouter {
                 "",
                 &req.order_type,
             ) {
-                Ok(ref qa_order) => qa_order.order_id.clone(),
+                Ok(ref qa_order) => {
+                    // ✨ Debug: 检查 frozen 状态 @yutiansut @quantaxis
+                    let frozen_keys: Vec<String> = acc.frozen.keys().cloned().collect();
+                    let frozen_count = acc.frozen.len();
+                    log::info!(
+                        "💰 [DEBUG] After send_order: qa_order_id={}, money={:.2}, frozen_count={}, frozen_keys={:?}",
+                        qa_order.order_id,
+                        acc.money,
+                        frozen_count,
+                        frozen_keys
+                    );
+                    qa_order.order_id.clone()
+                }
                 Err(e) => {
                     log::warn!(
                         "Order rejected - insufficient funds/margin for account {}: {:?}",
@@ -652,10 +664,14 @@ impl OrderRouter {
             // 写锁在此自动释放（RAII）
         };
 
-        log::debug!(
-            "Funds frozen for order {}, qars order_id: {}",
+        // ✨ 调试日志：显示 qa_order_id 和 towards 值 @yutiansut @quantaxis
+        log::info!(
+            "🔐 Order submitted: order_id={}, qa_order_id={}, towards={}, direction={}, offset={}",
             order_id,
-            qa_order_id
+            qa_order_id,
+            towards,
+            req.direction,
+            req.offset
         );
 
         // 4. 存储订单信息

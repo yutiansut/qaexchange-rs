@@ -224,30 +224,30 @@ export default {
     },
 
     /**
-     * 加载签约银行列表
+     * 加载签约银行列表 @yutiansut @quantaxis
+     * 注意：request.js 拦截器已返回 res.data，不需要再 .data
      */
     async loadBanks() {
       if (!this.currentAccountId) return
       try {
         const res = await getBanks(this.currentAccountId)
-        if (res.data && res.data.success) {
-          this.banks = res.data.data || []
-        }
+        // request 拦截器已返回 data，直接取 banks
+        this.banks = res.banks || []
+        console.log('[TransferForm] Loaded banks:', this.banks)
       } catch (error) {
         console.error('[TransferForm] Failed to load banks:', error)
       }
     },
 
     /**
-     * 加载转账记录
+     * 加载转账记录 @yutiansut @quantaxis
      */
     async loadTransferRecords() {
       if (!this.currentAccountId) return
       try {
         const res = await getTransferRecords(this.currentAccountId)
-        if (res.data && res.data.success) {
-          this.transferRecords = res.data.data || []
-        }
+        // request 拦截器已返回 data，直接取 records
+        this.transferRecords = res.records || []
       } catch (error) {
         console.error('[TransferForm] Failed to load transfer records:', error)
       }
@@ -281,21 +281,18 @@ export default {
           future_password: this.form.future_password
         })
 
-        if (res.data && res.data.success) {
-          this.successMessage = this.transferDirection === 'in'
-            ? `入金成功！金额: ${this.form.amount.toFixed(2)} 元`
-            : `出金成功！金额: ${this.form.amount.toFixed(2)} 元`
+        // request 拦截器已处理 success 检查，成功时直接返回 data
+        this.successMessage = this.transferDirection === 'in'
+          ? `入金成功！金额: ${this.form.amount.toFixed(2)} 元，当前余额: ¥${res.balance.toFixed(2)}`
+          : `出金成功！金额: ${this.form.amount.toFixed(2)} 元，当前余额: ¥${res.balance.toFixed(2)}`
 
-          // 刷新转账记录
-          await this.loadTransferRecords()
+        // 刷新转账记录
+        await this.loadTransferRecords()
 
-          // 清空表单
-          this.form.amount = null
-          this.form.bank_password = ''
-          this.form.future_password = ''
-        } else {
-          this.errorMessage = (res.data && res.data.error) || '转账失败'
-        }
+        // 清空表单
+        this.form.amount = null
+        this.form.bank_password = ''
+        this.form.future_password = ''
       } catch (error) {
         console.error('[TransferForm] Transfer failed:', error)
         this.errorMessage = `转账失败: ${error.message || '未知错误'}`

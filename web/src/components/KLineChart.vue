@@ -47,6 +47,25 @@ export default {
     klineData: {
       type: Array,
       default: () => []
+    },
+
+    // ✨ 因子数据（从WebSocket实时获取）@yutiansut @quantaxis
+    // 格式: { ma5, ma10, ma20, ema12, ema26, rsi14, macd_dif, macd_dea, macd_hist }
+    factorData: {
+      type: Object,
+      default: () => ({})
+    },
+
+    // ✨ 是否显示因子叠加层 @yutiansut @quantaxis
+    showFactorOverlay: {
+      type: Boolean,
+      default: true
+    },
+
+    // ✨ 需要显示的因子列表 @yutiansut @quantaxis
+    enabledFactors: {
+      type: Array,
+      default: () => ['ma5', 'ma10', 'ma20']
     }
   },
 
@@ -55,7 +74,24 @@ export default {
       jsChart: null,
       option: null,
       isChartReady: false,
-      initRetryCount: 0  // ✨ 初始化重试计数器 @yutiansut @quantaxis
+      initRetryCount: 0,  // ✨ 初始化重试计数器 @yutiansut @quantaxis
+      // ✨ 因子历史数据缓存（用于叠加显示）@yutiansut @quantaxis
+      factorHistory: {
+        ma5: [],
+        ma10: [],
+        ma20: [],
+        ema12: [],
+        ema26: []
+      },
+      maxFactorHistory: 100,  // 最多保存100个因子数据点
+      // ✨ 因子颜色配置 @yutiansut @quantaxis
+      factorColors: {
+        ma5: '#f9e2af',    // 黄色
+        ma10: '#89b4fa',   // 蓝色
+        ma20: '#cba6f7',   // 紫色
+        ema12: '#a6e3a1',  // 绿色
+        ema26: '#fab387'   // 橙色
+      }
     }
   },
 
@@ -83,6 +119,34 @@ export default {
       },
       deep: true,
       immediate: true
+    },
+
+    // ✨ 监听因子数据变化 @yutiansut @quantaxis
+    factorData: {
+      handler(newFactors) {
+        if (this.showFactorOverlay && newFactors && Object.keys(newFactors).length > 0) {
+          console.log('[KLineChart] Factor data updated:', Object.keys(newFactors))
+          this.updateFactorHistory(newFactors)
+          this.renderFactorOverlay()
+        }
+      },
+      deep: true
+    },
+
+    // ✨ 监听因子显示开关 @yutiansut @quantaxis
+    showFactorOverlay(show) {
+      if (show) {
+        this.renderFactorOverlay()
+      } else {
+        this.clearFactorOverlay()
+      }
+    },
+
+    // ✨ 监听启用的因子列表变化 @yutiansut @quantaxis
+    enabledFactors() {
+      if (this.showFactorOverlay) {
+        this.renderFactorOverlay()
+      }
     }
   },
 
@@ -408,6 +472,195 @@ export default {
       } catch (error) {
         console.error('[KLineChart] Failed to change period:', error)
       }
+    },
+
+    // ============================================================================
+    // ✨ 因子叠加相关方法 @yutiansut @quantaxis
+    // ============================================================================
+
+    /**
+     * 更新因子历史数据
+     * @param {Object} factors - 最新因子数据
+     */
+    updateFactorHistory(factors) {
+      const timestamp = Date.now()
+
+      Object.keys(this.factorHistory).forEach(key => {
+        if (factors[key] !== undefined && factors[key] !== null) {
+          this.factorHistory[key].push({
+            time: timestamp,
+            value: factors[key]
+          })
+
+          // 限制历史长度
+          if (this.factorHistory[key].length > this.maxFactorHistory) {
+            this.factorHistory[key].shift()
+          }
+        }
+      })
+    },
+
+    /**
+     * 渲染因子叠加层
+     * 由于HQChart不直接支持动态添加线条，使用Canvas叠加方式实现
+     */
+    renderFactorOverlay() {
+      if (!this.$refs.chart || !this.isChartReady) return
+
+      // 获取或创建叠加Canvas
+      let overlayCanvas = this.$refs.container.querySelector('.factor-overlay-canvas')
+      if (!overlayCanvas) {
+        overlayCanvas = document.createElement('canvas')
+        overlayCanvas.className = 'factor-overlay-canvas'
+        overlayCanvas.style.cssText = `
+          position: absolute;
+          top: 0;
+          left: 0;
+          pointer-events: none;
+          z-index: 100;
+        `
+        this.$refs.container.style.position = 'relative'
+        this.$refs.container.appendChild(overlayCanvas)
+      }
+
+      // 设置Canvas尺寸
+      const container = this.$refs.container
+      overlayCanvas.width = container.offsetWidth
+      overlayCanvas.height = container.offsetHeight
+
+      const ctx = overlayCanvas.getContext('2d')
+      ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
+
+      // 绘制因子实时值显示区域（右上角）
+      this.drawFactorLegend(ctx, overlayCanvas.width, overlayCanvas.height)
+
+      // 如果有足够的历史数据，绘制因子趋势线
+      this.enabledFactors.forEach(factorKey => {
+        const history = this.factorHistory[factorKey]
+        if (history && history.length > 1) {
+          this.drawFactorTrendLine(ctx, factorKey, history, overlayCanvas.width, overlayCanvas.height)
+        }
+      })
+
+      console.log('[KLineChart] Factor overlay rendered')
+    },
+
+    /**
+     * 绘制因子图例（实时值显示）
+     */
+    drawFactorLegend(ctx, width, height) {
+      const padding = 10
+      const lineHeight = 18
+      const legendX = width - 150
+      let legendY = padding + 30  // 避开K线标题
+
+      // 背景
+      ctx.fillStyle = 'rgba(30, 30, 46, 0.85)'
+      ctx.roundRect(legendX - 10, legendY - 5, 140, this.enabledFactors.length * lineHeight + 10, 6)
+      ctx.fill()
+
+      // 绘制每个因子的实时值
+      this.enabledFactors.forEach((factorKey, index) => {
+        const y = legendY + index * lineHeight + 12
+        const color = this.factorColors[factorKey] || '#cdd6f4'
+        const value = this.factorData[factorKey]
+
+        // 颜色指示方块
+        ctx.fillStyle = color
+        ctx.fillRect(legendX, y - 8, 12, 12)
+
+        // 因子名称
+        ctx.fillStyle = '#a6adc8'
+        ctx.font = '11px monospace'
+        ctx.fillText(factorKey.toUpperCase(), legendX + 18, y)
+
+        // 因子值
+        ctx.fillStyle = '#cdd6f4'
+        ctx.font = 'bold 11px monospace'
+        const displayValue = value !== undefined && value !== null
+          ? value.toFixed(2)
+          : '--'
+        ctx.fillText(displayValue, legendX + 65, y)
+      })
+    },
+
+    /**
+     * 绘制因子趋势线（迷你图）
+     */
+    drawFactorTrendLine(ctx, factorKey, history, width, height) {
+      const color = this.factorColors[factorKey] || '#cdd6f4'
+      const miniChartHeight = 30
+      const miniChartWidth = 100
+      const padding = 10
+
+      // 计算迷你图位置（左下角）
+      const factorIndex = this.enabledFactors.indexOf(factorKey)
+      const chartX = padding + factorIndex * (miniChartWidth + 20)
+      const chartY = height - padding - miniChartHeight - 20
+
+      // 获取数值范围
+      const values = history.map(h => h.value).filter(v => v !== null && v !== undefined)
+      if (values.length < 2) return
+
+      const minVal = Math.min(...values)
+      const maxVal = Math.max(...values)
+      const range = maxVal - minVal || 1
+
+      // 绘制迷你图背景
+      ctx.fillStyle = 'rgba(30, 30, 46, 0.7)'
+      ctx.beginPath()
+      ctx.roundRect(chartX - 5, chartY - 5, miniChartWidth + 10, miniChartHeight + 25, 4)
+      ctx.fill()
+
+      // 绘制趋势线
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+
+      values.forEach((val, i) => {
+        const x = chartX + (i / (values.length - 1)) * miniChartWidth
+        const y = chartY + miniChartHeight - ((val - minVal) / range) * miniChartHeight
+
+        if (i === 0) {
+          ctx.moveTo(x, y)
+        } else {
+          ctx.lineTo(x, y)
+        }
+      })
+      ctx.stroke()
+
+      // 绘制因子标签
+      ctx.fillStyle = color
+      ctx.font = 'bold 10px sans-serif'
+      ctx.fillText(factorKey.toUpperCase(), chartX, chartY + miniChartHeight + 15)
+    },
+
+    /**
+     * 清除因子叠加层
+     */
+    clearFactorOverlay() {
+      const container = this.$refs.container
+      const overlayCanvas = container && container.querySelector('.factor-overlay-canvas')
+      if (overlayCanvas) {
+        const ctx = overlayCanvas.getContext('2d')
+        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
+      }
+    },
+
+    /**
+     * 重置因子历史数据
+     */
+    resetFactorHistory() {
+      Object.keys(this.factorHistory).forEach(key => {
+        this.factorHistory[key] = []
+      })
+    },
+
+    /**
+     * 获取因子颜色
+     */
+    getFactorColor(factorKey) {
+      return this.factorColors[factorKey] || '#cdd6f4'
     }
   }
 }

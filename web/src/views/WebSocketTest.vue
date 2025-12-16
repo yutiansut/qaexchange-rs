@@ -922,9 +922,10 @@ export default {
       console.log('[WebSocketTest] Fetching K-line data for:', this.selectedInstrument, 'Period:', this.klinePeriod)
 
       try {
-        // 调用后端 K线 API
+        // 调用后端 K线 API @yutiansut @quantaxis
+        // 使用相对路径，通过 vue.config.js 代理访问
         const response = await this.$axios.get(
-          `http://localhost:8094/api/market/kline/${this.selectedInstrument}`,
+          `/api/market/kline/${this.selectedInstrument}`,
           {
             params: {
               period: this.klinePeriod,
