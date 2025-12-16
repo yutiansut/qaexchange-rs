@@ -103,6 +103,8 @@ pub struct ReplicationContext {
     log_store: Arc<RwLock<Vec<InternalLogEntry>>>,
     /// 系统信息采集器
     sys_info: Arc<RwLock<System>>,
+    /// 快照存储路径 @yutiansut @quantaxis
+    snapshot_dir: std::path::PathBuf,
 }
 
 impl ReplicationContext {
@@ -114,6 +116,12 @@ impl ReplicationContext {
         let mut sys = System::new_all();
         sys.refresh_all();
 
+        // 创建快照存储目录 @yutiansut @quantaxis
+        let snapshot_dir = std::path::PathBuf::from(format!("data/snapshots/{}", node_id));
+        if let Err(e) = std::fs::create_dir_all(&snapshot_dir) {
+            log::warn!("Failed to create snapshot directory: {}", e);
+        }
+
         Self {
             node_id,
             role_manager,
@@ -124,7 +132,84 @@ impl ReplicationContext {
             last_applied: Arc::new(RwLock::new(0)),
             log_store: Arc::new(RwLock::new(Vec::new())),
             sys_info: Arc::new(RwLock::new(sys)),
+            snapshot_dir,
         }
+    }
+
+    /// 带自定义快照路径的构造函数 @yutiansut @quantaxis
+    pub fn with_snapshot_dir(
+        node_id: String,
+        role_manager: Arc<RoleManager>,
+        replicator: Arc<LogReplicator>,
+        snapshot_dir: std::path::PathBuf,
+    ) -> Self {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
+        if let Err(e) = std::fs::create_dir_all(&snapshot_dir) {
+            log::warn!("Failed to create snapshot directory: {}", e);
+        }
+
+        Self {
+            node_id,
+            role_manager,
+            replicator,
+            current_term: Arc::new(RwLock::new(0)),
+            voted_for: Arc::new(RwLock::new(None)),
+            commit_index: Arc::new(RwLock::new(0)),
+            last_applied: Arc::new(RwLock::new(0)),
+            log_store: Arc::new(RwLock::new(Vec::new())),
+            sys_info: Arc::new(RwLock::new(sys)),
+            snapshot_dir,
+        }
+    }
+
+    /// 写入快照数据块 @yutiansut @quantaxis
+    pub fn write_snapshot_chunk(
+        &self,
+        chunk_index: u64,
+        data: &[u8],
+        is_last: bool,
+    ) -> Result<(), std::io::Error> {
+        use std::io::Write;
+
+        let snapshot_file = self.snapshot_dir.join("snapshot.dat");
+        let mut file = if chunk_index == 0 {
+            // 第一个块：创建新文件
+            std::fs::File::create(&snapshot_file)?
+        } else {
+            // 后续块：追加写入
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&snapshot_file)?
+        };
+
+        file.write_all(data)?;
+        file.flush()?;
+
+        if is_last {
+            // 最后一块：写入元数据
+            let meta_file = self.snapshot_dir.join("snapshot.meta");
+            let meta = format!(
+                "term={}\nsequence={}\ntimestamp={}\n",
+                *self.current_term.read(),
+                *self.commit_index.read(),
+                chrono::Utc::now().timestamp()
+            );
+            std::fs::write(meta_file, meta)?;
+            log::info!(
+                "[{}] Snapshot written to {:?}",
+                self.node_id,
+                snapshot_file
+            );
+        }
+
+        Ok(())
+    }
+
+    /// 获取快照文件路径 @yutiansut @quantaxis
+    pub fn get_snapshot_path(&self) -> std::path::PathBuf {
+        self.snapshot_dir.join("snapshot.dat")
     }
 
     /// 获取最后一条日志的序列号和 term
@@ -428,7 +513,7 @@ impl ReplicationService for ReplicationServiceImpl {
         }))
     }
 
-    /// 处理快照安装 (流式接收)
+    /// 处理快照安装 (流式接收) @yutiansut @quantaxis
     async fn install_snapshot(
         &self,
         request: Request<tonic::Streaming<SnapshotChunk>>,
@@ -440,6 +525,8 @@ impl ReplicationService for ReplicationServiceImpl {
         let mut last_sequence = 0u64;
         #[allow(unused_assignments)]
         let mut last_term = 0u64;
+        let mut chunk_index = 0u64;
+        let mut write_error: Option<String> = None;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -453,13 +540,24 @@ impl ReplicationService for ReplicationServiceImpl {
             last_sequence = chunk.last_included_sequence;
             last_term = chunk.last_included_term;
 
-            // TODO: 将快照数据写入存储
+            // 将快照数据写入存储 @yutiansut @quantaxis
+            if let Err(e) = self.ctx.write_snapshot_chunk(chunk_index, &chunk.data, chunk.is_last) {
+                log::error!(
+                    "[{}] Failed to write snapshot chunk {}: {}",
+                    self.ctx.node_id,
+                    chunk_index,
+                    e
+                );
+                write_error = Some(e.to_string());
+            }
+            chunk_index += 1;
 
             if chunk.is_last {
                 log::info!(
-                    "[{}] Snapshot installed: {} bytes, last_seq={}, last_term={}",
+                    "[{}] Snapshot installed: {} bytes, {} chunks, last_seq={}, last_term={}",
                     self.ctx.node_id,
                     total_bytes,
+                    chunk_index,
                     last_sequence,
                     last_term
                 );
@@ -471,10 +569,22 @@ impl ReplicationService for ReplicationServiceImpl {
         *self.ctx.commit_index.write() = last_sequence;
         *self.ctx.last_applied.write() = last_sequence;
 
+        // 清除日志存储（快照之前的日志不再需要）
+        {
+            let mut logs = self.ctx.log_store.write();
+            logs.retain(|e| e.sequence > last_sequence);
+            log::info!(
+                "[{}] Truncated logs before sequence {}, remaining {} entries",
+                self.ctx.node_id,
+                last_sequence,
+                logs.len()
+            );
+        }
+
         Ok(Response::new(SnapshotResponse {
             term: *self.ctx.current_term.read(),
-            success: true,
-            error: String::new(),
+            success: write_error.is_none(),
+            error: write_error.unwrap_or_default(),
             bytes_received: total_bytes,
         }))
     }

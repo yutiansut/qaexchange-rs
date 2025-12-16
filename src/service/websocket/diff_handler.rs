@@ -204,6 +204,13 @@ impl DiffHandler {
                 self.handle_set_chart(user_id, chart_id, ins_list, duration, view_width, ctx_addr)
                     .await;
             }
+
+            DiffClientMessage::Ping => {
+                // 心跳响应: 收到 ping 立即返回 pong @yutiansut @quantaxis
+                log::debug!("DIFF ping received from user={}, sending pong", user_id);
+                let response = DiffServerMessage::Pong;
+                ctx_addr.do_send(SendDiffMessage { message: response });
+            }
         }
     }
 

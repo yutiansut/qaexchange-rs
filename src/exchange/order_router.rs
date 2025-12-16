@@ -440,6 +440,38 @@ impl OrderRouter {
         // 1. 生成订单ID（无锁操作）
         let order_id = self.generate_order_id();
 
+        // 1.5 市价单价格转换 @yutiansut @quantaxis
+        // 市价单需要从行情获取实际价格：买单用卖一价，卖单用买一价
+        let req = if req.order_type == "MARKET" && req.price <= 0.0 {
+            let market_price = self.get_market_price_for_order(&req.instrument_id, &req.direction);
+            if market_price <= 0.0 {
+                log::warn!(
+                    "Cannot get market price for MARKET order: instrument={}, direction={}",
+                    req.instrument_id, req.direction
+                );
+                return SubmitOrderResponse {
+                    success: false,
+                    order_id: Some(order_id.clone()),
+                    status: Some("rejected".to_string()),
+                    error_message: Some(format!(
+                        "No market price available for instrument {}",
+                        req.instrument_id
+                    )),
+                    error_code: Some(4002), // 无行情
+                };
+            }
+            log::info!(
+                "MARKET order price converted: instrument={}, direction={}, price={}",
+                req.instrument_id, req.direction, market_price
+            );
+            SubmitOrderRequest {
+                price: market_price,
+                ..req
+            }
+        } else {
+            req
+        };
+
         // 2. 预计算所需资金（无锁操作）
         let estimated_commission = req.price * req.volume * 0.0003; // 万3手续费
         let required_funds = if req.direction == "BUY" && req.offset == "OPEN" {
@@ -1687,6 +1719,48 @@ impl OrderRouter {
         let seq = self.order_seq.fetch_add(1, Ordering::SeqCst);
         let timestamp = chrono::Utc::now().timestamp_millis();
         format!("O{}{:010}", timestamp, seq)
+    }
+
+    /// 获取市价单的执行价格 @yutiansut @quantaxis
+    ///
+    /// 买单：使用卖一价（ask_price）
+    /// 卖单：使用买一价（bid_price）
+    /// 如果没有对手盘，使用 last_price 或结算价
+    fn get_market_price_for_order(&self, instrument_id: &str, direction: &str) -> f64 {
+        // 1. 尝试从订单簿获取对手盘价格
+        if let Some(orderbook) = self.matching_engine.get_orderbook(instrument_id) {
+            let ob = orderbook.read();
+
+            let price = match direction {
+                "BUY" => {
+                    // 买单用卖一价（ask）
+                    ob.ask_queue
+                        .get_sorted_orders()
+                        .and_then(|orders| orders.first().map(|o| o.price))
+                        .unwrap_or(0.0)
+                }
+                "SELL" => {
+                    // 卖单用买一价（bid）
+                    ob.bid_queue
+                        .get_sorted_orders()
+                        .and_then(|orders| orders.first().map(|o| o.price))
+                        .unwrap_or(0.0)
+                }
+                _ => 0.0,
+            };
+
+            if price > 0.0 {
+                return price;
+            }
+
+            // 2. 没有对手盘，使用 last_price（订单簿初始化时设置为 prev_close）
+            if ob.lastprice > 0.0 {
+                return ob.lastprice;
+            }
+        }
+
+        // 3. 无行情可用
+        0.0
     }
 
     /// 计算 towards (买卖方向 - 遵循 qars 定义)

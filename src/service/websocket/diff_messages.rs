@@ -19,6 +19,9 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "aid", rename_all = "snake_case")]
 pub enum DiffClientMessage {
+    /// 心跳请求 @yutiansut @quantaxis
+    Ping,
+
     /// 业务信息截面更新请求（peek_message）
     PeekMessage,
 
@@ -80,6 +83,9 @@ pub enum DiffClientMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "aid", rename_all = "snake_case")]
 pub enum DiffServerMessage {
+    /// 心跳响应 @yutiansut @quantaxis
+    Pong,
+
     /// 业务信息截面更新（rtn_data）
     RtnData {
         data: Vec<Value>, // JSON Merge Patch 数组
@@ -127,5 +133,30 @@ mod tests {
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["aid"], "insert_order");
         assert_eq!(json["user_id"], "user123");
+    }
+
+    #[test]
+    fn test_ping_serialization() {
+        // 客户端发送 ping @yutiansut @quantaxis
+        let msg = DiffClientMessage::Ping;
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["aid"], "ping");
+
+        // 反序列化测试
+        let parsed: DiffClientMessage =
+            serde_json::from_str(r#"{"aid":"ping"}"#).unwrap();
+        assert!(matches!(parsed, DiffClientMessage::Ping));
+    }
+
+    #[test]
+    fn test_pong_serialization() {
+        // 服务端响应 pong @yutiansut @quantaxis
+        let msg = DiffServerMessage::Pong;
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"aid\":\"pong\""));
+
+        // 验证 JSON 格式
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["aid"], "pong");
     }
 }

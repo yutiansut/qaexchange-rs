@@ -188,14 +188,18 @@ impl PreTradeCheck {
             )));
         }
 
-        // 检查价格合法性
-        if req.price <= 0.0 {
+        // 检查价格合法性 @yutiansut @quantaxis
+        // 市价单（MARKET）允许 price=0，限价单（LIMIT）要求 price > 0
+        if req.price_type != "MARKET" && req.price <= 0.0 {
             return Err(ExchangeError::RiskCheckFailed(
-                "Invalid order price".to_string(),
+                "Invalid order price for LIMIT order".to_string(),
             ));
         }
 
-        // 检查订单金额
+        // 检查订单金额（市价单跳过金额检查，因为价格可能是0）
+        if req.price_type == "MARKET" {
+            return Ok(()); // 市价单跳过金额检查
+        }
         let order_amount = req.price * req.volume;
         if order_amount > config.max_order_amount {
             return Err(ExchangeError::RiskCheckFailed(format!(
@@ -330,10 +334,25 @@ impl PreTradeCheck {
     }
 
     /// 自成交防范检查
+    ///
+    /// 注意：平仓单跳过自成交检查 @yutiansut @quantaxis
+    /// - 平仓（CLOSE）和开仓（OPEN）是不同的业务场景
+    /// - 自成交防范主要针对：同一账户的 OPEN 订单可能自己撮合
+    /// - 例如：BUY OPEN @ 3800 和 SELL OPEN @ 3800 会自成交
+    /// - 但是：BUY OPEN @ 3800 和 SELL CLOSE @ 3800 是正常平仓，应允许
     fn check_self_trading(
         &self,
         req: &OrderCheckRequest,
     ) -> Result<Option<RiskCheckResult>, ExchangeError> {
+        // ✅ 平仓单跳过自成交检查 - 平仓和开仓是不同业务场景
+        if req.offset == "CLOSE" || req.offset == "CLOSETODAY" || req.offset == "CLOSEYESTERDAY" {
+            log::debug!(
+                "Self-trading check skipped for CLOSE order: account={}, instrument={}, direction={}, offset={}",
+                req.account_id, req.instrument_id, req.direction, req.offset
+            );
+            return Ok(None);
+        }
+
         // 检查同一账户在同一合约上是否有对手方向的活动订单
         if let Some(orders_arc) = self.active_orders.get(&req.account_id) {
             let orders = orders_arc.read();

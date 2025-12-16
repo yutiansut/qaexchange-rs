@@ -255,6 +255,8 @@ pub struct HybridQueryEngine {
     batch_source: Option<Arc<dyn BatchDataSource>>,
     /// 配置
     config: HybridConfig,
+    /// 订阅者管理器 @yutiansut @quantaxis
+    subscribers: Arc<DashMap<String, Vec<mpsc::Sender<Record>>>>,
 }
 
 /// 混合查询配置
@@ -300,6 +302,7 @@ impl HybridQueryEngine {
             stream_buffer: Arc::new(StreamBuffer::default()),
             batch_source: None,
             config,
+            subscribers: Arc::new(DashMap::new()),
         }
     }
 
@@ -314,9 +317,22 @@ impl HybridQueryEngine {
         Arc::clone(&self.stream_buffer)
     }
 
-    /// 推送流数据
+    /// 推送流数据（同时通知订阅者）@yutiansut @quantaxis
     pub fn push_stream(&self, record: Record) {
-        self.stream_buffer.push(record);
+        let key = record.key.clone();
+        self.stream_buffer.push(record.clone());
+
+        // 通知订阅该 key 的所有订阅者
+        if let Some(mut senders) = self.subscribers.get_mut(&key) {
+            // 移除已关闭的订阅者
+            senders.retain(|tx| !tx.is_closed());
+
+            // 发送给所有活跃订阅者
+            for tx in senders.iter() {
+                // 使用 try_send 避免阻塞
+                let _ = tx.try_send(record.clone());
+            }
+        }
     }
 
     /// 执行混合查询
@@ -410,14 +426,54 @@ impl HybridQueryEngine {
         }
     }
 
-    /// 执行流式订阅
-    pub fn subscribe(&self, _key: String) -> mpsc::Receiver<Record> {
-        let (_tx, rx) = mpsc::channel(1000);
+    /// 执行流式订阅 @yutiansut @quantaxis
+    ///
+    /// 订阅指定 key 的数据流，当有新数据推送时会通过 channel 通知
+    ///
+    /// # 参数
+    /// - `key`: 订阅的数据键（如合约ID）
+    ///
+    /// # 返回值
+    /// - `mpsc::Receiver<Record>`: 接收新数据的 channel
+    pub fn subscribe(&self, key: String) -> mpsc::Receiver<Record> {
+        let (tx, rx) = mpsc::channel(1000);
 
-        // TODO: 实现订阅逻辑
-        // 这里简化为立即返回 receiver
+        // 将发送端添加到订阅者列表
+        self.subscribers
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(tx);
 
         rx
+    }
+
+    /// 取消订阅（通过丢弃 receiver 自动完成）@yutiansut @quantaxis
+    ///
+    /// 注意：当 receiver 被丢弃时，对应的 sender 的 try_send 会返回错误，
+    /// 下次 push_stream 时会自动清理已关闭的订阅者
+    pub fn unsubscribe(&self, key: &str) {
+        if let Some(mut senders) = self.subscribers.get_mut(key) {
+            // 移除所有已关闭的 channel
+            senders.retain(|tx| !tx.is_closed());
+        }
+    }
+
+    /// 获取订阅者数量 @yutiansut @quantaxis
+    pub fn subscriber_count(&self, key: &str) -> usize {
+        self.subscribers
+            .get(key)
+            .map(|s| s.iter().filter(|tx| !tx.is_closed()).count())
+            .unwrap_or(0)
+    }
+
+    /// 批量订阅多个 key @yutiansut @quantaxis
+    pub fn subscribe_many(&self, keys: Vec<String>) -> HashMap<String, mpsc::Receiver<Record>> {
+        keys.into_iter()
+            .map(|key| {
+                let rx = self.subscribe(key.clone());
+                (key, rx)
+            })
+            .collect()
     }
 }
 
