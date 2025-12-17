@@ -553,6 +553,12 @@ mod tests {
     fn test_incremental_executor() {
         let mut executor = IncrementalExecutor::new();
 
+        // ✨ 关键修复：先注册算子，再更新数据 @yutiansut @quantaxis
+        // IncrementalExecutor 的设计是：
+        // 1. 先通过 get_or_create_* 注册需要计算的算子
+        // 2. 然后 update() 会更新所有已注册的算子
+        executor.get_or_create_ma("close", 5);
+
         // 模拟价格序列
         let prices = [100.0, 101.0, 102.0, 101.5, 102.5, 103.0, 102.0, 103.5, 104.0, 103.0];
 
@@ -563,5 +569,8 @@ mod tests {
 
         let ma5 = executor.get_or_create_ma("close", 5);
         assert!(ma5 > 0.0);
+        // 验证 MA5 值接近最后5个价格的平均值
+        // 最后5个: 103.0, 102.0, 103.5, 104.0, 103.0 = 515.5 / 5 = 103.1
+        assert!((ma5 - 103.1).abs() < 0.01, "MA5 should be ~103.1, got {}", ma5);
     }
 }

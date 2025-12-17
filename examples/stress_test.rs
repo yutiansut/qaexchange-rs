@@ -140,6 +140,8 @@ fn main() {
             volume,
             price,
             order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
         };
 
         let response = order_router.submit_order(req);

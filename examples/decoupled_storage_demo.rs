@@ -41,6 +41,9 @@ async fn main() {
             base_path: "/tmp/qaexchange_decoupled/storage".to_string(),
             memtable_size_bytes: 64 * 1024 * 1024,
             estimated_entry_size: 256,
+            enable_olap_conversion: true,
+            olap_conversion_threshold: 10,
+            olap_conversion_age_seconds: 3600 * 24,
         },
         batch_size: 100,      // 批量 100 条
         batch_timeout_ms: 10, // 10ms 超时
@@ -147,6 +150,8 @@ async fn main() {
             volume: 1.0,
             price: 3800.0 + (i as f64) * 0.5,
             order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
         };
 
         let start = Instant::now();

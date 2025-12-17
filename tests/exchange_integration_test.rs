@@ -125,6 +125,9 @@ fn test_full_storage_pipeline() {
             base_path: base_path.to_str().unwrap().to_string(),
             memtable_size_bytes: 1 * 1024 * 1024, // 1 MB threshold for auto-flush
             estimated_entry_size: 256,
+            enable_olap_conversion: true,
+            olap_conversion_threshold: 10,
+            olap_conversion_age_seconds: 3600 * 24,
         };
 
         let storage = Arc::new(OltpHybridStorage::create(instrument, storage_config).unwrap());
@@ -353,6 +356,9 @@ fn test_oltp_to_olap_conversion() {
         base_path: base_path.to_str().unwrap().to_string(),
         memtable_size_bytes: 500 * 1024, // 500 KB，容易触发 flush
         estimated_entry_size: 256,
+        enable_olap_conversion: true,
+        olap_conversion_threshold: 10,
+        olap_conversion_age_seconds: 3600 * 24,
     };
 
     let storage = Arc::new(OltpHybridStorage::create(instrument, storage_config).unwrap());

@@ -95,6 +95,12 @@ pest_derive = "2.7"
 # 高性能分配器
 mimalloc = { version = "0.1", default-features = false }
 
+# CPU 亲和性绑定
+core_affinity = "0.8"
+
+# 无锁 SPSC 队列
+crossbeam-queue = "0.3"
+
 # io_uring (Linux 5.1+)
 tokio-uring = { version = "0.5", optional = true }
 

@@ -1648,23 +1648,22 @@ mod tests {
         // 验证 SnapshotManager 已设置
         assert!(gateway.snapshot_manager().is_some());
 
-        // 初始化用户快照（使用 user_id，不是 account_id）
-        let user_id = "test_user";
-        snapshot_mgr.initialize_user(user_id).await;
+        // 初始化用户快照（使用 account_id 作为 DIFF snapshot key）
+        snapshot_mgr.initialize_user(&account_id).await;
 
         // 启动 peek 任务
         let peek_task = tokio::spawn({
             let snapshot_mgr = snapshot_mgr.clone();
-            let user_id = user_id.to_string();
-            async move { snapshot_mgr.peek(&user_id).await }
+            let account_id = account_id.clone();
+            async move { snapshot_mgr.peek(&account_id).await }
         });
 
         // 等待一小段时间确保 peek 任务开始等待
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // 推送账户更新（这会触发 DIFF patch）
-        // 注意：push_account_update 需要 user_id，不是 account_id
-        gateway.push_account_update("test_user").unwrap();
+        // 注意：push_account_update 需要 account_id（ACC_xxx 格式）
+        gateway.push_account_update(&account_id).unwrap();
 
         // 等待 peek 返回
         let result = tokio::time::timeout(tokio::time::Duration::from_secs(2), peek_task).await;
@@ -1694,23 +1693,22 @@ mod tests {
         let snapshot_mgr = Arc::new(SnapshotManager::new());
         gateway.set_snapshot_manager(snapshot_mgr.clone());
 
-        // 初始化用户快照（使用 user_id，不是 account_id）
-        let user_id = "test_user";
-        snapshot_mgr.initialize_user(user_id).await;
+        // 初始化用户快照（使用 account_id 作为 DIFF snapshot key）
+        snapshot_mgr.initialize_user(&account_id).await;
 
         // 启动 peek 任务
         let peek_task = tokio::spawn({
             let snapshot_mgr = snapshot_mgr.clone();
-            let user_id = user_id.to_string();
-            async move { snapshot_mgr.peek(&user_id).await }
+            let account_id = account_id.clone();
+            async move { snapshot_mgr.peek(&account_id).await }
         });
 
         // 等待 peek 开始
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // 推送多个账户更新（模拟多次成交）
-        // 注意：push_account_update 需要 user_id，不是 account_id
-        gateway.push_account_update("test_user").unwrap();
+        // 注意：push_account_update 需要 account_id（ACC_xxx 格式）
+        gateway.push_account_update(&account_id).unwrap();
 
         // 等待一小段时间确保异步任务完成
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -1829,13 +1827,21 @@ mod tests {
 
     #[test]
     fn test_handle_trade_new() {
-        let (gateway, _, account_id) = create_test_gateway();
+        let (gateway, account_mgr, account_id) = create_test_gateway();
 
         let instrument_id = "SHFE.cu2501";
         let exchange_order_id = 1i64;
         let order_id = "O001";
         let volume = 10.0;
         let price = 50000.0;
+
+        // 先在账户中创建订单（关键步骤！）
+        let qa_order_id = {
+            let account = account_mgr.get_account(&account_id).unwrap();
+            let mut acc = account.write();
+            let order = acc.buy_open(instrument_id, volume, "2025-12-17 16:53:36", price).unwrap();
+            order.order_id.clone()
+        };
 
         let trade_id = gateway
             .handle_trade_new(
@@ -1850,12 +1856,20 @@ mod tests {
                 price,
                 Some(2i64),
                 Some("counter_party"),
-                "QA001",
+                &qa_order_id, // 使用真实的 qa_order_id
             )
             .unwrap();
 
         // 验证 trade_id 是递增的
         assert_eq!(trade_id, 1);
+
+        // 为第二次成交创建新订单
+        let qa_order_id_2 = {
+            let account = account_mgr.get_account(&account_id).unwrap();
+            let mut acc = account.write();
+            let order = acc.buy_open(instrument_id, 5.0, "2025-12-17 16:53:37", 50100.0).unwrap();
+            order.order_id.clone()
+        };
 
         // 第二次成交
         let trade_id_2 = gateway
@@ -1871,7 +1885,7 @@ mod tests {
                 50100.0,
                 Some(3i64),
                 Some("counter_party"),
-                "QA002",
+                &qa_order_id_2, // 使用新的 qa_order_id
             )
             .unwrap();
 
@@ -1881,11 +1895,19 @@ mod tests {
 
     #[test]
     fn test_handle_cancel_accepted_new() {
-        let (gateway, _, account_id) = create_test_gateway();
+        let (gateway, account_mgr, account_id) = create_test_gateway();
 
         let instrument_id = "SHFE.cu2501";
         let exchange_order_id = 1i64;
         let order_id = "O001";
+
+        // 先在账户中创建订单（关键步骤！）
+        let qa_order_id = {
+            let account = account_mgr.get_account(&account_id).unwrap();
+            let mut acc = account.write();
+            let order = acc.buy_open(instrument_id, 10.0, "2025-12-17 16:53:36", 50000.0).unwrap();
+            order.order_id.clone()
+        };
 
         let result = gateway.handle_cancel_accepted_new(
             "SHFE",
@@ -1897,8 +1919,8 @@ mod tests {
             "OPEN",
             "LIMIT",
             50000.0,
-            5.0,
-            "QA001",
+            5.0, // remaining_volume
+            &qa_order_id, // 使用真实的 qa_order_id
         );
 
         assert!(result.is_ok());
@@ -1927,9 +1949,17 @@ mod tests {
 
     #[test]
     fn test_unified_sequence_across_events() {
-        let (gateway, _, account_id) = create_test_gateway();
+        let (gateway, account_mgr, account_id) = create_test_gateway();
 
         let instrument_id = "SHFE.cu2501";
+
+        // 先在账户中创建订单（关键步骤！）
+        let qa_order_id = {
+            let account = account_mgr.get_account(&account_id).unwrap();
+            let mut acc = account.write();
+            let order = acc.buy_open(instrument_id, 10.0, "2025-12-17 16:53:36", 50000.0).unwrap();
+            order.order_id.clone()
+        };
 
         // 下单事件 (sequence = 1)
         let exchange_order_id = gateway
@@ -1961,7 +1991,7 @@ mod tests {
                 50000.0,
                 Some(exchange_order_id + 1),
                 Some("counter_party"),
-                "QA001",
+                &qa_order_id, // 使用真实的 qa_order_id
             )
             .unwrap();
         assert_eq!(trade_id, 2);

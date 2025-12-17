@@ -613,9 +613,11 @@ mod tests {
             rs.update(x);
         }
 
-        // 均值 = 3.8, 方差 = 1.04, 标准差 ≈ 1.0198
+        // 均值 = 3.8, 总体方差 = 0.96, 标准差 ≈ 0.9798
+        // 方差计算：M2 = Σ(x - mean)² = 4.8, population_variance = M2/n = 4.8/5 = 0.96
+        // @yutiansut @quantaxis
         assert!((rs.mean() - 3.8).abs() < 1e-10);
-        assert!((rs.variance() - 1.04).abs() < 0.01);
+        assert!((rs.variance() - 0.96).abs() < 0.01);
     }
 
     #[test]

@@ -234,6 +234,9 @@ fn main() {
         base_path: "/tmp/qaexchange_demo/storage".to_string(),
         memtable_size_bytes: 64 * 1024 * 1024, // 64 MB
         estimated_entry_size: 256,
+        enable_olap_conversion: true,
+        olap_conversion_threshold: 10,
+        olap_conversion_age_seconds: 3600 * 24,
     };
 
     let integrated_router = StorageIntegratedRouter::new(router.clone(), storage_config);
@@ -297,6 +300,8 @@ fn main() {
         volume: 10.0,
         price: 3800.0,
         order_type: "LIMIT".to_string(),
+        time_condition: None,
+        volume_condition: None,
     };
 
     println!("订单详情:");

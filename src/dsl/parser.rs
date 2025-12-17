@@ -67,8 +67,26 @@ impl AstBuilder {
 
         let mut statements = Vec::new();
 
+        // ✨ 关键修复：pairs 是 program 规则的顶层迭代器
+        // 需要先获取 program pair，然后调用 into_inner() 来获取内部的 statement
+        // @yutiansut @quantaxis
         for pair in pairs {
             match pair.as_rule() {
+                Rule::program => {
+                    // program = { SOI ~ statement* ~ EOI }
+                    // 需要遍历 program 的内部元素
+                    for inner_pair in pair.into_inner() {
+                        match inner_pair.as_rule() {
+                            Rule::statement => {
+                                if let Some(stmt) = Self::build_statement(inner_pair)? {
+                                    statements.push(stmt);
+                                }
+                            }
+                            Rule::EOI => {}
+                            _ => {}
+                        }
+                    }
+                }
                 Rule::statement => {
                     if let Some(stmt) = Self::build_statement(pair)? {
                         statements.push(stmt);
