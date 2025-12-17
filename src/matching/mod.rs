@@ -20,3 +20,8 @@ pub mod trade_recorder;
 
 /// 撮合引擎核心（独立进程版本）
 pub mod core;
+
+/// 高性能撮合引擎（Phase 5.2 优化）
+pub mod high_perf;
+
+pub use high_perf::{HighPerfMatchingConfig, HighPerfMatchingEngine, MatchingStats};

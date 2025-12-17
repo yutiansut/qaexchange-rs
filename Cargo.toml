@@ -95,6 +95,9 @@ pest_derive = "2.7"
 # 高性能分配器
 mimalloc = { version = "0.1", default-features = false }
 
+# 延迟初始化
+once_cell = "1.19"
+
 # CPU 亲和性绑定
 core_affinity = "0.8"
 
