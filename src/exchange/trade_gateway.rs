@@ -2058,4 +2058,902 @@ mod tests {
             .unwrap();
         assert_eq!(ag_order_2, 2);
     }
+
+    // ==================== TradeNotification 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 TradeNotification 创建
+    #[test]
+    fn test_trade_notification_creation() {
+        let notification = TradeNotification {
+            trade_id: "T12345".to_string(),
+            user_id: "user1".to_string(),
+            order_id: "O12345".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price: 85000.0,
+            volume: 10.0,
+            timestamp: 1702800000000,
+            commission: 25.5,
+        };
+
+        assert_eq!(notification.trade_id, "T12345");
+        assert_eq!(notification.user_id, "user1");
+        assert_eq!(notification.order_id, "O12345");
+        assert_eq!(notification.instrument_id, "cu2501");
+        assert_eq!(notification.direction, "BUY");
+        assert_eq!(notification.offset, "OPEN");
+        assert_eq!(notification.price, 85000.0);
+        assert_eq!(notification.volume, 10.0);
+        assert_eq!(notification.timestamp, 1702800000000);
+        assert_eq!(notification.commission, 25.5);
+    }
+
+    /// 测试 TradeNotification Clone
+    #[test]
+    fn test_trade_notification_clone() {
+        let notification = TradeNotification {
+            trade_id: "T12345".to_string(),
+            user_id: "user1".to_string(),
+            order_id: "O12345".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "SELL".to_string(),
+            offset: "CLOSE".to_string(),
+            price: 86000.0,
+            volume: 5.0,
+            timestamp: 1702800000000,
+            commission: 12.9,
+        };
+
+        let cloned = notification.clone();
+        assert_eq!(notification.trade_id, cloned.trade_id);
+        assert_eq!(notification.user_id, cloned.user_id);
+        assert_eq!(notification.price, cloned.price);
+    }
+
+    // ==================== AccountUpdateNotification 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 AccountUpdateNotification 创建
+    #[test]
+    fn test_account_update_notification_creation() {
+        let notification = AccountUpdateNotification {
+            user_id: "user1".to_string(),
+            balance: 1000000.0,
+            available: 950000.0,
+            margin: 50000.0,
+            position_profit: 1500.0,
+            risk_ratio: 0.05,
+            timestamp: 1702800000000,
+        };
+
+        assert_eq!(notification.user_id, "user1");
+        assert_eq!(notification.balance, 1000000.0);
+        assert_eq!(notification.available, 950000.0);
+        assert_eq!(notification.margin, 50000.0);
+        assert_eq!(notification.position_profit, 1500.0);
+        assert_eq!(notification.risk_ratio, 0.05);
+        assert_eq!(notification.timestamp, 1702800000000);
+    }
+
+    /// 测试 AccountUpdateNotification Clone
+    #[test]
+    fn test_account_update_notification_clone() {
+        let notification = AccountUpdateNotification {
+            user_id: "user1".to_string(),
+            balance: 500000.0,
+            available: 450000.0,
+            margin: 50000.0,
+            position_profit: -500.0,
+            risk_ratio: 0.1,
+            timestamp: 1702800000000,
+        };
+
+        let cloned = notification.clone();
+        assert_eq!(notification.user_id, cloned.user_id);
+        assert_eq!(notification.balance, cloned.balance);
+        assert_eq!(notification.margin, cloned.margin);
+    }
+
+    // ==================== OrderStatusNotification 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 OrderStatusNotification 创建
+    #[test]
+    fn test_order_status_notification_creation() {
+        let notification = OrderStatusNotification {
+            exchange_id: "SHFE".to_string(),
+            instrument_id: "cu2501".to_string(),
+            exchange_order_id: "EXO12345".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price_type: "LIMIT".to_string(),
+            volume: 10.0,
+            price: 85000.0,
+            status: "ACCEPTED".to_string(),
+            timestamp: 1702800000000,
+            order_id: "O12345".to_string(),
+            user_id: "user1".to_string(),
+            reason: None,
+        };
+
+        assert_eq!(notification.exchange_id, "SHFE");
+        assert_eq!(notification.instrument_id, "cu2501");
+        assert_eq!(notification.exchange_order_id, "EXO12345");
+        assert_eq!(notification.direction, "BUY");
+        assert_eq!(notification.offset, "OPEN");
+        assert_eq!(notification.price_type, "LIMIT");
+        assert_eq!(notification.volume, 10.0);
+        assert_eq!(notification.price, 85000.0);
+        assert_eq!(notification.status, "ACCEPTED");
+        assert_eq!(notification.order_id, "O12345");
+        assert_eq!(notification.user_id, "user1");
+        assert!(notification.reason.is_none());
+    }
+
+    /// 测试 OrderStatusNotification 带原因
+    #[test]
+    fn test_order_status_notification_with_reason() {
+        let notification = OrderStatusNotification {
+            exchange_id: "SHFE".to_string(),
+            instrument_id: "cu2501".to_string(),
+            exchange_order_id: "EXO12345".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price_type: "LIMIT".to_string(),
+            volume: 0.0,
+            price: 85000.0,
+            status: "REJECTED".to_string(),
+            timestamp: 1702800000000,
+            order_id: "O12345".to_string(),
+            user_id: "user1".to_string(),
+            reason: Some("Insufficient margin".to_string()),
+        };
+
+        assert_eq!(notification.status, "REJECTED");
+        assert_eq!(notification.reason, Some("Insufficient margin".to_string()));
+    }
+
+    /// 测试 OrderStatusNotification Clone
+    #[test]
+    fn test_order_status_notification_clone() {
+        let notification = OrderStatusNotification {
+            exchange_id: "CFFEX".to_string(),
+            instrument_id: "IF2512".to_string(),
+            exchange_order_id: "EXO67890".to_string(),
+            direction: "SELL".to_string(),
+            offset: "CLOSE".to_string(),
+            price_type: "MARKET".to_string(),
+            volume: 5.0,
+            price: 0.0, // 市价单
+            status: "FILLED".to_string(),
+            timestamp: 1702800000000,
+            order_id: "O67890".to_string(),
+            user_id: "user2".to_string(),
+            reason: None,
+        };
+
+        let cloned = notification.clone();
+        assert_eq!(notification.exchange_id, cloned.exchange_id);
+        assert_eq!(notification.instrument_id, cloned.instrument_id);
+        assert_eq!(notification.order_id, cloned.order_id);
+    }
+
+    // ==================== Notification 枚举测试 @yutiansut @quantaxis ====================
+
+    /// 测试 Notification::Trade 变体
+    #[test]
+    fn test_notification_trade_variant() {
+        let trade = TradeNotification {
+            trade_id: "T001".to_string(),
+            user_id: "user1".to_string(),
+            order_id: "O001".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price: 85000.0,
+            volume: 10.0,
+            timestamp: 1702800000000,
+            commission: 25.5,
+        };
+
+        let notification = Notification::Trade(trade.clone());
+
+        if let Notification::Trade(t) = notification {
+            assert_eq!(t.trade_id, "T001");
+        } else {
+            panic!("Expected Trade variant");
+        }
+    }
+
+    /// 测试 Notification::AccountUpdate 变体
+    #[test]
+    fn test_notification_account_update_variant() {
+        let update = AccountUpdateNotification {
+            user_id: "user1".to_string(),
+            balance: 1000000.0,
+            available: 950000.0,
+            margin: 50000.0,
+            position_profit: 1500.0,
+            risk_ratio: 0.05,
+            timestamp: 1702800000000,
+        };
+
+        let notification = Notification::AccountUpdate(update.clone());
+
+        if let Notification::AccountUpdate(a) = notification {
+            assert_eq!(a.user_id, "user1");
+            assert_eq!(a.balance, 1000000.0);
+        } else {
+            panic!("Expected AccountUpdate variant");
+        }
+    }
+
+    /// 测试 Notification::OrderStatus 变体
+    #[test]
+    fn test_notification_order_status_variant() {
+        let status = OrderStatusNotification {
+            exchange_id: "SHFE".to_string(),
+            instrument_id: "cu2501".to_string(),
+            exchange_order_id: "EXO001".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price_type: "LIMIT".to_string(),
+            volume: 10.0,
+            price: 85000.0,
+            status: "ACCEPTED".to_string(),
+            timestamp: 1702800000000,
+            order_id: "O001".to_string(),
+            user_id: "user1".to_string(),
+            reason: None,
+        };
+
+        let notification = Notification::OrderStatus(status.clone());
+
+        if let Notification::OrderStatus(o) = notification {
+            assert_eq!(o.order_id, "O001");
+            assert_eq!(o.status, "ACCEPTED");
+        } else {
+            panic!("Expected OrderStatus variant");
+        }
+    }
+
+    // ==================== TradeGateway 构建器测试 @yutiansut @quantaxis ====================
+
+    /// 测试 TradeGateway::new()
+    #[test]
+    fn test_trade_gateway_new() {
+        let account_mgr = Arc::new(AccountManager::new());
+        let gateway = TradeGateway::new(account_mgr);
+
+        // 验证初始状态
+        assert!(gateway.notification_broker.is_none());
+        assert!(gateway.snapshot_mgr.is_none());
+        assert!(gateway.trade_recorder.is_none());
+        assert!(gateway.market_data_service.is_none());
+        assert_eq!(gateway.wal_root, "./data/wal");
+    }
+
+    /// 测试 with_wal_root
+    #[test]
+    fn test_with_wal_root() {
+        let account_mgr = Arc::new(AccountManager::new());
+        let gateway = TradeGateway::new(account_mgr)
+            .with_wal_root("/custom/wal/path");
+
+        assert_eq!(gateway.wal_root, "/custom/wal/path");
+    }
+
+    /// 测试 with_notification_broker
+    #[test]
+    fn test_with_notification_broker() {
+        let account_mgr = Arc::new(AccountManager::new());
+        let broker = Arc::new(NotificationBroker::new());
+        let gateway = TradeGateway::new(account_mgr)
+            .with_notification_broker(broker);
+
+        assert!(gateway.notification_broker.is_some());
+    }
+
+    /// 测试 set_notification_broker
+    #[test]
+    fn test_set_notification_broker() {
+        let account_mgr = Arc::new(AccountManager::new());
+        let mut gateway = TradeGateway::new(account_mgr);
+
+        assert!(gateway.notification_broker.is_none());
+
+        let broker = Arc::new(NotificationBroker::new());
+        gateway.set_notification_broker(broker);
+
+        assert!(gateway.notification_broker.is_some());
+    }
+
+    // ==================== 订阅测试 @yutiansut @quantaxis ====================
+
+    /// 测试 subscribe_global
+    #[test]
+    fn test_subscribe_global() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let receiver = gateway.subscribe_global();
+
+        // 发送通知
+        let notification = Notification::AccountUpdate(AccountUpdateNotification {
+            user_id: account_id.clone(),
+            balance: 1000000.0,
+            available: 950000.0,
+            margin: 50000.0,
+            position_profit: 0.0,
+            risk_ratio: 0.05,
+            timestamp: Utc::now().timestamp_nanos_opt().unwrap_or(0),
+        });
+
+        gateway.send_notification(notification).unwrap();
+
+        // 全局订阅者应收到通知
+        let received = receiver.try_recv().unwrap();
+        if let Notification::AccountUpdate(a) = received {
+            assert_eq!(a.user_id, account_id);
+        } else {
+            panic!("Expected AccountUpdate notification");
+        }
+    }
+
+    /// 测试 get_receiver
+    #[test]
+    fn test_get_receiver() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let receiver = gateway.get_receiver();
+
+        // 发送通知
+        let notification = Notification::Trade(TradeNotification {
+            trade_id: "T001".to_string(),
+            user_id: account_id.clone(),
+            order_id: "O001".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price: 85000.0,
+            volume: 10.0,
+            timestamp: 0,
+            commission: 25.5,
+        });
+
+        gateway.send_notification(notification).unwrap();
+
+        // 主接收器应收到通知
+        let received = receiver.try_recv().unwrap();
+        if let Notification::Trade(t) = received {
+            assert_eq!(t.trade_id, "T001");
+        } else {
+            panic!("Expected Trade notification");
+        }
+    }
+
+    /// 测试多用户订阅
+    #[test]
+    fn test_multiple_user_subscriptions() {
+        let account_mgr = Arc::new(AccountManager::new());
+
+        // 创建两个账户
+        let req1 = OpenAccountRequest {
+            user_id: "user1".to_string(),
+            account_id: Some("user1".to_string()),
+            account_name: "User 1".to_string(),
+            init_cash: 500000.0,
+            account_type: AccountType::Individual,
+        };
+        let account_id_1 = account_mgr.open_account(req1).unwrap();
+
+        let req2 = OpenAccountRequest {
+            user_id: "user2".to_string(),
+            account_id: Some("user2".to_string()),
+            account_name: "User 2".to_string(),
+            init_cash: 500000.0,
+            account_type: AccountType::Individual,
+        };
+        let account_id_2 = account_mgr.open_account(req2).unwrap();
+
+        let gateway = TradeGateway::new(account_mgr.clone())
+            .with_wal_root("./output/testexchange/wal_multi");
+
+        // 各用户订阅
+        let receiver1 = gateway.subscribe_user(account_id_1.clone());
+        let receiver2 = gateway.subscribe_user(account_id_2.clone());
+
+        // 向 user1 发送通知
+        let notification1 = Notification::Trade(TradeNotification {
+            trade_id: "T001".to_string(),
+            user_id: account_id_1.clone(),
+            order_id: "O001".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price: 85000.0,
+            volume: 10.0,
+            timestamp: 0,
+            commission: 25.5,
+        });
+        gateway.send_notification(notification1).unwrap();
+
+        // user1 应收到通知
+        assert!(receiver1.try_recv().is_ok());
+        // user2 不应收到 user1 的通知
+        assert!(receiver2.try_recv().is_err());
+    }
+
+    // ==================== 成交ID生成测试 @yutiansut @quantaxis ====================
+
+    /// 测试成交ID唯一性
+    #[test]
+    fn test_generate_trade_id_unique() {
+        let (gateway, _, _) = create_test_gateway();
+
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let id = gateway.generate_trade_id();
+            assert!(ids.insert(id.clone()), "Duplicate trade ID generated: {}", id);
+        }
+    }
+
+    /// 测试成交ID格式
+    #[test]
+    fn test_generate_trade_id_format() {
+        let (gateway, _, _) = create_test_gateway();
+
+        for _ in 0..10 {
+            let id = gateway.generate_trade_id();
+            assert!(id.starts_with('T'), "Trade ID should start with 'T': {}", id);
+            assert!(id.len() > 10, "Trade ID should be longer than 10 chars: {}", id);
+        }
+    }
+
+    // ==================== handle_cancelled 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 handle_cancelled
+    #[test]
+    fn test_handle_cancelled() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let receiver = gateway.subscribe_user(account_id.clone());
+
+        let result = gateway.handle_cancelled(
+            "O001",
+            &account_id,
+            "SHFE",
+            "cu2501",
+            "EXO001",
+            "BUY",
+            "OPEN",
+            "LIMIT",
+            85000.0,
+            5.0, // 剩余量
+        );
+
+        assert!(result.is_ok());
+
+        // 验证通知已发送
+        let received = receiver.try_recv().unwrap();
+        if let Notification::OrderStatus(o) = received {
+            assert_eq!(o.order_id, "O001");
+            assert_eq!(o.status, "CANCELLED");
+            assert_eq!(o.volume, 5.0);
+        } else {
+            panic!("Expected OrderStatus notification");
+        }
+    }
+
+    // ==================== handle_accepted 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 handle_accepted
+    #[test]
+    fn test_handle_accepted_notification() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let receiver = gateway.subscribe_user(account_id.clone());
+
+        let result = gateway.handle_accepted(
+            "O001",
+            &account_id,
+            "SHFE",
+            "cu2501",
+            "EXO001",
+            "BUY",
+            "OPEN",
+            "LIMIT",
+            85000.0,
+            10.0,
+        );
+
+        assert!(result.is_ok());
+
+        // 验证通知已发送
+        let received = receiver.try_recv().unwrap();
+        if let Notification::OrderStatus(o) = received {
+            assert_eq!(o.order_id, "O001");
+            assert_eq!(o.status, "ACCEPTED");
+            assert_eq!(o.volume, 10.0);
+            assert_eq!(o.price, 85000.0);
+        } else {
+            panic!("Expected OrderStatus notification");
+        }
+    }
+
+    // ==================== 通知发送测试 @yutiansut @quantaxis ====================
+
+    /// 测试 send_notification 发送到多个渠道
+    #[test]
+    fn test_send_notification_multiple_channels() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let user_receiver = gateway.subscribe_user(account_id.clone());
+        let global_receiver = gateway.subscribe_global();
+        let main_receiver = gateway.get_receiver();
+
+        let notification = Notification::Trade(TradeNotification {
+            trade_id: "T001".to_string(),
+            user_id: account_id.clone(),
+            order_id: "O001".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price: 85000.0,
+            volume: 10.0,
+            timestamp: 0,
+            commission: 25.5,
+        });
+
+        gateway.send_notification(notification).unwrap();
+
+        // 所有渠道都应收到通知
+        assert!(user_receiver.try_recv().is_ok(), "User receiver should receive");
+        assert!(global_receiver.try_recv().is_ok(), "Global receiver should receive");
+        assert!(main_receiver.try_recv().is_ok(), "Main receiver should receive");
+    }
+
+    // ==================== 边界条件测试 @yutiansut @quantaxis ====================
+
+    /// 测试零价格成交通知结构
+    #[test]
+    fn test_trade_notification_zero_price() {
+        let notification = TradeNotification {
+            trade_id: "T001".to_string(),
+            user_id: "user001".to_string(),
+            order_id: "O001".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 0.0, // 零价格（市价单可能发生）
+            commission: 0.0,
+            timestamp: 1702800000000,
+        };
+
+        assert_eq!(notification.price, 0.0);
+        assert_eq!(notification.volume, 10.0);
+    }
+
+    /// 测试零数量成交通知结构
+    #[test]
+    fn test_trade_notification_zero_volume() {
+        let notification = TradeNotification {
+            trade_id: "T001".to_string(),
+            user_id: "user001".to_string(),
+            order_id: "O001".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 0.0, // 零数量
+            price: 85000.0,
+            commission: 0.0,
+            timestamp: 1702800000000,
+        };
+
+        assert_eq!(notification.volume, 0.0);
+        assert_eq!(notification.price, 85000.0);
+    }
+
+    /// 测试大数量成交通知结构
+    #[test]
+    fn test_trade_notification_large_volume() {
+        let notification = TradeNotification {
+            trade_id: "T001".to_string(),
+            user_id: "user001".to_string(),
+            order_id: "O001".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 1000000.0, // 大数量
+            price: 85000.0,
+            commission: 1000.0,
+            timestamp: 1702800000000,
+        };
+
+        assert_eq!(notification.volume, 1000000.0);
+        assert!(notification.volume > 0.0);
+    }
+
+    // ==================== 并发测试 @yutiansut @quantaxis ====================
+
+    /// 测试并发发送通知
+    #[test]
+    fn test_concurrent_send_notifications() {
+        use std::thread;
+
+        let (gateway, _, account_id) = create_test_gateway();
+        let gateway = Arc::new(gateway);
+
+        let receiver = gateway.subscribe_global();
+        let mut handles = vec![];
+
+        for i in 0..10 {
+            let gateway_clone = gateway.clone();
+            let account_id_clone = account_id.clone();
+
+            handles.push(thread::spawn(move || {
+                let notification = Notification::Trade(TradeNotification {
+                    trade_id: format!("T{:03}", i),
+                    user_id: account_id_clone,
+                    order_id: format!("O{:03}", i),
+                    instrument_id: "cu2501".to_string(),
+                    direction: "BUY".to_string(),
+                    offset: "OPEN".to_string(),
+                    price: 85000.0 + i as f64 * 10.0,
+                    volume: 1.0 + i as f64,
+                    timestamp: 0,
+                    commission: 0.1,
+                });
+                gateway_clone.send_notification(notification)
+            }));
+        }
+
+        // 等待所有线程完成
+        for handle in handles {
+            assert!(handle.join().unwrap().is_ok());
+        }
+
+        // 验证收到了通知
+        let mut count = 0;
+        while receiver.try_recv().is_ok() {
+            count += 1;
+        }
+        assert_eq!(count, 10, "Should receive all 10 notifications");
+    }
+
+    /// 测试并发订阅
+    #[test]
+    fn test_concurrent_subscriptions() {
+        use std::thread;
+
+        let account_mgr = Arc::new(AccountManager::new());
+
+        // 创建多个账户
+        for i in 0..5 {
+            let req = OpenAccountRequest {
+                user_id: format!("user{}", i),
+                account_id: Some(format!("user{}", i)),
+                account_name: format!("User {}", i),
+                init_cash: 100000.0,
+                account_type: AccountType::Individual,
+            };
+            account_mgr.open_account(req).unwrap();
+        }
+
+        let gateway = Arc::new(
+            TradeGateway::new(account_mgr.clone())
+                .with_wal_root("./output/testexchange/wal_concurrent")
+        );
+
+        let mut handles = vec![];
+
+        for i in 0..5 {
+            let gateway_clone = gateway.clone();
+            let user_id = format!("user{}", i);
+
+            handles.push(thread::spawn(move || {
+                let _receiver = gateway_clone.subscribe_user(user_id.clone());
+                // 验证订阅成功（不会 panic）
+                true
+            }));
+        }
+
+        // 等待所有线程完成
+        for handle in handles {
+            assert!(handle.join().unwrap());
+        }
+    }
+
+    // ==================== convert_to_new_notification 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 Trade 通知转换
+    #[test]
+    fn test_convert_trade_notification() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let trade = TradeNotification {
+            trade_id: "T001".to_string(),
+            user_id: account_id.clone(),
+            order_id: "O001".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price: 85000.0,
+            volume: 10.0,
+            timestamp: 1702800000000,
+            commission: 25.5,
+        };
+
+        let old_notification = Notification::Trade(trade);
+        let new_notification = gateway.convert_to_new_notification(&old_notification);
+
+        assert!(new_notification.is_some());
+        let new_notif = new_notification.unwrap();
+        assert_eq!(new_notif.message_type, NotificationType::TradeExecuted);
+    }
+
+    /// 测试 AccountUpdate 通知转换
+    #[test]
+    fn test_convert_account_update_notification() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let update = AccountUpdateNotification {
+            user_id: account_id.clone(),
+            balance: 1000000.0,
+            available: 950000.0,
+            margin: 50000.0,
+            position_profit: 1500.0,
+            risk_ratio: 0.05,
+            timestamp: 1702800000000,
+        };
+
+        let old_notification = Notification::AccountUpdate(update);
+        let new_notification = gateway.convert_to_new_notification(&old_notification);
+
+        assert!(new_notification.is_some());
+        let new_notif = new_notification.unwrap();
+        assert_eq!(new_notif.message_type, NotificationType::AccountUpdate);
+    }
+
+    /// 测试 OrderStatus ACCEPTED 通知转换
+    #[test]
+    fn test_convert_order_accepted_notification() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let status = OrderStatusNotification {
+            exchange_id: "SHFE".to_string(),
+            instrument_id: "cu2501".to_string(),
+            exchange_order_id: "EXO001".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price_type: "LIMIT".to_string(),
+            volume: 10.0,
+            price: 85000.0,
+            status: "ACCEPTED".to_string(),
+            timestamp: 1702800000000,
+            order_id: "O001".to_string(),
+            user_id: account_id.clone(),
+            reason: None,
+        };
+
+        let old_notification = Notification::OrderStatus(status);
+        let new_notification = gateway.convert_to_new_notification(&old_notification);
+
+        assert!(new_notification.is_some());
+        let new_notif = new_notification.unwrap();
+        assert_eq!(new_notif.message_type, NotificationType::OrderAccepted);
+    }
+
+    /// 测试 OrderStatus FILLED 通知转换
+    #[test]
+    fn test_convert_order_filled_notification() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let status = OrderStatusNotification {
+            exchange_id: "SHFE".to_string(),
+            instrument_id: "cu2501".to_string(),
+            exchange_order_id: "EXO001".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price_type: "LIMIT".to_string(),
+            volume: 10.0,
+            price: 85000.0,
+            status: "FILLED".to_string(),
+            timestamp: 1702800000000,
+            order_id: "O001".to_string(),
+            user_id: account_id.clone(),
+            reason: None,
+        };
+
+        let old_notification = Notification::OrderStatus(status);
+        let new_notification = gateway.convert_to_new_notification(&old_notification);
+
+        assert!(new_notification.is_some());
+        let new_notif = new_notification.unwrap();
+        assert_eq!(new_notif.message_type, NotificationType::OrderFilled);
+    }
+
+    /// 测试 OrderStatus CANCELLED 通知转换
+    #[test]
+    fn test_convert_order_cancelled_notification() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let status = OrderStatusNotification {
+            exchange_id: "SHFE".to_string(),
+            instrument_id: "cu2501".to_string(),
+            exchange_order_id: "EXO001".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price_type: "LIMIT".to_string(),
+            volume: 5.0,
+            price: 85000.0,
+            status: "CANCELLED".to_string(),
+            timestamp: 1702800000000,
+            order_id: "O001".to_string(),
+            user_id: account_id.clone(),
+            reason: Some("User cancelled".to_string()),
+        };
+
+        let old_notification = Notification::OrderStatus(status);
+        let new_notification = gateway.convert_to_new_notification(&old_notification);
+
+        assert!(new_notification.is_some());
+        let new_notif = new_notification.unwrap();
+        assert_eq!(new_notif.message_type, NotificationType::OrderCanceled);
+    }
+
+    /// 测试 OrderStatus REJECTED 通知转换
+    #[test]
+    fn test_convert_order_rejected_notification() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let status = OrderStatusNotification {
+            exchange_id: "SHFE".to_string(),
+            instrument_id: "cu2501".to_string(),
+            exchange_order_id: "EXO001".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price_type: "LIMIT".to_string(),
+            volume: 0.0,
+            price: 85000.0,
+            status: "REJECTED".to_string(),
+            timestamp: 1702800000000,
+            order_id: "O001".to_string(),
+            user_id: account_id.clone(),
+            reason: Some("Insufficient margin".to_string()),
+        };
+
+        let old_notification = Notification::OrderStatus(status);
+        let new_notification = gateway.convert_to_new_notification(&old_notification);
+
+        assert!(new_notification.is_some());
+        let new_notif = new_notification.unwrap();
+        assert_eq!(new_notif.message_type, NotificationType::OrderRejected);
+    }
+
+    /// 测试未知状态通知转换（返回 None）
+    #[test]
+    fn test_convert_unknown_status_notification() {
+        let (gateway, _, account_id) = create_test_gateway();
+
+        let status = OrderStatusNotification {
+            exchange_id: "SHFE".to_string(),
+            instrument_id: "cu2501".to_string(),
+            exchange_order_id: "EXO001".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            price_type: "LIMIT".to_string(),
+            volume: 10.0,
+            price: 85000.0,
+            status: "UNKNOWN_STATUS".to_string(), // 未知状态
+            timestamp: 1702800000000,
+            order_id: "O001".to_string(),
+            user_id: account_id.clone(),
+            reason: None,
+        };
+
+        let old_notification = Notification::OrderStatus(status);
+        let new_notification = gateway.convert_to_new_notification(&old_notification);
+
+        assert!(new_notification.is_none());
+    }
 }

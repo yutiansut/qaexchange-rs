@@ -673,4 +673,487 @@ mod tests {
         let result = checker.check(&req_different_instrument).unwrap();
         assert!(matches!(result, RiskCheckResult::Pass));
     }
+
+    // ==================== RiskCheckCode 枚举测试 @yutiansut @quantaxis ====================
+
+    /// 测试 RiskCheckCode 枚举值
+    /// 验证所有风控拒绝代码的数值正确
+    #[test]
+    fn test_risk_check_code_values() {
+        assert_eq!(RiskCheckCode::InsufficientFunds as i32, 1001);
+        assert_eq!(RiskCheckCode::ExceedPositionLimit as i32, 1002);
+        assert_eq!(RiskCheckCode::ExceedOrderLimit as i32, 1003);
+        assert_eq!(RiskCheckCode::HighRiskRatio as i32, 1004);
+        assert_eq!(RiskCheckCode::SelfTradingRisk as i32, 1005);
+        assert_eq!(RiskCheckCode::AccountNotFound as i32, 1006);
+        assert_eq!(RiskCheckCode::InstrumentNotFound as i32, 1007);
+        assert_eq!(RiskCheckCode::InvalidOrderParams as i32, 1008);
+    }
+
+    /// 测试 RiskCheckCode 的相等性比较
+    #[test]
+    fn test_risk_check_code_equality() {
+        let code1 = RiskCheckCode::InsufficientFunds;
+        let code2 = RiskCheckCode::InsufficientFunds;
+        let code3 = RiskCheckCode::HighRiskRatio;
+
+        assert_eq!(code1, code2);
+        assert_ne!(code1, code3);
+    }
+
+    // ==================== RiskConfig 配置测试 @yutiansut @quantaxis ====================
+
+    /// 测试 RiskConfig 默认值
+    /// 验证默认风控配置符合预期
+    #[test]
+    fn test_risk_config_default() {
+        let config = RiskConfig::default();
+
+        assert_eq!(config.max_position_ratio, 0.5);
+        assert_eq!(config.max_order_amount, 10_000_000.0);
+        assert_eq!(config.risk_ratio_warning, 0.8);
+        assert_eq!(config.risk_ratio_reject, 0.95);
+        assert!(config.enable_self_trade_prevention);
+        assert_eq!(config.min_order_volume, 1.0);
+        assert_eq!(config.max_order_volume, 10000.0);
+    }
+
+    /// 测试自定义 RiskConfig
+    #[test]
+    fn test_risk_config_custom() {
+        let config = RiskConfig {
+            max_position_ratio: 0.3,
+            max_order_amount: 5_000_000.0,
+            risk_ratio_warning: 0.7,
+            risk_ratio_reject: 0.9,
+            enable_self_trade_prevention: false,
+            min_order_volume: 5.0,
+            max_order_volume: 5000.0,
+        };
+
+        assert_eq!(config.max_position_ratio, 0.3);
+        assert_eq!(config.max_order_amount, 5_000_000.0);
+        assert!(!config.enable_self_trade_prevention);
+    }
+
+    /// 测试 RiskConfig 的 Clone trait
+    #[test]
+    fn test_risk_config_clone() {
+        let config1 = RiskConfig::default();
+        let config2 = config1.clone();
+
+        assert_eq!(config1.max_position_ratio, config2.max_position_ratio);
+        assert_eq!(config1.max_order_amount, config2.max_order_amount);
+    }
+
+    // ==================== PreTradeCheck 创建测试 @yutiansut @quantaxis ====================
+
+    /// 测试使用自定义配置创建 PreTradeCheck
+    #[test]
+    fn test_pre_trade_check_with_config() {
+        let account_mgr = create_test_account_manager();
+        let config = RiskConfig {
+            max_position_ratio: 0.3,
+            ..RiskConfig::default()
+        };
+
+        let checker = PreTradeCheck::with_config(account_mgr, config);
+
+        let loaded_config = checker.get_config();
+        assert_eq!(loaded_config.max_position_ratio, 0.3);
+    }
+
+    /// 测试更新风控配置
+    #[test]
+    fn test_update_config() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        // 初始配置
+        let initial_config = checker.get_config();
+        assert_eq!(initial_config.max_position_ratio, 0.5);
+
+        // 更新配置
+        let new_config = RiskConfig {
+            max_position_ratio: 0.2,
+            ..RiskConfig::default()
+        };
+        checker.update_config(new_config);
+
+        // 验证更新
+        let updated_config = checker.get_config();
+        assert_eq!(updated_config.max_position_ratio, 0.2);
+    }
+
+    // ==================== 订单参数检查测试 @yutiansut @quantaxis ====================
+
+    /// 测试订单数量超过最大值
+    #[test]
+    fn test_check_order_params_volume_too_large() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        let req = OrderCheckRequest {
+            account_id: "test_account".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 20000.0, // 超过默认最大值 10000
+            price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
+        };
+
+        let result = checker.check_order_params(&req);
+        assert!(result.is_err());
+    }
+
+    /// 测试市价单允许价格为0
+    /// 市价单（MARKET）允许 price=0，限价单（LIMIT）要求 price > 0
+    #[test]
+    fn test_check_order_params_market_order_zero_price() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        let req = OrderCheckRequest {
+            account_id: "test_account".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 0.0, // 市价单允许价格为0
+            limit_price: 0.0,
+            price_type: "MARKET".to_string(),
+        };
+
+        assert!(checker.check_order_params(&req).is_ok());
+    }
+
+    /// 测试订单金额超限
+    /// max_order_amount 默认为 1000万
+    #[test]
+    fn test_check_order_params_amount_exceeds_limit() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        let req = OrderCheckRequest {
+            account_id: "test_account".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 100000.0, // 100000 * 200 = 2000万，超过限额
+            price: 200.0,
+            limit_price: 200.0,
+            price_type: "LIMIT".to_string(),
+        };
+
+        let result = checker.check_order_params(&req);
+        assert!(result.is_err());
+    }
+
+    // ==================== 资金检查测试 @yutiansut @quantaxis ====================
+
+    /// 测试卖出开仓的资金检查
+    /// 卖出开仓需要保证金 (20%)
+    #[test]
+    fn test_check_funds_sell_open() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr.clone());
+
+        let account = account_mgr.get_default_account("test_user").unwrap();
+
+        // 卖出开仓，100000 * 100 * 0.2 = 2000000 保证金，超过账户资金
+        let req = OrderCheckRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "SELL".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 100000.0,
+            price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
+        };
+
+        let result = checker.check_funds(&account, &req).unwrap();
+        assert!(result.is_some());
+        if let Some(RiskCheckResult::Reject { code, .. }) = result {
+            assert_eq!(code, RiskCheckCode::InsufficientFunds);
+        }
+    }
+
+    /// 测试平仓只需手续费
+    /// 平仓操作只需要手续费，不需要额外资金
+    #[test]
+    fn test_check_funds_close_position() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr.clone());
+
+        let account = account_mgr.get_default_account("test_user").unwrap();
+
+        // 平仓只需手续费
+        let req = OrderCheckRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "SELL".to_string(),
+            offset: "CLOSE".to_string(),
+            volume: 10.0,
+            price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
+        };
+
+        let result = checker.check_funds(&account, &req).unwrap();
+        assert!(result.is_none()); // 应该通过
+    }
+
+    // ==================== 自成交防范测试 @yutiansut @quantaxis ====================
+
+    /// 测试平仓订单跳过自成交检查
+    /// CLOSE 订单不应触发自成交检查
+    #[test]
+    fn test_self_trading_close_order_allowed() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        // 注册一个 BUY OPEN 订单
+        checker.register_active_order(
+            "test_user",
+            "order1".to_string(),
+            "IX2301".to_string(),
+            "BUY".to_string(),
+            100.0,
+            "LIMIT".to_string(),
+        );
+
+        // 提交 SELL CLOSE 订单（应该被允许，不是自成交）
+        let req = OrderCheckRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "SELL".to_string(),
+            offset: "CLOSE".to_string(), // 平仓
+            volume: 10.0,
+            price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
+        };
+
+        let result = checker.check_self_trading(&req).unwrap();
+        assert!(result.is_none()); // 平仓订单跳过自成交检查
+    }
+
+    /// 测试价格不重叠的订单不构成自成交
+    /// 买单 @ 100，卖单 @ 120 不会成交
+    #[test]
+    fn test_self_trading_price_no_overlap() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        // 注册一个 BUY @ 100 订单
+        checker.register_active_order(
+            "test_user",
+            "order1".to_string(),
+            "IX2301".to_string(),
+            "BUY".to_string(),
+            100.0, // 买价 100
+            "LIMIT".to_string(),
+        );
+
+        // 提交 SELL @ 120 订单（卖价 > 买价，不会成交）
+        let req = OrderCheckRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "SELL".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 120.0,
+            limit_price: 120.0, // 卖价 120 > 买价 100，不会成交
+            price_type: "LIMIT".to_string(),
+        };
+
+        let result = checker.check(&req).unwrap();
+        assert!(matches!(result, RiskCheckResult::Pass));
+    }
+
+    /// 测试市价单总是可能自成交
+    #[test]
+    fn test_self_trading_market_order() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        // 注册一个 SELL OPEN 订单
+        checker.register_active_order(
+            "test_user",
+            "order1".to_string(),
+            "IX2301".to_string(),
+            "SELL".to_string(),
+            100.0,
+            "LIMIT".to_string(),
+        );
+
+        // 提交 BUY OPEN 市价单（市价单总是可能成交）
+        let req = OrderCheckRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 0.0,
+            limit_price: 0.0,
+            price_type: "MARKET".to_string(),
+        };
+
+        let result = checker.check_self_trading(&req).unwrap();
+        assert!(result.is_some());
+        if let Some(RiskCheckResult::Reject { code, .. }) = result {
+            assert_eq!(code, RiskCheckCode::SelfTradingRisk);
+        }
+    }
+
+    // ==================== 活动订单管理测试 @yutiansut @quantaxis ====================
+
+    /// 测试移除不存在的订单
+    #[test]
+    fn test_remove_nonexistent_order() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        // 尝试移除不存在的订单（不应 panic）
+        checker.remove_active_order("test_user", "nonexistent_order");
+        assert_eq!(checker.get_active_order_count("test_user"), 0);
+    }
+
+    /// 测试多账户活动订单隔离
+    #[test]
+    fn test_active_orders_account_isolation() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        checker.register_active_order(
+            "user1",
+            "order1".to_string(),
+            "IX2301".to_string(),
+            "BUY".to_string(),
+            100.0,
+            "LIMIT".to_string(),
+        );
+
+        checker.register_active_order(
+            "user2",
+            "order2".to_string(),
+            "IX2301".to_string(),
+            "SELL".to_string(),
+            100.0,
+            "LIMIT".to_string(),
+        );
+
+        // 不同账户的订单应该隔离
+        assert_eq!(checker.get_active_order_count("user1"), 1);
+        assert_eq!(checker.get_active_order_count("user2"), 1);
+
+        // 移除 user1 的订单不影响 user2
+        checker.remove_active_order("user1", "order1");
+        assert_eq!(checker.get_active_order_count("user1"), 0);
+        assert_eq!(checker.get_active_order_count("user2"), 1);
+    }
+
+    // ==================== 完整检查流程测试 @yutiansut @quantaxis ====================
+
+    /// 测试账户不存在的情况
+    #[test]
+    fn test_check_account_not_found() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        let req = OrderCheckRequest {
+            account_id: "nonexistent_account".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
+        };
+
+        let result = checker.check(&req);
+        assert!(result.is_err());
+    }
+
+    /// 测试禁用自成交防范
+    #[test]
+    fn test_self_trading_prevention_disabled() {
+        let account_mgr = create_test_account_manager();
+        let config = RiskConfig {
+            enable_self_trade_prevention: false,
+            ..RiskConfig::default()
+        };
+        let checker = PreTradeCheck::with_config(account_mgr, config);
+
+        // 注册一个 BUY 订单
+        checker.register_active_order(
+            "test_user",
+            "order1".to_string(),
+            "IX2301".to_string(),
+            "BUY".to_string(),
+            100.0,
+            "LIMIT".to_string(),
+        );
+
+        // 提交对手方向订单（应该通过，因为自成交防范已禁用）
+        let req = OrderCheckRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "SELL".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
+        };
+
+        let result = checker.check(&req).unwrap();
+        assert!(matches!(result, RiskCheckResult::Pass));
+    }
+
+    // ==================== 边界条件测试 @yutiansut @quantaxis ====================
+
+    /// 测试订单数量刚好等于最小值
+    #[test]
+    fn test_volume_at_minimum() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        let req = OrderCheckRequest {
+            account_id: "test_account".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 1.0, // 刚好等于最小值
+            price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
+        };
+
+        assert!(checker.check_order_params(&req).is_ok());
+    }
+
+    /// 测试订单数量刚好等于最大值
+    #[test]
+    fn test_volume_at_maximum() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        let req = OrderCheckRequest {
+            account_id: "test_account".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10000.0, // 刚好等于最大值
+            price: 100.0,
+            limit_price: 100.0,
+            price_type: "LIMIT".to_string(),
+        };
+
+        assert!(checker.check_order_params(&req).is_ok());
+    }
 }

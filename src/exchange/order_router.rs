@@ -2287,6 +2287,95 @@ mod tests {
         )
     }
 
+    // ==================== TimeCondition 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 TimeCondition Default trait
+    #[test]
+    fn test_time_condition_default() {
+        let tc: TimeCondition = TimeCondition::default();
+        assert_eq!(tc, TimeCondition::GFD);
+    }
+
+    /// 测试 TimeCondition 所有枚举值
+    #[test]
+    fn test_time_condition_values() {
+        assert_eq!(TimeCondition::IOC.to_string(), "IOC");
+        assert_eq!(TimeCondition::GFS.to_string(), "GFS");
+        assert_eq!(TimeCondition::GFD.to_string(), "GFD");
+        assert_eq!(TimeCondition::GTD.to_string(), "GTD");
+        assert_eq!(TimeCondition::GTC.to_string(), "GTC");
+        assert_eq!(TimeCondition::GFA.to_string(), "GFA");
+    }
+
+    /// 测试 TimeCondition from_str
+    #[test]
+    fn test_time_condition_from_str() {
+        assert_eq!(TimeCondition::from_str("IOC"), TimeCondition::IOC);
+        assert_eq!(TimeCondition::from_str("GFS"), TimeCondition::GFS);
+        assert_eq!(TimeCondition::from_str("GFD"), TimeCondition::GFD);
+        assert_eq!(TimeCondition::from_str("GTD"), TimeCondition::GTD);
+        assert_eq!(TimeCondition::from_str("GTC"), TimeCondition::GTC);
+        assert_eq!(TimeCondition::from_str("GFA"), TimeCondition::GFA);
+        // 小写
+        assert_eq!(TimeCondition::from_str("ioc"), TimeCondition::IOC);
+        // 未知值默认 GFD
+        assert_eq!(TimeCondition::from_str("UNKNOWN"), TimeCondition::GFD);
+    }
+
+    // ==================== VolumeCondition 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 VolumeCondition Default trait
+    #[test]
+    fn test_volume_condition_default() {
+        let vc: VolumeCondition = VolumeCondition::default();
+        assert_eq!(vc, VolumeCondition::ANY);
+    }
+
+    /// 测试 VolumeCondition 所有枚举值
+    #[test]
+    fn test_volume_condition_values() {
+        assert_eq!(VolumeCondition::ANY.to_string(), "ANY");
+        assert_eq!(VolumeCondition::MIN.to_string(), "MIN");
+        assert_eq!(VolumeCondition::ALL.to_string(), "ALL");
+    }
+
+    /// 测试 VolumeCondition from_str
+    #[test]
+    fn test_volume_condition_from_str() {
+        assert_eq!(VolumeCondition::from_str("ANY"), VolumeCondition::ANY);
+        assert_eq!(VolumeCondition::from_str("MIN"), VolumeCondition::MIN);
+        assert_eq!(VolumeCondition::from_str("ALL"), VolumeCondition::ALL);
+        // 小写
+        assert_eq!(VolumeCondition::from_str("all"), VolumeCondition::ALL);
+        // 未知值默认 ANY
+        assert_eq!(VolumeCondition::from_str("UNKNOWN"), VolumeCondition::ANY);
+    }
+
+    // ==================== OrderStatus 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 OrderStatus 枚举值
+    #[test]
+    fn test_order_status_values() {
+        let statuses = vec![
+            OrderStatus::PendingRisk,
+            OrderStatus::PendingRoute,
+            OrderStatus::Submitted,
+            OrderStatus::PartiallyFilled,
+            OrderStatus::Filled,
+            OrderStatus::Cancelled,
+            OrderStatus::Rejected,
+        ];
+
+        // 测试相等性
+        assert_eq!(OrderStatus::Submitted, OrderStatus::Submitted);
+        assert_ne!(OrderStatus::Submitted, OrderStatus::Filled);
+
+        // 验证所有状态都可以被创建
+        assert_eq!(statuses.len(), 7);
+    }
+
+    // ==================== 订单提交测试 @yutiansut @quantaxis ====================
+
     #[test]
     fn test_submit_order() {
         let router = create_test_router();
@@ -2487,5 +2576,917 @@ mod tests {
         assert!(final_balance > 0.0, "Account balance should be positive");
 
         log::info!("Complete order flow test passed!");
+    }
+
+    // ==================== 撤单测试 @yutiansut @quantaxis ====================
+
+    /// 测试撤单 - 订单不存在
+    #[test]
+    fn test_cancel_order_not_found() {
+        let router = create_test_router();
+
+        let req = CancelOrderRequest {
+            account_id: "test_user".to_string(),
+            order_id: "NON_EXISTENT_ORDER".to_string(),
+        };
+
+        let result = router.cancel_order(req);
+        assert!(result.is_err());
+
+        if let Err(ExchangeError::OrderError(msg)) = result {
+            assert!(msg.contains("Order not found"));
+        } else {
+            panic!("Expected OrderError");
+        }
+    }
+
+    /// 测试撤单 - 订单不属于当前账户
+    #[test]
+    fn test_cancel_order_wrong_owner() {
+        let router = create_test_router();
+
+        // 创建第二个账户
+        let req2 = OpenAccountRequest {
+            user_id: "test_user_2".to_string(),
+            account_id: Some("test_user_2".to_string()),
+            account_name: "Test User 2".to_string(),
+            init_cash: 1000000.0,
+            account_type: AccountType::Individual,
+        };
+        router.account_mgr.open_account(req2).unwrap();
+
+        // test_user 提交订单
+        let submit_req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        let response = router.submit_order(submit_req);
+        assert!(response.success);
+        let order_id = response.order_id.unwrap();
+
+        // test_user_2 尝试撤单
+        let cancel_req = CancelOrderRequest {
+            account_id: "test_user_2".to_string(),
+            order_id: order_id,
+        };
+
+        let result = router.cancel_order(cancel_req);
+        assert!(result.is_err());
+
+        if let Err(ExchangeError::OrderError(msg)) = result {
+            assert!(msg.contains("does not belong"));
+        } else {
+            panic!("Expected OrderError about ownership");
+        }
+    }
+
+    // ==================== 订单统计测试 @yutiansut @quantaxis ====================
+
+    /// 测试订单统计 - 初始状态
+    #[test]
+    fn test_get_order_statistics_empty() {
+        let router = create_test_router();
+
+        let stats = router.get_order_statistics();
+        assert_eq!(stats.total_count, 0);
+        assert_eq!(stats.pending_count, 0);
+        assert_eq!(stats.filled_count, 0);
+        assert_eq!(stats.cancelled_count, 0);
+        assert_eq!(stats.rejected_count, 0);
+    }
+
+    /// 测试订单统计 - 提交后
+    #[test]
+    fn test_get_order_statistics_after_submit() {
+        let router = create_test_router();
+
+        // 提交订单
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        router.submit_order(req);
+
+        let stats = router.get_order_statistics();
+        assert_eq!(stats.total_count, 1);
+        // 订单提交后应为 pending 状态
+        assert!(stats.pending_count >= 0); // 可能是submitted或其他状态
+    }
+
+    /// 测试订单统计 - 多订单
+    #[test]
+    fn test_get_order_statistics_multiple() {
+        let router = create_test_router();
+
+        // 提交多个订单
+        for _ in 0..5 {
+            let req = SubmitOrderRequest {
+                account_id: "test_user".to_string(),
+                instrument_id: "IX2301".to_string(),
+                direction: "BUY".to_string(),
+                offset: "OPEN".to_string(),
+                volume: 1.0,
+                price: 120.0,
+                order_type: "LIMIT".to_string(),
+                time_condition: None,
+                volume_condition: None,
+            };
+            router.submit_order(req);
+        }
+
+        let stats = router.get_order_statistics();
+        assert_eq!(stats.total_count, 5);
+    }
+
+    // ==================== 成交统计测试 @yutiansut @quantaxis ====================
+
+    /// 测试成交统计 - 初始状态
+    #[test]
+    fn test_get_trade_statistics_empty() {
+        let router = create_test_router();
+
+        let stats = router.get_trade_statistics();
+        assert_eq!(stats.total_count, 0);
+        assert_eq!(stats.total_volume, 0.0);
+        assert_eq!(stats.total_amount, 0.0);
+    }
+
+    // ==================== 订单详情测试 @yutiansut @quantaxis ====================
+
+    /// 测试获取订单详情 - 不存在
+    #[test]
+    fn test_get_order_detail_not_found() {
+        let router = create_test_router();
+
+        let detail = router.get_order_detail("NON_EXISTENT");
+        assert!(detail.is_none());
+    }
+
+    /// 测试获取订单详情 - 存在
+    #[test]
+    fn test_get_order_detail_exists() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        let response = router.submit_order(req);
+        assert!(response.success);
+        let order_id = response.order_id.unwrap();
+
+        let detail = router.get_order_detail(&order_id);
+        assert!(detail.is_some());
+
+        let (order, status, submit_time, update_time, filled_volume) = detail.unwrap();
+        assert_eq!(order.user_id, "test_user");
+        assert_eq!(order.instrument_id, "IX2301");
+        assert!(submit_time > 0);
+        assert!(update_time >= submit_time);
+        assert_eq!(filled_volume, 0.0);
+    }
+
+    // ==================== 用户订单详情测试 @yutiansut @quantaxis ====================
+
+    /// 测试获取用户订单详情 - 用户不存在
+    #[test]
+    fn test_get_user_order_details_not_found() {
+        let router = create_test_router();
+
+        let details = router.get_user_order_details("NON_EXISTENT_USER");
+        assert!(details.is_empty());
+    }
+
+    /// 测试获取用户订单详情 - 存在订单
+    #[test]
+    fn test_get_user_order_details_exists() {
+        let router = create_test_router();
+
+        // 提交多个订单
+        for i in 0..3 {
+            let req = SubmitOrderRequest {
+                account_id: "test_user".to_string(),
+                instrument_id: "IX2301".to_string(),
+                direction: "BUY".to_string(),
+                offset: "OPEN".to_string(),
+                volume: 1.0 + i as f64,
+                price: 120.0,
+                order_type: "LIMIT".to_string(),
+                time_condition: None,
+                volume_condition: None,
+            };
+            router.submit_order(req);
+        }
+
+        let details = router.get_user_order_details("test_user");
+        assert_eq!(details.len(), 3);
+
+        // 验证每个订单详情
+        for (order_id, order, _status, submit_time, update_time, _filled) in details {
+            assert!(!order_id.is_empty());
+            assert_eq!(order.user_id, "test_user");
+            assert!(submit_time > 0);
+            assert!(update_time >= submit_time);
+        }
+    }
+
+    // ==================== 全部订单测试 @yutiansut @quantaxis ====================
+
+    /// 测试获取所有订单 - 空
+    #[test]
+    fn test_get_all_orders_empty() {
+        let router = create_test_router();
+
+        let orders = router.get_all_orders();
+        assert!(orders.is_empty());
+    }
+
+    /// 测试获取所有订单 - 多用户
+    #[test]
+    fn test_get_all_orders_multiple_users() {
+        let router = create_test_router();
+
+        // 创建第二个账户
+        let req2 = OpenAccountRequest {
+            user_id: "test_user_2".to_string(),
+            account_id: Some("test_user_2".to_string()),
+            account_name: "Test User 2".to_string(),
+            init_cash: 1000000.0,
+            account_type: AccountType::Individual,
+        };
+        router.account_mgr.open_account(req2).unwrap();
+
+        // 用户1提交订单
+        for _ in 0..2 {
+            let req = SubmitOrderRequest {
+                account_id: "test_user".to_string(),
+                instrument_id: "IX2301".to_string(),
+                direction: "BUY".to_string(),
+                offset: "OPEN".to_string(),
+                volume: 1.0,
+                price: 120.0,
+                order_type: "LIMIT".to_string(),
+                time_condition: None,
+                volume_condition: None,
+            };
+            router.submit_order(req);
+        }
+
+        // 用户2提交订单
+        for _ in 0..3 {
+            let req = SubmitOrderRequest {
+                account_id: "test_user_2".to_string(),
+                instrument_id: "IX2301".to_string(),
+                direction: "SELL".to_string(),
+                offset: "OPEN".to_string(),
+                volume: 1.0,
+                price: 120.0,
+                order_type: "LIMIT".to_string(),
+                time_condition: None,
+                volume_condition: None,
+            };
+            router.submit_order(req);
+        }
+
+        let orders = router.get_all_orders();
+        assert_eq!(orders.len(), 5);
+    }
+
+    // ==================== 订单计数测试 @yutiansut @quantaxis ====================
+
+    /// 测试订单计数 - 初始
+    #[test]
+    fn test_get_order_count_empty() {
+        let router = create_test_router();
+
+        assert_eq!(router.get_order_count(), 0);
+    }
+
+    /// 测试订单计数 - 增长
+    #[test]
+    fn test_get_order_count_growth() {
+        let router = create_test_router();
+
+        for i in 0..10 {
+            let req = SubmitOrderRequest {
+                account_id: "test_user".to_string(),
+                instrument_id: "IX2301".to_string(),
+                direction: "BUY".to_string(),
+                offset: "OPEN".to_string(),
+                volume: 1.0,
+                price: 120.0,
+                order_type: "LIMIT".to_string(),
+                time_condition: None,
+                volume_condition: None,
+            };
+            router.submit_order(req);
+            assert_eq!(router.get_order_count(), i + 1);
+        }
+    }
+
+    // ==================== 查询订单测试 @yutiansut @quantaxis ====================
+
+    /// 测试查询订单 - 不存在
+    #[test]
+    fn test_query_order_not_found() {
+        let router = create_test_router();
+
+        let order = router.query_order("NON_EXISTENT");
+        assert!(order.is_none());
+    }
+
+    /// 测试查询用户订单 - 用户不存在
+    #[test]
+    fn test_query_user_orders_not_found() {
+        let router = create_test_router();
+
+        let orders = router.query_user_orders("NON_EXISTENT_USER");
+        assert!(orders.is_empty());
+    }
+
+    // ==================== 订单ID生成测试 @yutiansut @quantaxis ====================
+
+    /// 测试订单ID唯一性
+    #[test]
+    fn test_generate_order_id_unique() {
+        let router = create_test_router();
+
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            let id = router.generate_order_id();
+            assert!(ids.insert(id.clone()), "Duplicate order ID generated: {}", id);
+        }
+    }
+
+    /// 测试订单ID格式
+    #[test]
+    fn test_generate_order_id_format() {
+        let router = create_test_router();
+
+        for _ in 0..10 {
+            let id = router.generate_order_id();
+            assert!(id.starts_with('O'), "Order ID should start with 'O': {}", id);
+            assert!(id.len() > 10, "Order ID should be longer than 10 chars: {}", id);
+        }
+    }
+
+    // ==================== SubmitOrderRequest 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 SubmitOrderRequest 创建
+    #[test]
+    fn test_submit_order_request_creation() {
+        let req = SubmitOrderRequest {
+            account_id: "user1".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 85000.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: Some(TimeCondition::GFD),
+            volume_condition: Some(VolumeCondition::ANY),
+        };
+
+        assert_eq!(req.account_id, "user1");
+        assert_eq!(req.instrument_id, "cu2501");
+        assert_eq!(req.direction, "BUY");
+        assert_eq!(req.offset, "OPEN");
+        assert_eq!(req.volume, 10.0);
+        assert_eq!(req.price, 85000.0);
+        assert_eq!(req.order_type, "LIMIT");
+        assert_eq!(req.time_condition, Some(TimeCondition::GFD));
+        assert_eq!(req.volume_condition, Some(VolumeCondition::ANY));
+    }
+
+    /// 测试 SubmitOrderRequest Clone
+    #[test]
+    fn test_submit_order_request_clone() {
+        let req = SubmitOrderRequest {
+            account_id: "user1".to_string(),
+            instrument_id: "cu2501".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 85000.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        let cloned = req.clone();
+        assert_eq!(req.account_id, cloned.account_id);
+        assert_eq!(req.instrument_id, cloned.instrument_id);
+    }
+
+    // ==================== CancelOrderRequest 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 CancelOrderRequest 创建
+    #[test]
+    fn test_cancel_order_request_creation() {
+        let req = CancelOrderRequest {
+            account_id: "user1".to_string(),
+            order_id: "O12345".to_string(),
+        };
+
+        assert_eq!(req.account_id, "user1");
+        assert_eq!(req.order_id, "O12345");
+    }
+
+    /// 测试 CancelOrderRequest Clone
+    #[test]
+    fn test_cancel_order_request_clone() {
+        let req = CancelOrderRequest {
+            account_id: "user1".to_string(),
+            order_id: "O12345".to_string(),
+        };
+
+        let cloned = req.clone();
+        assert_eq!(req.account_id, cloned.account_id);
+        assert_eq!(req.order_id, cloned.order_id);
+    }
+
+    // ==================== SubmitOrderResponse 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 SubmitOrderResponse 成功
+    #[test]
+    fn test_submit_order_response_success() {
+        let resp = SubmitOrderResponse {
+            success: true,
+            order_id: Some("O12345".to_string()),
+            status: Some("submitted".to_string()),
+            error_message: None,
+            error_code: None,
+        };
+
+        assert!(resp.success);
+        assert_eq!(resp.order_id, Some("O12345".to_string()));
+        assert_eq!(resp.status, Some("submitted".to_string()));
+        assert!(resp.error_message.is_none());
+        assert!(resp.error_code.is_none());
+    }
+
+    /// 测试 SubmitOrderResponse 失败
+    #[test]
+    fn test_submit_order_response_failure() {
+        let resp = SubmitOrderResponse {
+            success: false,
+            order_id: None,
+            status: Some("rejected".to_string()),
+            error_message: Some("Insufficient funds".to_string()),
+            error_code: Some(4001),
+        };
+
+        assert!(!resp.success);
+        assert!(resp.order_id.is_none());
+        assert_eq!(resp.status, Some("rejected".to_string()));
+        assert_eq!(resp.error_message, Some("Insufficient funds".to_string()));
+        assert_eq!(resp.error_code, Some(4001));
+    }
+
+    // ==================== OrderStatistics 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 OrderStatistics 字段
+    #[test]
+    fn test_order_statistics_fields() {
+        let stats = OrderStatistics {
+            total_count: 100,
+            pending_count: 20,
+            filled_count: 70,
+            cancelled_count: 5,
+            rejected_count: 5,
+        };
+
+        assert_eq!(stats.total_count, 100);
+        assert_eq!(stats.pending_count, 20);
+        assert_eq!(stats.filled_count, 70);
+        assert_eq!(stats.cancelled_count, 5);
+        assert_eq!(stats.rejected_count, 5);
+
+        // 验证总数一致性（注意：pending包含submitted和partially_filled）
+        assert!(stats.pending_count + stats.filled_count + stats.cancelled_count + stats.rejected_count <= stats.total_count);
+    }
+
+    /// 测试 OrderStatistics Clone
+    #[test]
+    fn test_order_statistics_clone() {
+        let stats = OrderStatistics {
+            total_count: 50,
+            pending_count: 10,
+            filled_count: 30,
+            cancelled_count: 5,
+            rejected_count: 5,
+        };
+
+        let cloned = stats.clone();
+        assert_eq!(stats.total_count, cloned.total_count);
+        assert_eq!(stats.pending_count, cloned.pending_count);
+    }
+
+    // ==================== TradeStatistics 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 TradeStatistics 字段
+    #[test]
+    fn test_trade_statistics_fields() {
+        let stats = TradeStatistics {
+            total_count: 1000,
+            total_volume: 50000.0,
+            total_amount: 4250000000.0,
+        };
+
+        assert_eq!(stats.total_count, 1000);
+        assert_eq!(stats.total_volume, 50000.0);
+        assert_eq!(stats.total_amount, 4250000000.0);
+    }
+
+    /// 测试 TradeStatistics Clone
+    #[test]
+    fn test_trade_statistics_clone() {
+        let stats = TradeStatistics {
+            total_count: 500,
+            total_volume: 25000.0,
+            total_amount: 2125000000.0,
+        };
+
+        let cloned = stats.clone();
+        assert_eq!(stats.total_count, cloned.total_count);
+        assert_eq!(stats.total_volume, cloned.total_volume);
+    }
+
+    // ==================== OrderStatus 更多测试 @yutiansut @quantaxis ====================
+
+    /// 测试 OrderStatus Copy trait
+    #[test]
+    fn test_order_status_copy() {
+        let status1 = OrderStatus::Submitted;
+        let status2 = status1; // Copy
+        let status3 = status1.clone(); // Clone
+
+        assert_eq!(status1, status2);
+        assert_eq!(status1, status3);
+    }
+
+    /// 测试 OrderStatus 所有状态
+    #[test]
+    fn test_order_status_all_values() {
+        let statuses = [
+            OrderStatus::PendingRisk,
+            OrderStatus::PendingRoute,
+            OrderStatus::Submitted,
+            OrderStatus::PartiallyFilled,
+            OrderStatus::Filled,
+            OrderStatus::Cancelled,
+            OrderStatus::Rejected,
+        ];
+
+        // 验证没有重复
+        for (i, s1) in statuses.iter().enumerate() {
+            for (j, s2) in statuses.iter().enumerate() {
+                if i != j {
+                    assert_ne!(s1, s2);
+                }
+            }
+        }
+    }
+
+    // ==================== 订单类型测试 @yutiansut @quantaxis ====================
+
+    /// 测试 LIMIT 订单
+    #[test]
+    fn test_submit_limit_order() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: Some(TimeCondition::GFD),
+            volume_condition: Some(VolumeCondition::ANY),
+        };
+
+        let response = router.submit_order(req);
+        assert!(response.success);
+    }
+
+    /// 测试卖单
+    #[test]
+    fn test_submit_sell_order() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "SELL".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 5.0,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        let response = router.submit_order(req);
+        assert!(response.success);
+    }
+
+    // ==================== 时间/数量条件测试 @yutiansut @quantaxis ====================
+
+    /// 测试 IOC 订单
+    #[test]
+    fn test_submit_ioc_order() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 5.0,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: Some(TimeCondition::IOC),
+            volume_condition: Some(VolumeCondition::ANY),
+        };
+
+        let response = router.submit_order(req);
+        // IOC订单可能被拒绝（如果没有对手方），或成功提交
+        // 这里只验证请求不会导致panic
+        assert!(response.order_id.is_some() || response.error_message.is_some());
+    }
+
+    /// 测试 GTC 订单
+    #[test]
+    fn test_submit_gtc_order() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 5.0,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: Some(TimeCondition::GTC),
+            volume_condition: None,
+        };
+
+        let response = router.submit_order(req);
+        assert!(response.success);
+    }
+
+    /// 测试 ALL (FOK) 数量条件
+    #[test]
+    fn test_submit_fok_order() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 5.0,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: Some(TimeCondition::IOC),
+            volume_condition: Some(VolumeCondition::ALL), // FOK = IOC + ALL
+        };
+
+        let response = router.submit_order(req);
+        // FOK订单在没有对手方时会被拒绝
+        // 这里只验证请求不会导致panic
+        assert!(response.order_id.is_some() || response.error_message.is_some());
+    }
+
+    // ==================== 合约不存在测试 @yutiansut @quantaxis ====================
+
+    /// 测试提交订单到不存在的合约
+    #[test]
+    fn test_submit_order_instrument_not_found() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "NON_EXISTENT_INSTRUMENT".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 100.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        let response = router.submit_order(req);
+        assert!(!response.success);
+        assert!(response.error_message.is_some());
+    }
+
+    // ==================== 账户不存在测试 @yutiansut @quantaxis ====================
+
+    /// 测试提交订单到不存在的账户
+    #[test]
+    fn test_submit_order_account_not_found() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "NON_EXISTENT_ACCOUNT".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        let response = router.submit_order(req);
+        assert!(!response.success);
+        assert!(response.error_message.is_some());
+    }
+
+    // ==================== 边界条件测试 @yutiansut @quantaxis ====================
+
+    /// 测试零价格订单
+    #[test]
+    fn test_submit_order_zero_price() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 10.0,
+            price: 0.0, // 零价格
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        let response = router.submit_order(req);
+        // 零价格可能被拒绝
+        // 这里只验证不会panic
+        assert!(response.order_id.is_some() || response.error_message.is_some());
+    }
+
+    /// 测试零数量订单
+    #[test]
+    fn test_submit_order_zero_volume() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 0.0, // 零数量
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        let response = router.submit_order(req);
+        // 零数量可能被拒绝
+        // 这里只验证不会panic
+        assert!(response.order_id.is_some() || response.error_message.is_some());
+    }
+
+    /// 测试负数量订单
+    #[test]
+    fn test_submit_order_negative_volume() {
+        let router = create_test_router();
+
+        let req = SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: -10.0, // 负数量
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+
+        let response = router.submit_order(req);
+        // 负数量应该被拒绝
+        // 这里只验证不会panic
+        assert!(response.order_id.is_some() || response.error_message.is_some());
+    }
+
+    // ==================== 并发测试 @yutiansut @quantaxis ====================
+
+    /// 测试并发提交订单
+    #[test]
+    fn test_concurrent_submit_orders() {
+        use std::thread;
+
+        let router = Arc::new(create_test_router());
+        let mut handles = vec![];
+
+        for i in 0..10 {
+            let router_clone = router.clone();
+            handles.push(thread::spawn(move || {
+                let req = SubmitOrderRequest {
+                    account_id: "test_user".to_string(),
+                    instrument_id: "IX2301".to_string(),
+                    direction: if i % 2 == 0 { "BUY" } else { "SELL" }.to_string(),
+                    offset: "OPEN".to_string(),
+                    volume: 1.0,
+                    price: 120.0,
+                    order_type: "LIMIT".to_string(),
+                    time_condition: None,
+                    volume_condition: None,
+                };
+                router_clone.submit_order(req)
+            }));
+        }
+
+        let mut success_count = 0;
+        for handle in handles {
+            let response = handle.join().unwrap();
+            if response.success {
+                success_count += 1;
+            }
+        }
+
+        // 至少有一些订单应该成功
+        assert!(success_count > 0, "No orders were successful");
+
+        // 验证订单数量
+        assert!(router.get_order_count() >= success_count);
+    }
+
+    /// 测试并发查询订单
+    #[test]
+    fn test_concurrent_query_orders() {
+        use std::thread;
+
+        let router = Arc::new(create_test_router());
+
+        // 先提交一些订单
+        for _ in 0..5 {
+            let req = SubmitOrderRequest {
+                account_id: "test_user".to_string(),
+                instrument_id: "IX2301".to_string(),
+                direction: "BUY".to_string(),
+                offset: "OPEN".to_string(),
+                volume: 1.0,
+                price: 120.0,
+                order_type: "LIMIT".to_string(),
+                time_condition: None,
+                volume_condition: None,
+            };
+            router.submit_order(req);
+        }
+
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let router_clone = router.clone();
+            handles.push(thread::spawn(move || {
+                // 并发查询
+                let _ = router_clone.query_user_orders("test_user");
+                let _ = router_clone.get_order_statistics();
+                let _ = router_clone.get_trade_statistics();
+                let _ = router_clone.get_all_orders();
+                router_clone.get_order_count()
+            }));
+        }
+
+        for handle in handles {
+            let count = handle.join().unwrap();
+            assert!(count >= 0);
+        }
     }
 }

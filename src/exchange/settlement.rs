@@ -1340,4 +1340,493 @@ mod tests {
         assert_eq!(result.failed_accounts, 0);
         assert_eq!(result.force_closed_accounts.len(), 0);
     }
+
+    // ==================== ForceLiquidationStatus 测试 @yutiansut @quantaxis ====================
+
+    /// 测试强平状态 is_final() 方法
+    /// 验证哪些状态是终态（不可变）
+    ///
+    /// 终态定义:
+    ///   - Filled: 全部成交
+    ///   - Cancelled: 已撤销
+    ///   - Rejected: 被拒绝
+    ///   - Failed: 失败
+    ///
+    /// 非终态:
+    ///   - Pending: 待提交
+    ///   - Submitted: 已提交
+    ///   - PartiallyFilled: 部分成交
+    #[test]
+    fn test_force_liquidation_status_is_final() {
+        // 终态状态
+        assert!(ForceLiquidationStatus::Filled.is_final(), "Filled 应是终态");
+        assert!(ForceLiquidationStatus::Cancelled.is_final(), "Cancelled 应是终态");
+        assert!(ForceLiquidationStatus::Rejected.is_final(), "Rejected 应是终态");
+        assert!(ForceLiquidationStatus::Failed.is_final(), "Failed 应是终态");
+
+        // 非终态状态
+        assert!(!ForceLiquidationStatus::Pending.is_final(), "Pending 不应是终态");
+        assert!(!ForceLiquidationStatus::Submitted.is_final(), "Submitted 不应是终态");
+        assert!(!ForceLiquidationStatus::PartiallyFilled.is_final(), "PartiallyFilled 不应是终态");
+    }
+
+    /// 测试强平状态 is_success() 方法
+    /// 只有 Filled 状态才算成功
+    #[test]
+    fn test_force_liquidation_status_is_success() {
+        assert!(ForceLiquidationStatus::Filled.is_success(), "Filled 应是成功");
+
+        // 其他所有状态都不是成功
+        assert!(!ForceLiquidationStatus::Pending.is_success());
+        assert!(!ForceLiquidationStatus::Submitted.is_success());
+        assert!(!ForceLiquidationStatus::PartiallyFilled.is_success());
+        assert!(!ForceLiquidationStatus::Cancelled.is_success());
+        assert!(!ForceLiquidationStatus::Rejected.is_success());
+        assert!(!ForceLiquidationStatus::Failed.is_success());
+    }
+
+    // ==================== ForceLiquidationOrder 测试 @yutiansut @quantaxis ====================
+
+    /// 测试强平订单创建
+    /// 验证 ForceLiquidationOrder::new() 初始化字段
+    #[test]
+    fn test_force_liquidation_order_new() {
+        let order = ForceLiquidationOrder::new(
+            "SHFE.cu2501".to_string(),
+            "SELL".to_string(),
+            "CLOSE".to_string(),
+            10.0,
+            85000.0,
+        );
+
+        assert_eq!(order.instrument_id, "SHFE.cu2501");
+        assert_eq!(order.direction, "SELL");
+        assert_eq!(order.offset, "CLOSE");
+        assert_eq!(order.volume, 10.0);
+        assert_eq!(order.price, 85000.0);
+        assert!(order.order_id.is_none(), "初始 order_id 应为 None");
+        assert_eq!(order.status, ForceLiquidationStatus::Pending, "初始状态应为 Pending");
+        assert!(order.error.is_none());
+        assert_eq!(order.filled_volume, 0.0);
+        assert_eq!(order.filled_price, 0.0);
+        assert!(order.submit_time.is_none());
+        assert!(order.update_time.is_none());
+        assert_eq!(order.retry_count, 0);
+    }
+
+    // ==================== ForceLiquidationResult 测试 @yutiansut @quantaxis ====================
+
+    /// 创建测试用强平结果
+    fn create_test_liquidation_result(statuses: Vec<ForceLiquidationStatus>) -> ForceLiquidationResult {
+        let orders: Vec<ForceLiquidationOrder> = statuses
+            .into_iter()
+            .enumerate()
+            .map(|(i, status)| {
+                let mut order = ForceLiquidationOrder::new(
+                    format!("INST{}", i),
+                    "SELL".to_string(),
+                    "CLOSE".to_string(),
+                    1.0,
+                    100.0,
+                );
+                order.status = status;
+                order
+            })
+            .collect();
+
+        ForceLiquidationResult {
+            liquidation_id: "LIQ20241217_001".to_string(),
+            account_id: "test_account".to_string(),
+            orders,
+            trigger_risk_ratio: 1.5,
+            balance_before: 100000.0,
+            balance_after: 100000.0,
+            start_time: "2024-12-17 10:00:00".to_string(),
+            complete_time: None,
+            overall_status: ForceLiquidationStatus::Pending,
+            remark: None,
+        }
+    }
+
+    /// 测试强平结果完成检查 - 全部完成
+    /// 当所有订单都处于终态时，is_complete() 返回 true
+    #[test]
+    fn test_force_liquidation_result_is_complete_all_final() {
+        let result = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::Filled,
+            ForceLiquidationStatus::Filled,
+            ForceLiquidationStatus::Cancelled,
+        ]);
+        assert!(result.is_complete(), "所有订单终态时应返回 true");
+    }
+
+    /// 测试强平结果完成检查 - 部分未完成
+    #[test]
+    fn test_force_liquidation_result_is_complete_partial() {
+        let result = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::Filled,
+            ForceLiquidationStatus::Submitted, // 非终态
+            ForceLiquidationStatus::Filled,
+        ]);
+        assert!(!result.is_complete(), "有非终态订单时应返回 false");
+    }
+
+    /// 测试强平结果完成检查 - 空订单列表
+    #[test]
+    fn test_force_liquidation_result_is_complete_empty() {
+        let result = create_test_liquidation_result(vec![]);
+        assert!(result.is_complete(), "空订单列表应视为完成");
+    }
+
+    /// 测试强平结果全部成功检查
+    #[test]
+    fn test_force_liquidation_result_is_all_success() {
+        // 全部成功
+        let result1 = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::Filled,
+            ForceLiquidationStatus::Filled,
+        ]);
+        assert!(result1.is_all_success());
+
+        // 有失败
+        let result2 = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::Filled,
+            ForceLiquidationStatus::Rejected,
+        ]);
+        assert!(!result2.is_all_success());
+    }
+
+    /// 测试成功/失败订单计数
+    ///
+    /// 计数规则:
+    ///   - success_count: 状态为 Filled 的订单数
+    ///   - failed_count: 状态为 Rejected/Failed/Cancelled 的订单数
+    #[test]
+    fn test_force_liquidation_result_counts() {
+        let result = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::Filled,      // success
+            ForceLiquidationStatus::Filled,      // success
+            ForceLiquidationStatus::Rejected,    // failed
+            ForceLiquidationStatus::Failed,      // failed
+            ForceLiquidationStatus::Cancelled,   // failed
+            ForceLiquidationStatus::Submitted,   // 不计入
+        ]);
+
+        assert_eq!(result.success_count(), 2, "应有2个成功订单");
+        assert_eq!(result.failed_count(), 3, "应有3个失败订单");
+    }
+
+    /// 测试总体状态更新逻辑
+    ///
+    /// 状态优先级 (从高到低):
+    ///   1. 全部成功 → Filled
+    ///   2. 全部完成但有失败 → Failed
+    ///   3. 有部分成交 → PartiallyFilled
+    ///   4. 有已提交 → Submitted
+    ///   5. 其他 → Pending
+    #[test]
+    fn test_force_liquidation_result_update_overall_status() {
+        // 空订单 → Filled
+        let mut result1 = create_test_liquidation_result(vec![]);
+        result1.update_overall_status();
+        assert_eq!(result1.overall_status, ForceLiquidationStatus::Filled);
+
+        // 全部成功 → Filled
+        let mut result2 = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::Filled,
+            ForceLiquidationStatus::Filled,
+        ]);
+        result2.update_overall_status();
+        assert_eq!(result2.overall_status, ForceLiquidationStatus::Filled);
+
+        // 完成但有失败 → Failed
+        let mut result3 = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::Filled,
+            ForceLiquidationStatus::Rejected,
+        ]);
+        result3.update_overall_status();
+        assert_eq!(result3.overall_status, ForceLiquidationStatus::Failed);
+
+        // 有部分成交 → PartiallyFilled
+        let mut result4 = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::PartiallyFilled,
+            ForceLiquidationStatus::Submitted,
+        ]);
+        result4.update_overall_status();
+        assert_eq!(result4.overall_status, ForceLiquidationStatus::PartiallyFilled);
+
+        // 只有已提交 → Submitted
+        let mut result5 = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::Submitted,
+            ForceLiquidationStatus::Submitted,
+        ]);
+        result5.update_overall_status();
+        assert_eq!(result5.overall_status, ForceLiquidationStatus::Submitted);
+
+        // 全部待提交 → Pending
+        let mut result6 = create_test_liquidation_result(vec![
+            ForceLiquidationStatus::Pending,
+            ForceLiquidationStatus::Pending,
+        ]);
+        result6.update_overall_status();
+        assert_eq!(result6.overall_status, ForceLiquidationStatus::Pending);
+    }
+
+    // ==================== SettlementEngine 测试 @yutiansut @quantaxis ====================
+
+    /// 测试强平ID生成格式
+    /// 格式: LIQ{YYYYMMDD}{8位序列号}
+    #[test]
+    fn test_generate_liquidation_id() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let id1 = engine.generate_liquidation_id();
+        let id2 = engine.generate_liquidation_id();
+
+        // 验证格式
+        assert!(id1.starts_with("LIQ"), "ID应以LIQ开头");
+        assert_eq!(id1.len(), 19, "ID长度应为19字符 (LIQ + 8日期 + 8序列)");
+
+        // 验证序列递增
+        assert_ne!(id1, id2, "两次生成的ID应不同");
+    }
+
+    /// 测试批量设置结算价
+    #[test]
+    fn test_set_settlement_prices_batch() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let mut prices = HashMap::new();
+        prices.insert("cu2501".to_string(), 85000.0);
+        prices.insert("au2512".to_string(), 935.56);
+        prices.insert("IF2512".to_string(), 4511.2);
+
+        engine.set_settlement_prices(prices);
+
+        assert_eq!(engine.settlement_prices.len(), 3);
+        assert_eq!(*engine.settlement_prices.get("cu2501").unwrap(), 85000.0);
+        assert_eq!(*engine.settlement_prices.get("au2512").unwrap(), 935.56);
+        assert_eq!(*engine.settlement_prices.get("IF2512").unwrap(), 4511.2);
+    }
+
+    /// 测试获取结算统计信息
+    #[test]
+    fn test_get_settlement_stats() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let stats = engine.get_settlement_stats();
+
+        // 初始状态
+        assert_eq!(stats.total_settled_accounts, 0);
+        assert_eq!(stats.total_time_us, 0);
+        assert_eq!(stats.pending_force_close, 0);
+    }
+
+    /// 测试获取结算历史 - 空历史
+    #[test]
+    fn test_get_settlement_history_empty() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let history = engine.get_settlement_history();
+        assert!(history.is_empty(), "初始历史应为空");
+    }
+
+    /// 测试获取结算详情 - 不存在
+    #[test]
+    fn test_get_settlement_detail_not_found() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let detail = engine.get_settlement_detail("2024-12-17");
+        assert!(detail.is_none(), "不存在的日期应返回 None");
+    }
+
+    /// 测试获取账户结算历史 - 空历史
+    #[test]
+    fn test_get_account_settlements_empty() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let settlements = engine.get_account_settlements("non_existent_account");
+        assert!(settlements.is_empty());
+    }
+
+    /// 测试设置强平阈值
+    #[test]
+    fn test_set_force_close_threshold() {
+        let (mut engine, _) = create_test_settlement_engine();
+
+        assert_eq!(engine.force_close_threshold, 1.0, "默认阈值应为 100%");
+
+        engine.set_force_close_threshold(0.8);
+        assert_eq!(engine.force_close_threshold, 0.8, "阈值应更新为 80%");
+
+        engine.set_force_close_threshold(1.2);
+        assert_eq!(engine.force_close_threshold, 1.2, "阈值应更新为 120%");
+    }
+
+    /// 测试结算后历史记录保存
+    #[test]
+    fn test_daily_settlement_saves_history() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let result = engine.daily_settlement().unwrap();
+        let date = result.settlement_date.clone();
+
+        // 验证历史记录
+        let history = engine.get_settlement_history();
+        assert_eq!(history.len(), 1);
+
+        let detail = engine.get_settlement_detail(&date);
+        assert!(detail.is_some());
+        assert_eq!(detail.unwrap().settlement_date, date);
+    }
+
+    /// 测试空账户列表结算
+    #[test]
+    fn test_daily_settlement_empty_accounts() {
+        let account_mgr = Arc::new(AccountManager::new());
+        let engine = SettlementEngine::new(account_mgr);
+
+        let result = engine.daily_settlement().unwrap();
+
+        assert_eq!(result.total_accounts, 0);
+        assert_eq!(result.settled_accounts, 0);
+        assert_eq!(result.failed_accounts, 0);
+        assert_eq!(result.elapsed_ms, 0);
+    }
+
+    /// 测试获取强平记录 - 不存在
+    #[test]
+    fn test_get_liquidation_not_found() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let liquidation = engine.get_liquidation("LIQ20241217_999");
+        assert!(liquidation.is_none());
+    }
+
+    /// 测试获取账户强平记录列表 - 空
+    #[test]
+    fn test_get_account_liquidations_empty() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let liquidations = engine.get_account_liquidations("non_existent");
+        assert!(liquidations.is_empty());
+    }
+
+    /// 测试获取待处理强平记录 - 空
+    #[test]
+    fn test_get_pending_liquidations_empty() {
+        let (engine, _) = create_test_settlement_engine();
+
+        let pending = engine.get_pending_liquidations();
+        assert!(pending.is_empty());
+    }
+
+    /// 测试 SettlementResult 结构体字段
+    #[test]
+    fn test_settlement_result_fields() {
+        let result = SettlementResult {
+            settlement_date: "2024-12-17".to_string(),
+            total_accounts: 100,
+            settled_accounts: 95,
+            failed_accounts: 5,
+            force_closed_accounts: vec!["acc1".to_string(), "acc2".to_string()],
+            total_commission: 1500.0,
+            total_profit: 50000.0,
+            elapsed_ms: 1200,
+            parallelism: 8,
+        };
+
+        assert_eq!(result.settlement_date, "2024-12-17");
+        assert_eq!(result.total_accounts, 100);
+        assert_eq!(result.settled_accounts, 95);
+        assert_eq!(result.failed_accounts, 5);
+        assert_eq!(result.force_closed_accounts.len(), 2);
+        assert_eq!(result.total_commission, 1500.0);
+        assert_eq!(result.total_profit, 50000.0);
+        assert_eq!(result.elapsed_ms, 1200);
+        assert_eq!(result.parallelism, 8);
+    }
+
+    /// 测试 AccountSettlement 结构体字段
+    /// QIFI 账户结算数据结构
+    #[test]
+    fn test_account_settlement_fields() {
+        let settlement = AccountSettlement {
+            user_id: "55550081".to_string(),
+            date: "2024-12-17".to_string(),
+            close_profit: 1000.0,      // 平仓盈亏
+            position_profit: -500.0,    // 持仓盈亏
+            commission: 50.0,           // 手续费
+            pre_balance: 100000.0,      // 结算前权益
+            balance: 100450.0,          // 结算后权益 = pre_balance + close_profit + position_profit - commission
+            risk_ratio: 0.15,           // 风险度 15%
+            force_close: false,         // 无需强平
+            margin: 15000.0,            // 占用保证金
+            available: 85450.0,         // 可用资金 = balance - margin
+        };
+
+        // 验证盈亏计算逻辑
+        // balance = pre_balance + close_profit + position_profit - commission
+        let expected_balance = settlement.pre_balance + settlement.close_profit
+            + settlement.position_profit - settlement.commission;
+        assert!((settlement.balance - expected_balance).abs() < 0.01);
+
+        // 验证可用资金计算
+        let expected_available = settlement.balance - settlement.margin;
+        assert!((settlement.available - expected_available).abs() < 0.01);
+    }
+
+    /// 测试 SettlementStats 结构体
+    #[test]
+    fn test_settlement_stats_fields() {
+        let stats = SettlementStats {
+            total_settled_accounts: 10000,
+            total_time_us: 60_000_000, // 60 秒
+            pending_force_close: 5,
+        };
+
+        assert_eq!(stats.total_settled_accounts, 10000);
+        assert_eq!(stats.total_time_us, 60_000_000);
+        assert_eq!(stats.pending_force_close, 5);
+    }
+
+    /// 测试多账户结算场景
+    #[test]
+    fn test_daily_settlement_multiple_accounts() {
+        let account_mgr = Arc::new(AccountManager::new());
+
+        // 创建多个测试账户
+        for i in 0..5 {
+            let req = OpenAccountRequest {
+                user_id: format!("user_{}", i),
+                account_id: None,
+                account_name: format!("Test User {}", i),
+                init_cash: 100000.0 * (i + 1) as f64,
+                account_type: AccountType::Individual,
+            };
+            account_mgr.open_account(req).unwrap();
+        }
+
+        let engine = SettlementEngine::new(account_mgr);
+        engine.set_settlement_price("cu2501".to_string(), 85000.0);
+
+        let result = engine.daily_settlement().unwrap();
+
+        assert_eq!(result.total_accounts, 5);
+        assert_eq!(result.settled_accounts, 5);
+        assert_eq!(result.failed_accounts, 0);
+        assert!(result.parallelism > 0, "应使用并行处理");
+    }
+
+    /// 测试 Default trait 实现
+    #[test]
+    fn test_settlement_engine_default() {
+        let engine = SettlementEngine::default();
+
+        assert_eq!(engine.force_close_threshold, 1.0);
+        assert!(engine.settlement_prices.is_empty());
+        assert!(engine.settlement_history.is_empty());
+        assert!(engine.account_history.is_empty());
+        assert!(engine.liquidation_history.is_empty());
+    }
 }

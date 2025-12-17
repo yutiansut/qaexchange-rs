@@ -1053,6 +1053,7 @@ pub fn internal_to_proto_log_entry(internal: &InternalLogEntry) -> LogEntry {
 mod tests {
     use super::*;
     use crate::replication::replicator::ReplicationConfig;
+    use tempfile::tempdir;
 
     #[test]
     fn test_grpc_config_default() {
@@ -1103,5 +1104,442 @@ mod tests {
 
         // 测试日志一致性检查 (空日志)
         assert!(ctx.check_log_consistency(0, 0));
+    }
+
+    // ==================== 快照写入测试 @yutiansut @quantaxis ====================
+
+    /// 测试快照数据块写入 - 单块写入
+    /// 业务场景: Slave 节点接收 Master 发送的小型快照 (单块)
+    ///
+    /// 写入流程:
+    ///   1. chunk_index=0 时创建新文件
+    ///   2. write_all(data) 写入数据
+    ///   3. is_last=true 时写入元数据文件
+    ///
+    /// 元数据格式 (snapshot.meta):
+    ///   term=<当前term>
+    ///   sequence=<commit_index>
+    ///   timestamp=<写入时间戳>
+    #[test]
+    fn test_write_snapshot_single_chunk() {
+        // 使用临时目录避免污染测试环境
+        let temp_dir = tempdir().expect("创建临时目录失败");
+        let snapshot_dir = temp_dir.path().to_path_buf();
+
+        let role_mgr = Arc::new(RoleManager::new("test_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::with_snapshot_dir(
+            "test_node".to_string(),
+            role_mgr,
+            replicator,
+            snapshot_dir.clone(),
+        );
+
+        // 设置 term 和 commit_index (会写入元数据)
+        *ctx.current_term.write() = 5;
+        *ctx.commit_index.write() = 100;
+
+        // 准备测试数据: 模拟账户快照数据
+        // 实际场景中可能是序列化的 QIFI 账户结构
+        let snapshot_data = b"account_id:55550081\nbalance:60470421.77\nmargin:16429881.60\n";
+
+        // 写入单块快照 (chunk_index=0, is_last=true)
+        let result = ctx.write_snapshot_chunk(0, snapshot_data, true);
+        assert!(result.is_ok(), "快照写入应成功: {:?}", result);
+
+        // 验证快照文件存在
+        let snapshot_path = ctx.get_snapshot_path();
+        assert!(snapshot_path.exists(), "快照文件应存在");
+
+        // 验证文件内容
+        let file_content = std::fs::read(&snapshot_path).expect("读取快照文件失败");
+        assert_eq!(file_content, snapshot_data, "快照内容应匹配");
+
+        // 验证元数据文件
+        let meta_path = snapshot_dir.join("snapshot.meta");
+        assert!(meta_path.exists(), "元数据文件应存在");
+
+        let meta_content = std::fs::read_to_string(&meta_path).expect("读取元数据失败");
+        assert!(meta_content.contains("term=5"), "元数据应包含 term");
+        assert!(meta_content.contains("sequence=100"), "元数据应包含 sequence");
+        assert!(meta_content.contains("timestamp="), "元数据应包含 timestamp");
+    }
+
+    /// 测试快照数据块写入 - 多块顺序写入
+    /// 业务场景: Master 发送大型快照，分多个数据块传输
+    ///
+    /// 多块写入流程:
+    ///   1. chunk_index=0: 创建新文件，写入第一块
+    ///   2. chunk_index=1,2,...: 追加写入
+    ///   3. 最后一块 is_last=true: 写入元数据
+    ///
+    /// 注意: 块必须按顺序接收，乱序会导致数据损坏
+    #[test]
+    fn test_write_snapshot_multiple_chunks() {
+        let temp_dir = tempdir().expect("创建临时目录失败");
+        let snapshot_dir = temp_dir.path().to_path_buf();
+
+        let role_mgr = Arc::new(RoleManager::new("test_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::with_snapshot_dir(
+            "test_node".to_string(),
+            role_mgr,
+            replicator,
+            snapshot_dir.clone(),
+        );
+
+        *ctx.current_term.write() = 3;
+        *ctx.commit_index.write() = 50;
+
+        // 模拟分块快照数据
+        // 实际场景: 大型快照按 64MB 分块传输
+        let chunk1 = b"=== SNAPSHOT HEADER ===\n";
+        let chunk2 = b"position:SHFE.cu2501,volume:24\n";
+        let chunk3 = b"position:CFFEX.IF2512,volume:5\n";
+        let chunk4 = b"=== SNAPSHOT FOOTER ===\n";
+
+        // 按顺序写入 4 个块
+        // 前 3 个块: is_last=false
+        assert!(ctx.write_snapshot_chunk(0, chunk1, false).is_ok());
+        assert!(ctx.write_snapshot_chunk(1, chunk2, false).is_ok());
+        assert!(ctx.write_snapshot_chunk(2, chunk3, false).is_ok());
+        // 最后一块: is_last=true
+        assert!(ctx.write_snapshot_chunk(3, chunk4, true).is_ok());
+
+        // 验证合并后的文件内容
+        let snapshot_path = ctx.get_snapshot_path();
+        let file_content = std::fs::read(&snapshot_path).expect("读取快照失败");
+
+        // 预期内容: chunk1 + chunk2 + chunk3 + chunk4
+        let expected: Vec<u8> = [chunk1.as_slice(), chunk2, chunk3, chunk4].concat();
+        assert_eq!(file_content, expected, "多块快照内容应正确合并");
+
+        // 验证元数据 (只在最后一块时写入)
+        let meta_path = snapshot_dir.join("snapshot.meta");
+        assert!(meta_path.exists(), "元数据文件应在最后一块时写入");
+
+        // 验证文件大小
+        let expected_size = chunk1.len() + chunk2.len() + chunk3.len() + chunk4.len();
+        assert_eq!(file_content.len(), expected_size, "文件大小应等于所有块之和");
+    }
+
+    /// 测试快照覆盖写入
+    /// 业务场景: 接收新快照时覆盖旧快照
+    ///
+    /// 业务规则:
+    ///   - chunk_index=0 时总是创建新文件 (覆盖旧文件)
+    ///   - 新快照完全替换旧快照
+    ///   - 元数据文件也被覆盖
+    #[test]
+    fn test_write_snapshot_overwrite() {
+        let temp_dir = tempdir().expect("创建临时目录失败");
+        let snapshot_dir = temp_dir.path().to_path_buf();
+
+        let role_mgr = Arc::new(RoleManager::new("test_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::with_snapshot_dir(
+            "test_node".to_string(),
+            role_mgr,
+            replicator,
+            snapshot_dir.clone(),
+        );
+
+        // 第一次写入
+        *ctx.current_term.write() = 1;
+        *ctx.commit_index.write() = 10;
+        let old_data = b"old snapshot data version 1";
+        ctx.write_snapshot_chunk(0, old_data, true).expect("第一次写入失败");
+
+        let snapshot_path = ctx.get_snapshot_path();
+        let old_content = std::fs::read(&snapshot_path).expect("读取旧快照失败");
+        assert_eq!(old_content, old_data.to_vec());
+
+        // 第二次写入 (覆盖)
+        *ctx.current_term.write() = 2;
+        *ctx.commit_index.write() = 20;
+        let new_data = b"new snapshot data version 2 with more content";
+        ctx.write_snapshot_chunk(0, new_data, true).expect("第二次写入失败");
+
+        // 验证内容已被覆盖
+        let new_content = std::fs::read(&snapshot_path).expect("读取新快照失败");
+        assert_eq!(new_content, new_data.to_vec(), "快照应被新内容覆盖");
+        assert_ne!(new_content, old_content, "新内容应与旧内容不同");
+
+        // 验证元数据已更新
+        let meta_path = snapshot_dir.join("snapshot.meta");
+        let meta = std::fs::read_to_string(&meta_path).expect("读取元数据失败");
+        assert!(meta.contains("term=2"), "元数据 term 应更新为 2");
+        assert!(meta.contains("sequence=20"), "元数据 sequence 应更新为 20");
+    }
+
+    /// 测试获取快照路径
+    /// 验证 get_snapshot_path() 返回正确的文件路径
+    #[test]
+    fn test_get_snapshot_path() {
+        let temp_dir = tempdir().expect("创建临时目录失败");
+        let snapshot_dir = temp_dir.path().to_path_buf();
+
+        let role_mgr = Arc::new(RoleManager::new("test_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::with_snapshot_dir(
+            "test_node".to_string(),
+            role_mgr,
+            replicator,
+            snapshot_dir.clone(),
+        );
+
+        let path = ctx.get_snapshot_path();
+
+        // 验证路径组成
+        assert!(path.ends_with("snapshot.dat"), "路径应以 snapshot.dat 结尾");
+        assert!(path.starts_with(&snapshot_dir), "路径应在 snapshot_dir 下");
+    }
+
+    /// 测试空数据块写入
+    /// 边界情况: 处理空数据块
+    #[test]
+    fn test_write_snapshot_empty_chunk() {
+        let temp_dir = tempdir().expect("创建临时目录失败");
+        let snapshot_dir = temp_dir.path().to_path_buf();
+
+        let role_mgr = Arc::new(RoleManager::new("test_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::with_snapshot_dir(
+            "test_node".to_string(),
+            role_mgr,
+            replicator,
+            snapshot_dir.clone(),
+        );
+
+        // 写入空数据块
+        let empty_data: &[u8] = b"";
+        let result = ctx.write_snapshot_chunk(0, empty_data, true);
+        assert!(result.is_ok(), "空数据块写入应成功");
+
+        // 验证文件存在但为空
+        let path = ctx.get_snapshot_path();
+        assert!(path.exists(), "快照文件应存在");
+        let content = std::fs::read(&path).expect("读取失败");
+        assert!(content.is_empty(), "文件内容应为空");
+    }
+
+    /// 测试大数据块写入
+    /// 性能测试: 写入 1MB 数据块
+    #[test]
+    fn test_write_snapshot_large_chunk() {
+        let temp_dir = tempdir().expect("创建临时目录失败");
+        let snapshot_dir = temp_dir.path().to_path_buf();
+
+        let role_mgr = Arc::new(RoleManager::new("test_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::with_snapshot_dir(
+            "test_node".to_string(),
+            role_mgr,
+            replicator,
+            snapshot_dir,
+        );
+
+        // 生成 1MB 测试数据
+        let large_data: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
+
+        let result = ctx.write_snapshot_chunk(0, &large_data, true);
+        assert!(result.is_ok(), "大数据块写入应成功");
+
+        // 验证数据完整性
+        let path = ctx.get_snapshot_path();
+        let file_content = std::fs::read(&path).expect("读取失败");
+        assert_eq!(file_content.len(), 1024 * 1024, "文件大小应为 1MB");
+        assert_eq!(file_content, large_data, "文件内容应完整");
+    }
+
+    /// 测试快照元数据格式
+    /// 验证元数据文件的解析能力
+    #[test]
+    fn test_snapshot_metadata_format() {
+        let temp_dir = tempdir().expect("创建临时目录失败");
+        let snapshot_dir = temp_dir.path().to_path_buf();
+
+        let role_mgr = Arc::new(RoleManager::new("test_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::with_snapshot_dir(
+            "test_node".to_string(),
+            role_mgr,
+            replicator,
+            snapshot_dir.clone(),
+        );
+
+        *ctx.current_term.write() = 42;
+        *ctx.commit_index.write() = 12345;
+
+        ctx.write_snapshot_chunk(0, b"test", true).expect("写入失败");
+
+        // 解析元数据
+        let meta_path = snapshot_dir.join("snapshot.meta");
+        let meta_content = std::fs::read_to_string(&meta_path).expect("读取元数据失败");
+
+        // 验证可解析性
+        let mut term_found = false;
+        let mut sequence_found = false;
+        let mut timestamp_found = false;
+
+        for line in meta_content.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                match key {
+                    "term" => {
+                        assert_eq!(value, "42");
+                        term_found = true;
+                    }
+                    "sequence" => {
+                        assert_eq!(value, "12345");
+                        sequence_found = true;
+                    }
+                    "timestamp" => {
+                        // 验证是有效的时间戳
+                        let ts: i64 = value.parse().expect("timestamp 应是数字");
+                        assert!(ts > 0, "timestamp 应为正数");
+                        timestamp_found = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(term_found, "元数据应包含 term");
+        assert!(sequence_found, "元数据应包含 sequence");
+        assert!(timestamp_found, "元数据应包含 timestamp");
+    }
+
+    /// 测试快照传输流程模拟
+    /// 业务场景: 模拟完整的 Master→Slave 快照传输
+    ///
+    /// 流程:
+    ///   1. Master 将状态序列化为多个 SnapshotChunk
+    ///   2. 通过 gRPC 流式传输到 Slave
+    ///   3. Slave 调用 write_snapshot_chunk 写入
+    ///   4. 最后更新 commit_index 和 last_applied
+    #[test]
+    fn test_snapshot_transfer_simulation() {
+        let temp_dir = tempdir().expect("创建临时目录失败");
+        let snapshot_dir = temp_dir.path().to_path_buf();
+
+        let role_mgr = Arc::new(RoleManager::new("slave_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::with_snapshot_dir(
+            "slave_node".to_string(),
+            role_mgr,
+            replicator,
+            snapshot_dir.clone(),
+        );
+
+        // 模拟 Master 发送的快照块
+        // 实际场景中这些块通过 install_snapshot gRPC 流接收
+        //
+        // SnapshotChunk 结构体字段说明:
+        //   - term: Leader 的任期号
+        //   - last_included_sequence: 快照包含的最后日志序列号
+        //   - last_included_term: 快照包含的最后日志任期
+        //   - chunk_index: 当前块索引 (从 0 开始)
+        //   - total_chunks: 总块数 (用于进度显示)
+        //   - data: 块数据
+        //   - is_last: 是否为最后一块
+        let chunks = vec![
+            SnapshotChunk {
+                term: 10,
+                last_included_sequence: 500,
+                last_included_term: 9,
+                chunk_index: 0,
+                total_chunks: 3,  // 共 3 个块
+                data: b"QIFI_ACCOUNT_START\n".to_vec(),
+                is_last: false,
+            },
+            SnapshotChunk {
+                term: 10,
+                last_included_sequence: 500,
+                last_included_term: 9,
+                chunk_index: 1,
+                total_chunks: 3,
+                data: b"account_cookie:55550081\nbalance:60470421.77\n".to_vec(),
+                is_last: false,
+            },
+            SnapshotChunk {
+                term: 10,
+                last_included_sequence: 500,
+                last_included_term: 9,
+                chunk_index: 2,
+                total_chunks: 3,
+                data: b"QIFI_ACCOUNT_END\n".to_vec(),
+                is_last: true,
+            },
+        ];
+
+        // 模拟接收处理 (install_snapshot 服务端逻辑)
+        let mut total_bytes = 0u64;
+        for chunk in &chunks {
+            // 更新 term
+            if chunk.term > *ctx.current_term.read() {
+                *ctx.current_term.write() = chunk.term;
+            }
+
+            total_bytes += chunk.data.len() as u64;
+
+            // 写入快照块
+            ctx.write_snapshot_chunk(chunk.chunk_index, &chunk.data, chunk.is_last)
+                .expect("写入快照块失败");
+        }
+
+        // 更新状态 (模拟 install_snapshot 返回后的处理)
+        let last_chunk = chunks.last().unwrap();
+        *ctx.commit_index.write() = last_chunk.last_included_sequence;
+        *ctx.last_applied.write() = last_chunk.last_included_sequence;
+
+        // 验证结果
+        assert_eq!(*ctx.current_term.read(), 10, "term 应更新为 10");
+        assert_eq!(*ctx.commit_index.read(), 500, "commit_index 应更新为 500");
+        assert_eq!(*ctx.last_applied.read(), 500, "last_applied 应更新为 500");
+
+        // 验证快照文件
+        let snapshot_path = ctx.get_snapshot_path();
+        let content = std::fs::read_to_string(&snapshot_path).expect("读取快照失败");
+        assert!(content.contains("QIFI_ACCOUNT_START"));
+        assert!(content.contains("account_cookie:55550081"));
+        assert!(content.contains("balance:60470421.77"));
+        assert!(content.contains("QIFI_ACCOUNT_END"));
+
+        // 验证总字节数
+        let expected_bytes: u64 = chunks.iter().map(|c| c.data.len() as u64).sum();
+        assert_eq!(total_bytes, expected_bytes);
+    }
+
+    /// 测试节点状态采集
+    /// 验证 collect_node_status() 返回合理的系统指标
+    #[test]
+    fn test_collect_node_status() {
+        let temp_dir = tempdir().expect("创建临时目录失败");
+        let snapshot_dir = temp_dir.path().to_path_buf();
+
+        let role_mgr = Arc::new(RoleManager::new("test_node".to_string(), NodeRole::Slave));
+        let replicator = Arc::new(LogReplicator::new(role_mgr.clone(), ReplicationConfig::default()));
+        let ctx = ReplicationContext::with_snapshot_dir(
+            "test_node".to_string(),
+            role_mgr,
+            replicator,
+            snapshot_dir,
+        );
+
+        // 采集节点状态
+        let status = ctx.collect_node_status();
+
+        // 验证 CPU 使用率在合理范围 (0-100%)
+        assert!(status.cpu_usage >= 0.0, "CPU 使用率应 >= 0");
+        assert!(status.cpu_usage <= 100.0, "CPU 使用率应 <= 100");
+
+        // 验证内存使用率在合理范围
+        assert!(status.memory_usage >= 0.0, "内存使用率应 >= 0");
+        assert!(status.memory_usage <= 100.0, "内存使用率应 <= 100");
+
+        // 验证磁盘使用率在合理范围
+        // 注意: 某些容器环境可能获取不到磁盘信息，此时为 0
+        assert!(status.disk_usage >= 0.0, "磁盘使用率应 >= 0");
+        assert!(status.disk_usage <= 100.0, "磁盘使用率应 <= 100");
     }
 }

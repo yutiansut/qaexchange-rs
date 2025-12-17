@@ -478,6 +478,103 @@ impl Default for UserManager {
 mod tests {
     use super::*;
 
+    // ====================================================================================
+    // UserManager 基础测试 @yutiansut @quantaxis
+    //
+    // 用户管理器是交易系统的核心组件之一，负责：
+    // 1. 用户注册与认证（密码使用 bcrypt 加密）
+    // 2. 用户-账户关系管理（一个用户可绑定多个交易账户）
+    // 3. RBAC（基于角色的访问控制）
+    // 4. 用户状态管理（激活/冻结/删除）
+    // ====================================================================================
+
+    /// 测试 UserManager::new() 构造函数
+    ///
+    /// 验证逻辑：
+    /// - 新建的管理器应该没有任何用户
+    /// - 所有索引（用户名、手机、邮箱）都应为空
+    /// - 存储管理器默认为 None
+    #[test]
+    fn test_user_manager_new() {
+        let mgr = UserManager::new();
+
+        // 验证初始状态：所有容器为空
+        assert_eq!(mgr.users.len(), 0, "初始用户数应为0");
+        assert_eq!(mgr.username_index.len(), 0, "用户名索引应为空");
+        assert_eq!(mgr.phone_index.len(), 0, "手机号索引应为空");
+        assert_eq!(mgr.email_index.len(), 0, "邮箱索引应为空");
+        assert!(mgr.storage.is_none(), "存储管理器默认为None");
+    }
+
+    /// 测试 Default trait 实现
+    ///
+    /// 验证 Default::default() 与 new() 行为一致
+    #[test]
+    fn test_user_manager_default() {
+        let mgr = UserManager::default();
+
+        assert_eq!(mgr.user_count(), 0);
+    }
+
+    /// 测试第一个用户自动成为管理员
+    ///
+    /// 业务规则：
+    /// - 系统中第一个注册的用户自动获得 Admin 角色
+    /// - 后续注册的用户默认为普通用户（Trader 角色）
+    /// - 这是为了确保系统有初始管理员，无需人工干预
+    ///
+    /// 权限差异：
+    /// - Admin: 拥有所有权限（用户管理、系统管理、交易管理等）
+    /// - Trader: 仅有交易相关权限
+    #[test]
+    fn test_first_user_becomes_admin() {
+        let mgr = UserManager::new();
+
+        // 注册第一个用户
+        let req1 = UserRegisterRequest {
+            username: "first_user".to_string(),
+            password: "password123".to_string(),
+            phone: None,
+            email: None,
+            real_name: None,
+            id_card: None,
+        };
+
+        let first_user = mgr.register(req1).unwrap();
+
+        // 验证：第一个用户应该是管理员
+        assert!(
+            first_user.is_admin(),
+            "第一个注册的用户应自动成为管理员"
+        );
+        assert!(
+            first_user.has_role(UserRole::Admin),
+            "第一个用户应拥有 Admin 角色"
+        );
+
+        // 注册第二个用户
+        let req2 = UserRegisterRequest {
+            username: "second_user".to_string(),
+            password: "password123".to_string(),
+            phone: None,
+            email: None,
+            real_name: None,
+            id_card: None,
+        };
+
+        let second_user = mgr.register(req2).unwrap();
+
+        // 验证：第二个用户不是管理员
+        assert!(
+            !second_user.is_admin(),
+            "后续用户不应自动成为管理员"
+        );
+        assert!(
+            second_user.has_role(UserRole::Trader),
+            "普通用户应拥有 Trader 角色"
+        );
+    }
+
     #[test]
     fn test_user_registration() {
         let mgr = UserManager::new();

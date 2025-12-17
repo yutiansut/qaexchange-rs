@@ -733,6 +733,76 @@ impl Default for AccountManager {
 mod tests {
     use super::*;
 
+    // ==================== AccountManager 基础测试 @yutiansut @quantaxis ====================
+
+    /// 测试 AccountManager::new()
+    #[test]
+    fn test_account_manager_new() {
+        let mgr = AccountManager::new();
+
+        assert_eq!(mgr.accounts.len(), 0);
+        assert_eq!(mgr.metadata.len(), 0);
+        assert_eq!(mgr.user_accounts.len(), 0);
+        assert!(mgr.notification_broker.is_none());
+        assert!(mgr.user_manager.is_none());
+    }
+
+    /// 测试 Default trait
+    #[test]
+    fn test_account_manager_default() {
+        let mgr = AccountManager::default();
+
+        assert_eq!(mgr.accounts.len(), 0);
+        assert!(mgr.notification_broker.is_none());
+    }
+
+    /// 测试 with_notification_broker
+    #[test]
+    fn test_with_notification_broker() {
+        let broker = Arc::new(NotificationBroker::new());
+        let mgr = AccountManager::with_notification_broker(broker);
+
+        assert!(mgr.notification_broker.is_some());
+    }
+
+    /// 测试 set_notification_broker
+    #[test]
+    fn test_set_notification_broker() {
+        let mut mgr = AccountManager::new();
+        assert!(mgr.notification_broker.is_none());
+
+        let broker = Arc::new(NotificationBroker::new());
+        mgr.set_notification_broker(broker);
+
+        assert!(mgr.notification_broker.is_some());
+    }
+
+    /// 测试 notification_broker getter
+    #[test]
+    fn test_notification_broker_getter() {
+        let mut mgr = AccountManager::new();
+        assert!(mgr.notification_broker().is_none());
+
+        let broker = Arc::new(NotificationBroker::new());
+        mgr.set_notification_broker(broker);
+
+        assert!(mgr.notification_broker().is_some());
+    }
+
+    /// 测试 set_user_manager
+    #[test]
+    fn test_set_user_manager() {
+        let mut mgr = AccountManager::new();
+        assert!(mgr.user_manager.is_none());
+
+        let user_mgr = Arc::new(UserManager::new());
+        mgr.set_user_manager(user_mgr);
+
+        assert!(mgr.user_manager.is_some());
+    }
+
+    // ==================== 开户测试 @yutiansut @quantaxis ====================
+
     #[test]
     fn test_open_account() {
         let mgr = AccountManager::new();
@@ -879,6 +949,646 @@ mod tests {
                 );
             }
             _ => panic!("Expected AccountError for nonexistent account"),
+        }
+    }
+
+    // ==================== 开户扩展测试 @yutiansut @quantaxis ====================
+
+    /// 测试自动生成账户ID
+    #[test]
+    fn test_open_account_auto_id() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: None, // 不提供账户ID，自动生成
+            account_name: "Auto ID Account".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        let result = mgr.open_account(req);
+        assert!(result.is_ok());
+
+        let account_id = result.unwrap();
+        assert!(account_id.starts_with("ACC_"), "Auto-generated ID should start with ACC_");
+    }
+
+    /// 测试零初始资金开户
+    #[test]
+    fn test_open_account_zero_cash() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("zero_cash_account".to_string()),
+            account_name: "Zero Cash".to_string(),
+            init_cash: 0.0,
+            account_type: AccountType::Individual,
+        };
+
+        let result = mgr.open_account(req);
+        assert!(result.is_ok());
+    }
+
+    /// 测试不同账户类型
+    #[test]
+    fn test_open_account_different_types() {
+        let mgr = AccountManager::new();
+
+        let types = [
+            AccountType::Individual,
+            AccountType::Institutional,
+            AccountType::MarketMaker,
+        ];
+
+        for (i, account_type) in types.iter().enumerate() {
+            let req = OpenAccountRequest {
+                user_id: "user_001".to_string(),
+                account_id: Some(format!("account_type_{}", i)),
+                account_name: format!("Account Type {:?}", account_type),
+                init_cash: 100000.0,
+                account_type: *account_type,
+            };
+
+            let result = mgr.open_account(req);
+            assert!(result.is_ok());
+
+            let metadata = mgr.get_account_type(&format!("account_type_{}", i));
+            assert_eq!(metadata, Some(*account_type));
+        }
+    }
+
+    // ==================== 销户测试 @yutiansut @quantaxis ====================
+
+    /// 测试销户不存在的账户
+    #[test]
+    fn test_close_account_not_found() {
+        let mgr = AccountManager::new();
+
+        let result = mgr.close_account("non_existent_account");
+        assert!(result.is_err());
+
+        match result {
+            Err(ExchangeError::AccountError(msg)) => {
+                assert!(msg.contains("not found"));
+            }
+            _ => panic!("Expected AccountError"),
+        }
+    }
+
+    // ==================== 查询测试 @yutiansut @quantaxis ====================
+
+    /// 测试 get_account 成功
+    #[test]
+    fn test_get_account_success() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("get_test".to_string()),
+            account_name: "Get Test".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let account = mgr.get_account("get_test");
+        assert!(account.is_ok());
+    }
+
+    /// 测试 get_account 不存在
+    #[test]
+    fn test_get_account_not_found() {
+        let mgr = AccountManager::new();
+
+        let account = mgr.get_account("non_existent");
+        assert!(account.is_err());
+    }
+
+    /// 测试 get_accounts_by_user 使用 account_id 模式
+    #[test]
+    fn test_get_accounts_by_user_account_id_mode() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("ACC_direct_login".to_string()),
+            account_name: "Direct Login".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        // 使用 account_id 直接查询（交易所模式）
+        let accounts = mgr.get_accounts_by_user("ACC_direct_login");
+        assert_eq!(accounts.len(), 1);
+    }
+
+    /// 测试 get_accounts_by_user 不存在用户
+    #[test]
+    fn test_get_accounts_by_user_not_found() {
+        let mgr = AccountManager::new();
+
+        let accounts = mgr.get_accounts_by_user("non_existent_user");
+        assert!(accounts.is_empty());
+    }
+
+    /// 测试 get_default_account 成功
+    #[test]
+    fn test_get_default_account_success() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_default".to_string(),
+            account_id: Some("default_account".to_string()),
+            account_name: "Default".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let account = mgr.get_default_account("user_default");
+        assert!(account.is_ok());
+    }
+
+    /// 测试 get_default_account 用户不存在
+    #[test]
+    fn test_get_default_account_not_found() {
+        let mgr = AccountManager::new();
+
+        let account = mgr.get_default_account("non_existent_user");
+        assert!(account.is_err());
+    }
+
+    /// 测试 get_user_account_count 空用户
+    #[test]
+    fn test_get_user_account_count_empty() {
+        let mgr = AccountManager::new();
+
+        let count = mgr.get_user_account_count("non_existent");
+        assert_eq!(count, 0);
+    }
+
+    /// 测试 get_user_account_count 有账户
+    #[test]
+    fn test_get_user_account_count_with_accounts() {
+        let mgr = AccountManager::new();
+
+        for i in 0..3 {
+            let req = OpenAccountRequest {
+                user_id: "count_user".to_string(),
+                account_id: Some(format!("count_acc_{}", i)),
+                account_name: format!("Count {}", i),
+                init_cash: 100000.0,
+                account_type: AccountType::Individual,
+            };
+            mgr.open_account(req).unwrap();
+        }
+
+        let count = mgr.get_user_account_count("count_user");
+        assert_eq!(count, 3);
+    }
+
+    // ==================== 所有权验证测试 @yutiansut @quantaxis ====================
+
+    /// 测试交易所模式（空用户ID）
+    #[test]
+    fn test_verify_ownership_exchange_mode_empty_user() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "owner".to_string(),
+            account_id: Some("ACC_exchange".to_string()),
+            account_name: "Exchange Mode".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        // 空用户ID应该通过（交易所模式）
+        let result = mgr.verify_account_ownership("ACC_exchange", "");
+        assert!(result.is_ok());
+    }
+
+    /// 测试交易所模式（user_id == account_id）
+    #[test]
+    fn test_verify_ownership_direct_login_mode() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "owner".to_string(),
+            account_id: Some("ACC_direct".to_string()),
+            account_name: "Direct Login".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        // user_id == account_id 应该通过（直接登录）
+        let result = mgr.verify_account_ownership("ACC_direct", "ACC_direct");
+        assert!(result.is_ok());
+    }
+
+    // ==================== 持仓统计测试 @yutiansut @quantaxis ====================
+
+    /// 测试 get_instrument_open_interest 空账户
+    #[test]
+    fn test_get_instrument_open_interest_empty() {
+        let mgr = AccountManager::new();
+
+        let oi = mgr.get_instrument_open_interest("cu2501");
+        assert_eq!(oi, 0);
+    }
+
+    /// 测试 get_instrument_open_interest 无持仓
+    #[test]
+    fn test_get_instrument_open_interest_no_position() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("oi_test".to_string()),
+            account_name: "OI Test".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let oi = mgr.get_instrument_open_interest("cu2501");
+        assert_eq!(oi, 0);
+    }
+
+    // ==================== QIFI 查询测试 @yutiansut @quantaxis ====================
+
+    /// 测试 get_account_qifi
+    #[test]
+    fn test_get_account_qifi() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("qifi_test".to_string()),
+            account_name: "QIFI Test".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let qifi = mgr.get_account_qifi("qifi_test");
+        assert!(qifi.is_ok());
+
+        let account_data = qifi.unwrap();
+        assert_eq!(account_data.user_id, "qifi_test");
+    }
+
+    /// 测试 get_account_qifi 不存在
+    #[test]
+    fn test_get_account_qifi_not_found() {
+        let mgr = AccountManager::new();
+
+        let qifi = mgr.get_account_qifi("non_existent");
+        assert!(qifi.is_err());
+    }
+
+    /// 测试 get_qifi_slice
+    #[test]
+    fn test_get_qifi_slice() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("slice_test".to_string()),
+            account_name: "Slice Test".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let slice = mgr.get_qifi_slice("slice_test");
+        assert!(slice.is_ok());
+
+        let qifi = slice.unwrap();
+        assert_eq!(qifi.account_cookie, "slice_test");
+    }
+
+    /// 测试 get_mom_slice
+    #[test]
+    fn test_get_mom_slice() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("mom_test".to_string()),
+            account_name: "MOM Test".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let mom = mgr.get_mom_slice("mom_test");
+        assert!(mom.is_ok());
+    }
+
+    // ==================== 批量查询测试 @yutiansut @quantaxis ====================
+
+    /// 测试 get_all_accounts 空
+    #[test]
+    fn test_get_all_accounts_empty() {
+        let mgr = AccountManager::new();
+
+        let accounts = mgr.get_all_accounts();
+        assert!(accounts.is_empty());
+    }
+
+    /// 测试 get_all_accounts 有数据
+    #[test]
+    fn test_get_all_accounts_with_data() {
+        let mgr = AccountManager::new();
+
+        for i in 0..5 {
+            let req = OpenAccountRequest {
+                user_id: format!("user_{}", i),
+                account_id: Some(format!("all_acc_{}", i)),
+                account_name: format!("All {}", i),
+                init_cash: 100000.0,
+                account_type: AccountType::Individual,
+            };
+            mgr.open_account(req).unwrap();
+        }
+
+        let accounts = mgr.get_all_accounts();
+        assert_eq!(accounts.len(), 5);
+    }
+
+    /// 测试 get_account_count
+    #[test]
+    fn test_get_account_count() {
+        let mgr = AccountManager::new();
+
+        assert_eq!(mgr.get_account_count(), 0);
+
+        for i in 0..3 {
+            let req = OpenAccountRequest {
+                user_id: format!("user_{}", i),
+                account_id: Some(format!("count_{}", i)),
+                account_name: format!("Count {}", i),
+                init_cash: 100000.0,
+                account_type: AccountType::Individual,
+            };
+            mgr.open_account(req).unwrap();
+        }
+
+        assert_eq!(mgr.get_account_count(), 3);
+    }
+
+    // ==================== 时间同步测试 @yutiansut @quantaxis ====================
+
+    /// 测试 sync_time
+    #[test]
+    fn test_sync_time() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("sync_test".to_string()),
+            account_name: "Sync Test".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        // 调用同步时间不应该panic
+        mgr.sync_time();
+    }
+
+    // ==================== 元数据查询测试 @yutiansut @quantaxis ====================
+
+    /// 测试 get_account_type 成功
+    #[test]
+    fn test_get_account_type() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("type_test".to_string()),
+            account_name: "Type Test".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::MarketMaker,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let account_type = mgr.get_account_type("type_test");
+        assert_eq!(account_type, Some(AccountType::MarketMaker));
+    }
+
+    /// 测试 get_account_type 不存在
+    #[test]
+    fn test_get_account_type_not_found() {
+        let mgr = AccountManager::new();
+
+        let account_type = mgr.get_account_type("non_existent");
+        assert!(account_type.is_none());
+    }
+
+    /// 测试 get_account_owner
+    #[test]
+    fn test_get_account_owner() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "owner_user".to_string(),
+            account_id: Some("owner_test".to_string()),
+            account_name: "Owner Test".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let owner = mgr.get_account_owner("owner_test");
+        assert_eq!(owner, Some("owner_user".to_string()));
+    }
+
+    /// 测试 get_account_owner 不存在
+    #[test]
+    fn test_get_account_owner_not_found() {
+        let mgr = AccountManager::new();
+
+        let owner = mgr.get_account_owner("non_existent");
+        assert!(owner.is_none());
+    }
+
+    // ==================== 快照恢复测试 @yutiansut @quantaxis ====================
+
+    /// 测试 update_balance_for_recovery
+    #[test]
+    fn test_update_balance_for_recovery() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("recovery_test".to_string()),
+            account_name: "Recovery Test".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let result = mgr.update_balance_for_recovery(
+            "recovery_test",
+            200000.0, // balance
+            180000.0, // available
+            50000.0,  // deposit
+            10000.0,  // withdraw
+        );
+
+        assert!(result.is_ok());
+    }
+
+    /// 测试 update_balance_for_recovery 账户不存在
+    #[test]
+    fn test_update_balance_for_recovery_not_found() {
+        let mgr = AccountManager::new();
+
+        let result = mgr.update_balance_for_recovery(
+            "non_existent",
+            200000.0,
+            180000.0,
+            50000.0,
+            10000.0,
+        );
+
+        assert!(result.is_err());
+    }
+
+    /// 测试 update_metadata_for_recovery
+    #[test]
+    fn test_update_metadata_for_recovery() {
+        let mgr = AccountManager::new();
+
+        let req = OpenAccountRequest {
+            user_id: "user_001".to_string(),
+            account_id: Some("meta_recovery".to_string()),
+            account_name: "Meta Recovery".to_string(),
+            init_cash: 100000.0,
+            account_type: AccountType::Individual,
+        };
+
+        mgr.open_account(req).unwrap();
+
+        let result = mgr.update_metadata_for_recovery(
+            "meta_recovery",
+            AccountType::Institutional,
+            1702800000,
+        );
+
+        assert!(result.is_ok());
+
+        // 验证更新
+        let account_type = mgr.get_account_type("meta_recovery");
+        assert_eq!(account_type, Some(AccountType::Institutional));
+    }
+
+    /// 测试 update_metadata_for_recovery 账户不存在
+    #[test]
+    fn test_update_metadata_for_recovery_not_found() {
+        let mgr = AccountManager::new();
+
+        let result = mgr.update_metadata_for_recovery(
+            "non_existent",
+            AccountType::Institutional,
+            1702800000,
+        );
+
+        assert!(result.is_err());
+    }
+
+    /// 测试 restore_from_snapshots 目录不存在
+    #[test]
+    fn test_restore_from_snapshots_dir_not_exists() {
+        let mgr = AccountManager::new();
+
+        let result = mgr.restore_from_snapshots("/non/existent/path");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    // ==================== 并发测试 @yutiansut @quantaxis ====================
+
+    /// 测试并发开户
+    #[test]
+    fn test_concurrent_open_accounts() {
+        use std::thread;
+
+        let mgr = Arc::new(AccountManager::new());
+        let mut handles = vec![];
+
+        for i in 0..10 {
+            let mgr_clone = mgr.clone();
+            handles.push(thread::spawn(move || {
+                let req = OpenAccountRequest {
+                    user_id: format!("user_{}", i),
+                    account_id: Some(format!("concurrent_acc_{}", i)),
+                    account_name: format!("Concurrent {}", i),
+                    init_cash: 100000.0,
+                    account_type: AccountType::Individual,
+                };
+                mgr_clone.open_account(req)
+            }));
+        }
+
+        for handle in handles {
+            assert!(handle.join().unwrap().is_ok());
+        }
+
+        assert_eq!(mgr.get_account_count(), 10);
+    }
+
+    /// 测试并发查询
+    #[test]
+    fn test_concurrent_queries() {
+        use std::thread;
+
+        let mgr = Arc::new(AccountManager::new());
+
+        // 先创建一些账户
+        for i in 0..5 {
+            let req = OpenAccountRequest {
+                user_id: format!("user_{}", i),
+                account_id: Some(format!("query_acc_{}", i)),
+                account_name: format!("Query {}", i),
+                init_cash: 100000.0,
+                account_type: AccountType::Individual,
+            };
+            mgr.open_account(req).unwrap();
+        }
+
+        // 并发查询
+        let mut handles = vec![];
+        for i in 0..10 {
+            let mgr_clone = mgr.clone();
+            handles.push(thread::spawn(move || {
+                let _count = mgr_clone.get_account_count();
+                let _all = mgr_clone.get_all_accounts();
+                let _acc = mgr_clone.get_account(&format!("query_acc_{}", i % 5));
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
         }
     }
 }

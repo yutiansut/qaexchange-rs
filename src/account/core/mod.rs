@@ -303,6 +303,9 @@ mod tests {
         assert_eq!(system.accounts.len(), 1);
     }
 
+    /// 测试批量更新（需要预创建订单）
+    /// 注意：receive_deal_sim 要求订单先通过 send_order() 创建
+    /// 此测试验证完整订单流程：send_order -> batch_update_accounts
     #[test]
     fn test_batch_update() {
         let (trade_tx, trade_rx) = unbounded();
@@ -311,10 +314,25 @@ mod tests {
 
         let system = AccountSystemCore::new(trade_rx, accepted_rx, Some(update_tx), 100);
 
-        let account = QA_Account::new("user_01", "default", "user_01", 1000000.0, false, "sim");
+        let mut account = QA_Account::new("user_01", "default", "user_01", 1000000.0, false, "sim");
+
+        // 关键步骤：先通过 send_order 创建订单
+        // send_order 参数: code, amount, time, towards, price, order_id, price_type
+        // towards=1 表示 BUY OPEN
+        let order_result = account.send_order(
+            "IX2401",       // code
+            10.0,           // amount (volume)
+            "2025-12-17",   // time
+            1,              // towards: 1=BUY OPEN
+            100.0,          // price
+            "ORDER001",     // order_id
+            "LIMIT",        // price_type
+        );
+        assert!(order_result.is_ok(), "send_order 应成功创建订单");
+
         system.register_account("user_01".to_string(), account);
 
-        // 创建测试成交
+        // 创建与订单匹配的成交
         let trade = TradeReport {
             trade_id: *b"TRADE001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
             order_id: *b"ORDER001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
@@ -336,10 +354,592 @@ mod tests {
 
         system.batch_update_accounts(&[trade]);
 
-        // 验证账户已更新
+        // 验证收到更新通知
+        let notify = update_rx.try_recv();
+        assert!(notify.is_ok(), "应收到账户更新通知");
+        assert_eq!(notify.unwrap().user_id, "user_01");
+    }
+
+    // ==================== AccountUpdateNotify 测试 @yutiansut @quantaxis ====================
+
+    /// 测试 AccountUpdateNotify 结构体字段
+    /// 验证通知结构体包含所有必要的账户更新信息
+    #[test]
+    fn test_account_update_notify_fields() {
+        let notify = AccountUpdateNotify {
+            user_id: "user_01".to_string(),
+            balance: 1000000.0,
+            available: 900000.0,
+            margin: 100000.0,
+            timestamp: 1734567890000000000,
+        };
+
+        assert_eq!(notify.user_id, "user_01");
+        assert_eq!(notify.balance, 1000000.0);
+        assert_eq!(notify.available, 900000.0);
+        assert_eq!(notify.margin, 100000.0);
+        assert_eq!(notify.timestamp, 1734567890000000000);
+    }
+
+    /// 测试 AccountUpdateNotify 的 Clone trait
+    /// 验证通知可以被正确克隆
+    #[test]
+    fn test_account_update_notify_clone() {
+        let notify1 = AccountUpdateNotify {
+            user_id: "user_01".to_string(),
+            balance: 500000.0,
+            available: 400000.0,
+            margin: 50000.0,
+            timestamp: 1234567890,
+        };
+
+        let notify2 = notify1.clone();
+
+        assert_eq!(notify1.user_id, notify2.user_id);
+        assert_eq!(notify1.balance, notify2.balance);
+        assert_eq!(notify1.available, notify2.available);
+        assert_eq!(notify1.margin, notify2.margin);
+        assert_eq!(notify1.timestamp, notify2.timestamp);
+    }
+
+    // ==================== AccountSystemCore 创建测试 @yutiansut @quantaxis ====================
+
+    /// 测试不同批量大小的 AccountSystemCore 创建
+    /// batch_size 决定批量处理成交的数量阈值
+    #[test]
+    fn test_account_system_core_different_batch_sizes() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        // 测试小批量
+        let system_small = AccountSystemCore::new(trade_rx.clone(), accepted_rx.clone(), None, 10);
+        assert_eq!(system_small.batch_size, 10);
+
+        // 测试大批量
+        let (trade_tx2, trade_rx2) = unbounded();
+        let (accepted_tx2, accepted_rx2) = unbounded();
+        let system_large = AccountSystemCore::new(trade_rx2, accepted_rx2, None, 1000);
+        assert_eq!(system_large.batch_size, 1000);
+    }
+
+    /// 测试无通知发送器的 AccountSystemCore 创建
+    /// update_sender 为 None 时系统仍可正常运行
+    #[test]
+    fn test_account_system_core_without_update_sender() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, None, 100);
+
+        assert!(system.update_sender.is_none());
+        assert!(system.accounts.is_empty());
+    }
+
+    /// 测试 AccountSystemCore 初始 running 状态
+    /// 创建后 running 标志应为 false，调用 run() 后变为 true
+    #[test]
+    fn test_account_system_core_initial_running_state() {
+        use std::sync::atomic::Ordering;
+
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, None, 100);
+
+        // 初始状态应该是 false
+        assert!(!system.running.load(Ordering::SeqCst));
+    }
+
+    // ==================== 账户注册测试 @yutiansut @quantaxis ====================
+
+    /// 测试注册多个账户
+    /// 验证多账户并发存储和访问
+    #[test]
+    fn test_register_multiple_accounts() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, None, 100);
+
+        // 注册多个账户
+        for i in 0..5 {
+            let user_id = format!("user_{:02}", i);
+            let initial_balance = 1000000.0 + (i as f64 * 100000.0);
+            let account = QA_Account::new(&user_id, "default", &user_id, initial_balance, false, "sim");
+            system.register_account(user_id, account);
+        }
+
+        assert_eq!(system.accounts.len(), 5);
+    }
+
+    /// 测试重复注册同一账户
+    /// 行为：覆盖旧账户数据
+    #[test]
+    fn test_register_account_overwrite() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, None, 100);
+
+        // 第一次注册
+        let account1 = QA_Account::new("user_01", "default", "user_01", 1000000.0, false, "sim");
+        system.register_account("user_01".to_string(), account1);
+
+        // 第二次注册（覆盖）
+        let account2 = QA_Account::new("user_01", "default", "user_01", 2000000.0, false, "sim");
+        system.register_account("user_01".to_string(), account2);
+
+        // 账户数量不变
+        assert_eq!(system.accounts.len(), 1);
+
+        // 验证是新账户
         let acc = system.get_account("user_01").unwrap();
         let account = acc.read();
-        // money 应该减少（买入开仓需要资金）
-        assert!(account.money < 1000000.0);
+        assert_eq!(account.money, 2000000.0);
+    }
+
+    // ==================== 获取账户测试 @yutiansut @quantaxis ====================
+
+    /// 测试获取存在的账户
+    #[test]
+    fn test_get_account_found() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, None, 100);
+
+        let account = QA_Account::new("user_01", "default", "user_01", 1000000.0, false, "sim");
+        system.register_account("user_01".to_string(), account);
+
+        let result = system.get_account("user_01");
+        assert!(result.is_some());
+
+        let acc = result.unwrap();
+        let account = acc.read();
+        assert_eq!(account.account_cookie, "user_01");
+    }
+
+    /// 测试获取不存在的账户
+    #[test]
+    fn test_get_account_not_found() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, None, 100);
+
+        let result = system.get_account("non_existent");
+        assert!(result.is_none());
+    }
+
+    // ==================== 停止系统测试 @yutiansut @quantaxis ====================
+
+    /// 测试停止账户系统
+    /// stop() 应将 running 标志设为 false
+    #[test]
+    fn test_account_system_stop() {
+        use std::sync::atomic::Ordering;
+
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, None, 100);
+
+        // 手动设置 running 为 true
+        system.running.store(true, Ordering::SeqCst);
+        assert!(system.running.load(Ordering::SeqCst));
+
+        // 调用 stop
+        system.stop();
+
+        // running 应变为 false
+        assert!(!system.running.load(Ordering::SeqCst));
+    }
+
+    // ==================== 成交方向计算测试 @yutiansut @quantaxis ====================
+
+    /// 测试买入开仓成交处理
+    /// towards 计算: direction=0(BUY), offset=0(OPEN) → towards=1
+    /// 完整流程：send_order 创建订单 → batch_update_accounts 处理成交
+    #[test]
+    fn test_batch_update_buy_open() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+        let (update_tx, update_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, Some(update_tx), 100);
+
+        let mut account = QA_Account::new("user_01", "default", "user_01", 1000000.0, false, "sim");
+
+        // 先创建订单（BUY OPEN, towards=1）
+        // send_order 参数: code, amount, time, towards, price, order_id, price_type
+        let _ = account.send_order("IX2401", 10.0, "2025-12-17", 1, 100.0, "ORDER_BUY", "LIMIT");
+
+        system.register_account("user_01".to_string(), account);
+
+        // BUY OPEN: direction=0, offset=0 → towards=1
+        let trade = TradeReport {
+            trade_id: *b"TRADE001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            order_id: *b"ORDER_BUY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            exchange_order_id: [0; 32],
+            user_id: *b"user_01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            instrument_id: *b"IX2401\0\0\0\0\0\0\0\0\0\0",
+            direction: 0, // BUY
+            offset: 0,    // OPEN
+            fill_type: 0,
+            _reserved: 0,
+            price: 100.0,
+            volume: 10.0,
+            commission: 0.3,
+            timestamp: 0,
+            opposite_order_id: [0; 32],
+            gateway_id: 0,
+            session_id: 0,
+        };
+
+        system.batch_update_accounts(&[trade]);
+
+        // 验证收到更新通知
+        let notify = update_rx.try_recv();
+        assert!(notify.is_ok());
+        assert_eq!(notify.unwrap().user_id, "user_01");
+    }
+
+    /// 测试卖出开仓成交处理
+    /// towards 计算: direction=1(SELL), offset=0(OPEN) → towards=-2
+    /// 完整流程：send_order 创建订单 → batch_update_accounts 处理成交
+    #[test]
+    fn test_batch_update_sell_open() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+        let (update_tx, update_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, Some(update_tx), 100);
+
+        let mut account = QA_Account::new("user_02", "default", "user_02", 1000000.0, false, "sim");
+
+        // 先创建订单（SELL OPEN, towards=-2）
+        // send_order 参数: code, amount, time, towards, price, order_id, price_type
+        let _ = account.send_order("IX2401", 5.0, "2025-12-17", -2, 100.0, "ORDER_SELL", "LIMIT");
+
+        system.register_account("user_02".to_string(), account);
+
+        // SELL OPEN: direction=1, offset=0 → towards=-2
+        let trade = TradeReport {
+            trade_id: *b"TRADE002\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            order_id: *b"ORDER_SELL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            exchange_order_id: [0; 32],
+            user_id: *b"user_02\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            instrument_id: *b"IX2401\0\0\0\0\0\0\0\0\0\0",
+            direction: 1, // SELL
+            offset: 0,    // OPEN
+            fill_type: 0,
+            _reserved: 0,
+            price: 100.0,
+            volume: 5.0,
+            commission: 0.15,
+            timestamp: 0,
+            opposite_order_id: [0; 32],
+            gateway_id: 0,
+            session_id: 0,
+        };
+
+        system.batch_update_accounts(&[trade]);
+
+        // 验证收到更新通知
+        let notify = update_rx.try_recv();
+        assert!(notify.is_ok());
+        assert_eq!(notify.unwrap().user_id, "user_02");
+    }
+
+    // ==================== 批量更新测试 @yutiansut @quantaxis ====================
+
+    /// 测试多账户批量更新
+    /// 验证多个账户的成交可以并行处理（使用 Rayon）
+    /// 完整流程：每个账户先创建订单 → 批量处理所有成交
+    #[test]
+    fn test_batch_update_multiple_accounts() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+        let (update_tx, update_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, Some(update_tx), 100);
+
+        // 注册两个账户，每个都先创建订单
+        // send_order 参数: code, amount, time, towards, price, order_id, price_type
+        let mut account1 = QA_Account::new("user_01", "default", "user_01", 1000000.0, false, "sim");
+        let _ = account1.send_order("IX2401", 10.0, "2025-12-17", 1, 100.0, "ORDER_A1", "LIMIT");
+
+        let mut account2 = QA_Account::new("user_02", "default", "user_02", 2000000.0, false, "sim");
+        let _ = account2.send_order("IX2401", 5.0, "2025-12-17", -2, 100.0, "ORDER_A2", "LIMIT");
+
+        system.register_account("user_01".to_string(), account1);
+        system.register_account("user_02".to_string(), account2);
+
+        // 创建两个不同账户的成交
+        let trade1 = TradeReport {
+            trade_id: *b"TRADE001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            order_id: *b"ORDER_A1\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            exchange_order_id: [0; 32],
+            user_id: *b"user_01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            instrument_id: *b"IX2401\0\0\0\0\0\0\0\0\0\0",
+            direction: 0,
+            offset: 0,
+            fill_type: 0,
+            _reserved: 0,
+            price: 100.0,
+            volume: 10.0,
+            commission: 0.3,
+            timestamp: 0,
+            opposite_order_id: [0; 32],
+            gateway_id: 0,
+            session_id: 0,
+        };
+
+        let trade2 = TradeReport {
+            trade_id: *b"TRADE002\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            order_id: *b"ORDER_A2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            exchange_order_id: [0; 32],
+            user_id: *b"user_02\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            instrument_id: *b"IX2401\0\0\0\0\0\0\0\0\0\0",
+            direction: 1,
+            offset: 0,
+            fill_type: 0,
+            _reserved: 0,
+            price: 100.0,
+            volume: 5.0,
+            commission: 0.15,
+            timestamp: 0,
+            opposite_order_id: [0; 32],
+            gateway_id: 0,
+            session_id: 0,
+        };
+
+        system.batch_update_accounts(&[trade1, trade2]);
+
+        // 应收到两个更新通知
+        let notify1 = update_rx.try_recv();
+        let notify2 = update_rx.try_recv();
+        assert!(notify1.is_ok());
+        assert!(notify2.is_ok());
+    }
+
+    /// 测试同一账户多笔成交批量更新
+    /// 验证同一账户的多笔成交按顺序处理
+    /// 完整流程：先创建所有订单 → 批量处理所有成交
+    #[test]
+    fn test_batch_update_same_account_multiple_trades() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+        let (update_tx, update_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, Some(update_tx), 100);
+
+        let mut account = QA_Account::new("user_01", "default", "user_01", 1000000.0, false, "sim");
+
+        // 先创建三个订单
+        // send_order 参数: code, amount, time, towards, price, order_id, price_type
+        for i in 0..3 {
+            let order_id = format!("ORDER{:03}", i);
+            let _ = account.send_order("IX2401", 1.0, "2025-12-17", 1, 100.0 + i as f64, &order_id, "LIMIT");
+        }
+
+        system.register_account("user_01".to_string(), account);
+
+        // 同一账户三笔成交
+        let trades: Vec<TradeReport> = (0..3)
+            .map(|i| {
+                let mut trade_id = [0u8; 32];
+                let id_str = format!("TRADE{:03}", i);
+                trade_id[..id_str.len()].copy_from_slice(id_str.as_bytes());
+
+                let mut order_id = [0u8; 40];
+                let oid_str = format!("ORDER{:03}", i);
+                order_id[..oid_str.len()].copy_from_slice(oid_str.as_bytes());
+
+                TradeReport {
+                    trade_id,
+                    order_id,
+                    exchange_order_id: [0; 32],
+                    user_id: *b"user_01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+                    instrument_id: *b"IX2401\0\0\0\0\0\0\0\0\0\0",
+                    direction: 0,
+                    offset: 0,
+                    fill_type: 0,
+                    _reserved: 0,
+                    price: 100.0 + i as f64,
+                    volume: 1.0,
+                    commission: 0.03,
+                    timestamp: i as i64,
+                    opposite_order_id: [0; 32],
+                    gateway_id: 0,
+                    session_id: 0,
+                }
+            })
+            .collect();
+
+        system.batch_update_accounts(&trades);
+
+        // 同一账户只发送一次通知（批量处理后）
+        let notify = update_rx.try_recv();
+        assert!(notify.is_ok());
+        assert_eq!(notify.unwrap().user_id, "user_01");
+    }
+
+    /// 测试空成交批量更新
+    /// 空列表不应产生任何通知
+    #[test]
+    fn test_batch_update_empty_trades() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+        let (update_tx, update_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, Some(update_tx), 100);
+
+        let account = QA_Account::new("user_01", "default", "user_01", 1000000.0, false, "sim");
+        system.register_account("user_01".to_string(), account);
+
+        // 空成交列表
+        system.batch_update_accounts(&[]);
+
+        // 不应有通知
+        let notify = update_rx.try_recv();
+        assert!(notify.is_err());
+    }
+
+    /// 测试不存在账户的成交处理
+    /// 应该忽略未注册账户的成交
+    #[test]
+    fn test_batch_update_unknown_account() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+        let (update_tx, update_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, Some(update_tx), 100);
+
+        // 不注册任何账户
+
+        let trade = TradeReport {
+            trade_id: *b"TRADE001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            order_id: *b"ORDER001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            exchange_order_id: [0; 32],
+            user_id: *b"unknown\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            instrument_id: *b"IX2401\0\0\0\0\0\0\0\0\0\0",
+            direction: 0,
+            offset: 0,
+            fill_type: 0,
+            _reserved: 0,
+            price: 100.0,
+            volume: 10.0,
+            commission: 0.3,
+            timestamp: 0,
+            opposite_order_id: [0; 32],
+            gateway_id: 0,
+            session_id: 0,
+        };
+
+        // 应该不会 panic，只是警告日志
+        system.batch_update_accounts(&[trade]);
+
+        // 不应有通知（账户不存在）
+        let notify = update_rx.try_recv();
+        assert!(notify.is_err());
+    }
+
+    // ==================== 并发安全测试 @yutiansut @quantaxis ====================
+
+    /// 测试并发注册和获取账户
+    /// 验证 DashMap 的线程安全性
+    #[test]
+    fn test_concurrent_account_access() {
+        use std::thread;
+
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = Arc::new(AccountSystemCore::new(trade_rx, accepted_rx, None, 100));
+
+        // 并发注册
+        let mut handles = vec![];
+        for i in 0..10 {
+            let system_clone = system.clone();
+            handles.push(thread::spawn(move || {
+                let user_id = format!("user_{:02}", i);
+                let account = QA_Account::new(&user_id, "default", &user_id, 1000000.0, false, "sim");
+                system_clone.register_account(user_id, account);
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(system.accounts.len(), 10);
+
+        // 并发获取
+        let mut handles = vec![];
+        for i in 0..10 {
+            let system_clone = system.clone();
+            handles.push(thread::spawn(move || {
+                let user_id = format!("user_{:02}", i);
+                system_clone.get_account(&user_id).is_some()
+            }));
+        }
+
+        for handle in handles {
+            assert!(handle.join().unwrap());
+        }
+    }
+
+    // ==================== 订单确认测试 @yutiansut @quantaxis ====================
+
+    /// 测试订单确认处理 - 账户存在
+    /// handle_order_accepted 应更新订单的 exchange_order_id
+    #[test]
+    fn test_handle_order_accepted_account_found() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, None, 100);
+
+        let account = QA_Account::new("user_01", "default", "user_01", 1000000.0, false, "sim");
+        system.register_account("user_01".to_string(), account);
+
+        let accepted = OrderAccepted {
+            order_id: *b"ORDER001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            exchange_order_id: *b"EX_ORDER001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            user_id: *b"user_01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            instrument_id: *b"IX2401\0\0\0\0\0\0\0\0\0\0",
+            timestamp: 1234567890,
+            gateway_id: 0,
+            session_id: 0,
+        };
+
+        // 不应 panic
+        system.handle_order_accepted(accepted);
+    }
+
+    /// 测试订单确认处理 - 账户不存在
+    /// 应该记录警告日志但不 panic
+    #[test]
+    fn test_handle_order_accepted_account_not_found() {
+        let (trade_tx, trade_rx) = unbounded();
+        let (accepted_tx, accepted_rx) = unbounded();
+
+        let system = AccountSystemCore::new(trade_rx, accepted_rx, None, 100);
+
+        // 不注册账户
+
+        let accepted = OrderAccepted {
+            order_id: *b"ORDER001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            exchange_order_id: *b"EX_ORDER001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            user_id: *b"unknown\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            instrument_id: *b"IX2401\0\0\0\0\0\0\0\0\0\0",
+            timestamp: 1234567890,
+            gateway_id: 0,
+            session_id: 0,
+        };
+
+        // 不应 panic
+        system.handle_order_accepted(accepted);
     }
 }

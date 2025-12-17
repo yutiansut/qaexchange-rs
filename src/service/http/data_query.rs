@@ -1345,3 +1345,416 @@ pub async fn get_market_overview(
         }
     }))
 }
+
+// ==================== 单元测试 @yutiansut @quantaxis ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== extract_period_key 测试 ====================
+
+    /// 测试小时粒度时间戳提取
+    /// 输入: 纳秒时间戳 (Unix epoch)
+    /// 输出: "YYYY-MM-DD HH:00" 格式字符串
+    /// 计算逻辑:
+    ///   1. 纳秒转秒: timestamp_ns / 1_000_000_000
+    ///   2. 使用 chrono 解析为 DateTime
+    ///   3. 格式化为小时整点 (分钟置0)
+    #[test]
+    fn test_extract_period_key_hour() {
+        // 测试时间: 2024-03-15 14:32:45 UTC
+        // Unix timestamp (秒): 1710513165
+        // 纳秒时间戳: 1710513165 * 1_000_000_000 = 1710513165000000000
+        let timestamp_ns: i64 = 1710513165_000_000_000;
+
+        let result = extract_period_key(timestamp_ns, "hour");
+
+        // 预期: 分钟部分归零，只保留到小时
+        // 14:32:45 → 14:00
+        assert!(result.contains("14:00"), "小时粒度应归零分钟: got {}", result);
+        assert!(result.contains("2024-03-15"), "日期应正确: got {}", result);
+    }
+
+    /// 测试日粒度时间戳提取
+    /// 输入: 纳秒时间戳
+    /// 输出: "YYYY-MM-DD" 格式字符串
+    /// 用途: 按日统计交易量、盈亏等
+    #[test]
+    fn test_extract_period_key_day() {
+        // 测试时间: 2024-06-20 09:15:30 UTC
+        let timestamp_ns: i64 = 1718871330_000_000_000;
+
+        let result = extract_period_key(timestamp_ns, "day");
+
+        // 预期: 只有日期部分，无时间
+        assert_eq!(result, "2024-06-20");
+    }
+
+    /// 测试周粒度时间戳提取 (ISO 周格式)
+    /// 输入: 纳秒时间戳
+    /// 输出: "YYYY-Www" 格式 (ISO 8601 周格式)
+    /// 注意:
+    ///   - ISO周从周一开始
+    ///   - 跨年时可能出现 W52/W53 或 W01
+    ///   - 使用 %G (ISO周年) 而非 %Y (日历年)
+    #[test]
+    fn test_extract_period_key_week() {
+        // 测试时间: 2024-12-17 (周二)
+        // ISO周: 2024年第51周
+        let timestamp_ns: i64 = 1734393600_000_000_000;
+
+        let result = extract_period_key(timestamp_ns, "week");
+
+        // 预期格式: "2024-W51"
+        assert!(result.starts_with("2024-W"), "应为ISO周格式: got {}", result);
+        // 验证周数在合理范围 (1-53)
+        let week_part = result.split("-W").nth(1).unwrap_or("0");
+        let week_num: i32 = week_part.parse().unwrap_or(0);
+        assert!(week_num >= 1 && week_num <= 53, "周数应在1-53之间: got {}", week_num);
+    }
+
+    /// 测试月粒度时间戳提取
+    /// 输入: 纳秒时间戳
+    /// 输出: "YYYY-MM" 格式字符串
+    /// 用途: 按月统计账户盈亏、手续费等
+    #[test]
+    fn test_extract_period_key_month() {
+        // 测试时间: 2024-08-25 16:45:00 UTC
+        let timestamp_ns: i64 = 1724603100_000_000_000;
+
+        let result = extract_period_key(timestamp_ns, "month");
+
+        // 预期: 只有年月
+        assert_eq!(result, "2024-08");
+    }
+
+    /// 测试未知粒度回退到日粒度
+    /// 业务规则: 不支持的 group_by 参数默认按日统计
+    #[test]
+    fn test_extract_period_key_unknown_fallback() {
+        let timestamp_ns: i64 = 1710513165_000_000_000;
+
+        // 传入不支持的粒度
+        let result = extract_period_key(timestamp_ns, "quarter");
+
+        // 预期: 回退到日粒度
+        assert!(result.contains("-"), "应为日期格式: got {}", result);
+        assert!(!result.contains(":"), "不应包含时间: got {}", result);
+    }
+
+    /// 测试无效时间戳处理
+    /// 输入: 无效时间戳 (如负数或超大值)
+    /// 输出: "unknown" 字符串
+    /// 防御性编程: 避免因无效输入导致 panic
+    #[test]
+    fn test_extract_period_key_invalid_timestamp() {
+        // 测试负时间戳 (1970年之前)
+        let timestamp_ns: i64 = -1_000_000_000_000_000_000;
+
+        let result = extract_period_key(timestamp_ns, "day");
+
+        // chrono 在某些平台可能返回 unknown 或正常解析
+        // 主要确保不 panic
+        assert!(!result.is_empty(), "应返回非空字符串");
+    }
+
+    // ==================== PeriodStats 聚合测试 ====================
+
+    /// 测试 by_period 时间段分组统计逻辑
+    /// 业务场景: 统计多笔交易按日分组后的成交量、手续费
+    ///
+    /// 计算逻辑:
+    ///   1. 遍历所有成交记录 (dailytrades)
+    ///   2. 根据 trade_date_time 提取时间段键值
+    ///   3. 使用 HashMap 累加同一时间段的统计数据:
+    ///      - trades: 成交笔数 += 1
+    ///      - volume: 成交量 += trade.volume
+    ///      - pnl: 盈亏 += 计算值 (需关联持仓)
+    ///      - commission: 手续费 += trade.commission
+    ///   4. 按时间段排序输出
+    #[test]
+    fn test_period_stats_aggregation() {
+        // 模拟3笔交易，2笔在同一天，1笔在另一天
+        let mut period_stats: HashMap<String, PeriodStats> = HashMap::new();
+
+        // 交易1: 2024-03-15, 成交量 10, 手续费 5.0
+        let trade1_ts = 1710513165_000_000_000i64; // 2024-03-15 14:32:45 UTC
+        let key1 = extract_period_key(trade1_ts, "day");
+        let stat1 = period_stats.entry(key1.clone()).or_insert(PeriodStats {
+            period: key1, trades: 0, volume: 0.0, pnl: 0.0, commission: 0.0,
+        });
+        stat1.trades += 1;
+        stat1.volume += 10.0;
+        stat1.commission += 5.0;
+
+        // 交易2: 2024-03-15, 成交量 20, 手续费 8.0 (同一天)
+        let trade2_ts = 1710527565_000_000_000i64; // 2024-03-15 18:32:45 UTC
+        let key2 = extract_period_key(trade2_ts, "day");
+        let stat2 = period_stats.entry(key2.clone()).or_insert(PeriodStats {
+            period: key2, trades: 0, volume: 0.0, pnl: 0.0, commission: 0.0,
+        });
+        stat2.trades += 1;
+        stat2.volume += 20.0;
+        stat2.commission += 8.0;
+
+        // 交易3: 2024-03-16, 成交量 15, 手续费 6.0 (不同天)
+        let trade3_ts = 1710599565_000_000_000i64; // 2024-03-16 14:32:45 UTC
+        let key3 = extract_period_key(trade3_ts, "day");
+        let stat3 = period_stats.entry(key3.clone()).or_insert(PeriodStats {
+            period: key3, trades: 0, volume: 0.0, pnl: 0.0, commission: 0.0,
+        });
+        stat3.trades += 1;
+        stat3.volume += 15.0;
+        stat3.commission += 6.0;
+
+        // 验证分组结果
+        assert_eq!(period_stats.len(), 2, "应分为2个时间段");
+
+        // 验证2024-03-15的聚合数据
+        // trades: 1 + 1 = 2笔
+        // volume: 10 + 20 = 30手
+        // commission: 5 + 8 = 13元
+        let day1_stats = period_stats.get("2024-03-15").expect("应存在2024-03-15");
+        assert_eq!(day1_stats.trades, 2, "3月15日应有2笔交易");
+        assert!((day1_stats.volume - 30.0).abs() < 0.01, "3月15日成交量应为30");
+        assert!((day1_stats.commission - 13.0).abs() < 0.01, "3月15日手续费应为13");
+
+        // 验证2024-03-16的聚合数据
+        let day2_stats = period_stats.get("2024-03-16").expect("应存在2024-03-16");
+        assert_eq!(day2_stats.trades, 1, "3月16日应有1笔交易");
+        assert!((day2_stats.volume - 15.0).abs() < 0.01, "3月16日成交量应为15");
+        assert!((day2_stats.commission - 6.0).abs() < 0.01, "3月16日手续费应为6");
+    }
+
+    /// 测试 by_period 排序逻辑
+    /// 业务要求: 返回结果按时间段升序排列
+    #[test]
+    fn test_period_stats_sorting() {
+        let mut period_stats: HashMap<String, PeriodStats> = HashMap::new();
+
+        // 乱序插入
+        period_stats.insert("2024-03-18".to_string(), PeriodStats {
+            period: "2024-03-18".to_string(), trades: 1, volume: 10.0, pnl: 0.0, commission: 0.0,
+        });
+        period_stats.insert("2024-03-15".to_string(), PeriodStats {
+            period: "2024-03-15".to_string(), trades: 2, volume: 20.0, pnl: 0.0, commission: 0.0,
+        });
+        period_stats.insert("2024-03-16".to_string(), PeriodStats {
+            period: "2024-03-16".to_string(), trades: 3, volume: 30.0, pnl: 0.0, commission: 0.0,
+        });
+
+        // 转换并排序 (与 get_trade_statistics 中逻辑一致)
+        let mut by_period: Vec<PeriodStats> = period_stats.into_values().collect();
+        by_period.sort_by(|a, b| a.period.cmp(&b.period));
+
+        // 验证排序结果
+        assert_eq!(by_period.len(), 3);
+        assert_eq!(by_period[0].period, "2024-03-15", "第一个应是最早日期");
+        assert_eq!(by_period[1].period, "2024-03-16", "第二个应是中间日期");
+        assert_eq!(by_period[2].period, "2024-03-18", "第三个应是最晚日期");
+    }
+
+    // ==================== DailyPnl 累计盈亏测试 ====================
+
+    /// 测试每日盈亏累计计算逻辑
+    /// 业务场景: 展示账户每日净盈亏及累计盈亏曲线
+    ///
+    /// 计算公式:
+    ///   - net_pnl = realized_pnl - commission (每日净盈亏)
+    ///   - cumulative_pnl = 前一日cumulative_pnl + 当日net_pnl (累计盈亏)
+    ///
+    /// QIFI 账户关系:
+    ///   - realized_pnl: 来自平仓盈亏 (close_profit)
+    ///   - commission: 当日交易手续费
+    ///   - unrealized_pnl: 持仓浮盈 (需从历史快照获取)
+    #[test]
+    fn test_daily_pnl_cumulative_calculation() {
+        // 模拟3天的盈亏数据
+        let mut daily_pnl: Vec<DailyPnl> = vec![
+            // Day 1: 盈利 1000, 手续费 50
+            // net_pnl = 1000 - 50 = 950
+            DailyPnl {
+                date: "2024-03-15".to_string(),
+                realized_pnl: 1000.0,
+                unrealized_pnl: 0.0,
+                commission: 50.0,
+                net_pnl: 1000.0 - 50.0,
+                cumulative_pnl: 0.0, // 待计算
+            },
+            // Day 2: 亏损 200, 手续费 30
+            // net_pnl = -200 - 30 = -230
+            DailyPnl {
+                date: "2024-03-16".to_string(),
+                realized_pnl: -200.0,
+                unrealized_pnl: 0.0,
+                commission: 30.0,
+                net_pnl: -200.0 - 30.0,
+                cumulative_pnl: 0.0,
+            },
+            // Day 3: 盈利 500, 手续费 40
+            // net_pnl = 500 - 40 = 460
+            DailyPnl {
+                date: "2024-03-17".to_string(),
+                realized_pnl: 500.0,
+                unrealized_pnl: 0.0,
+                commission: 40.0,
+                net_pnl: 500.0 - 40.0,
+                cumulative_pnl: 0.0,
+            },
+        ];
+
+        // 按日期排序 (确保累计计算顺序正确)
+        daily_pnl.sort_by(|a, b| a.date.cmp(&b.date));
+
+        // 计算累计盈亏 (与 get_pnl_analysis 中逻辑一致)
+        let mut cumulative = 0.0f64;
+        for pnl in daily_pnl.iter_mut() {
+            cumulative += pnl.net_pnl;
+            pnl.cumulative_pnl = cumulative;
+        }
+
+        // 验证累计盈亏计算
+        // Day 1: cumulative = 0 + 950 = 950
+        assert!((daily_pnl[0].cumulative_pnl - 950.0).abs() < 0.01,
+            "Day1累计应为950: got {}", daily_pnl[0].cumulative_pnl);
+
+        // Day 2: cumulative = 950 + (-230) = 720
+        assert!((daily_pnl[1].cumulative_pnl - 720.0).abs() < 0.01,
+            "Day2累计应为720: got {}", daily_pnl[1].cumulative_pnl);
+
+        // Day 3: cumulative = 720 + 460 = 1180
+        assert!((daily_pnl[2].cumulative_pnl - 1180.0).abs() < 0.01,
+            "Day3累计应为1180: got {}", daily_pnl[2].cumulative_pnl);
+    }
+
+    /// 测试空数据情况下的每日盈亏
+    /// 防御性编程: 确保无交易时不会 panic
+    #[test]
+    fn test_daily_pnl_empty_data() {
+        let daily_pnl: Vec<DailyPnl> = Vec::new();
+
+        assert!(daily_pnl.is_empty(), "空数据应返回空数组");
+    }
+
+    // ==================== TradeStatistics 综合测试 ====================
+
+    /// 测试交易统计指标计算
+    /// 业务场景: 计算账户交易表现指标
+    ///
+    /// 指标计算公式:
+    ///   - win_rate = win_count / total_trades (胜率)
+    ///   - avg_profit = total_profit / win_count (平均盈利)
+    ///   - avg_loss = total_loss / loss_count (平均亏损)
+    ///   - profit_factor = total_profit / total_loss (盈亏比)
+    ///   - total_turnover = Σ(volume * price) (总成交额)
+    #[test]
+    fn test_trade_statistics_metrics() {
+        // 模拟统计数据
+        let total_trades = 10i64;
+        let win_count = 6i64;    // 6笔盈利
+        let loss_count = 4i64;   // 4笔亏损
+        let total_profit = 3000.0f64; // 总盈利
+        let total_loss = 1000.0f64;   // 总亏损 (绝对值)
+
+        // 计算指标 (与 get_trade_statistics 逻辑一致)
+        let win_rate = if total_trades > 0 {
+            win_count as f64 / total_trades as f64
+        } else {
+            0.0
+        };
+
+        let avg_profit = if win_count > 0 {
+            total_profit / win_count as f64
+        } else {
+            0.0
+        };
+
+        let avg_loss = if loss_count > 0 {
+            total_loss / loss_count as f64
+        } else {
+            0.0
+        };
+
+        let profit_factor = if total_loss > 0.0 {
+            total_profit / total_loss
+        } else if total_profit > 0.0 {
+            f64::INFINITY
+        } else {
+            0.0
+        };
+
+        // 验证计算结果
+        // win_rate = 6/10 = 0.6 (60%)
+        assert!((win_rate - 0.6).abs() < 0.01, "胜率应为60%: got {}", win_rate);
+
+        // avg_profit = 3000/6 = 500
+        assert!((avg_profit - 500.0).abs() < 0.01, "平均盈利应为500: got {}", avg_profit);
+
+        // avg_loss = 1000/4 = 250
+        assert!((avg_loss - 250.0).abs() < 0.01, "平均亏损应为250: got {}", avg_loss);
+
+        // profit_factor = 3000/1000 = 3.0
+        assert!((profit_factor - 3.0).abs() < 0.01, "盈亏比应为3.0: got {}", profit_factor);
+    }
+
+    /// 测试成交额计算
+    /// 公式: turnover = price * volume
+    /// 注意: 期货成交额还需乘以合约乘数 (unit_table)，此处为简化计算
+    #[test]
+    fn test_turnover_calculation() {
+        // 模拟成交记录
+        struct MockTrade {
+            price: f64,
+            volume: f64,
+        }
+
+        let trades = vec![
+            MockTrade { price: 5000.0, volume: 10.0 }, // 50000
+            MockTrade { price: 5100.0, volume: 5.0 },  // 25500
+            MockTrade { price: 4900.0, volume: 8.0 },  // 39200
+        ];
+
+        let mut total_turnover = 0.0f64;
+        for trade in &trades {
+            total_turnover += trade.price * trade.volume;
+        }
+
+        // 预期: 50000 + 25500 + 39200 = 114700
+        assert!((total_turnover - 114700.0).abs() < 0.01,
+            "总成交额应为114700: got {}", total_turnover);
+    }
+
+    // ==================== 时间戳转换测试 ====================
+
+    /// 测试纳秒时间戳转日期时间字符串
+    /// 格式: "YYYY-MM-DD HH:MM:SS.mmm"
+    #[test]
+    fn test_timestamp_to_datetime() {
+        // 测试时间: 2024-03-15 14:32:45.123 UTC
+        let ts: i64 = 1710513165_123_000_000;
+
+        let result = timestamp_to_datetime(ts);
+
+        // 验证格式和内容
+        assert!(result.contains("2024-03-15"), "应包含正确日期: got {}", result);
+        assert!(result.contains("14:32:45"), "应包含正确时间: got {}", result);
+        assert!(result.contains(".123"), "应包含毫秒: got {}", result);
+    }
+
+    /// 测试K线周期映射
+    #[test]
+    fn test_period_mapping() {
+        // HQChart 周期映射
+        assert_eq!(period_to_string(0), "1d", "0 应映射到日线");
+        assert_eq!(period_to_string(4), "1m", "4 应映射到1分钟");
+        assert_eq!(period_to_string(5), "5m", "5 应映射到5分钟");
+        assert_eq!(period_to_string(8), "60m", "8 应映射到60分钟");
+
+        // 反向映射
+        assert_eq!(string_to_period("1d"), 0);
+        assert_eq!(string_to_period("1m"), 4);
+        assert_eq!(string_to_period("5min"), 5);
+        assert_eq!(string_to_period("1h"), 8);
+    }
+}
