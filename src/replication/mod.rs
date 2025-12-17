@@ -45,6 +45,7 @@ pub mod heartbeat;
 pub mod protocol;
 pub mod replicator;
 pub mod role;
+pub mod tls;
 
 pub use failover::FailoverCoordinator;
 pub use grpc::{
@@ -59,3 +60,4 @@ pub use heartbeat::HeartbeatManager;
 pub use protocol::{LogEntry, ReplicationMessage, ReplicationRequest, ReplicationResponse};
 pub use replicator::{LogReplicator, ReplicationConfig};
 pub use role::{NodeRole, RoleManager};
+pub use tls::{TlsConfig, TlsConfigBuilder, TlsError, CertificateGenerator, CertificatePaths};

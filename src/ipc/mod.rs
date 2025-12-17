@@ -7,9 +7,17 @@
 //! - 吞吐：> 10M msgs/sec
 //! - 零拷贝：完全避免序列化和内存拷贝
 //!
+//! 架构组件：
+//! - manager: IPC 管理器（资源生命周期）
+//! - production: 生产级部署支持（健康检查、监控、容量规划）
+//! - publisher/subscriber: iceoryx2 发布/订阅实现
+//!
 //! 注意：当前版本使用条件编译，如果iceoryx2不可用则fallback到crossbeam
+//!
+//! @yutiansut @quantaxis
 
 pub mod manager;
+pub mod production;
 pub mod types;
 
 #[cfg(feature = "iceoryx2")]
@@ -23,6 +31,10 @@ pub use publisher::IceoryxPublisher;
 pub use subscriber::IceoryxSubscriber;
 
 pub use manager::IceoryxManager;
+pub use production::{
+    CapacityPlanner, HealthCheckResult, HealthStatus, IpcMetrics, ProductionIpcConfig,
+    ProductionIpcManager,
+};
 pub use types::{IpcMarketData, IpcNotification};
 
 /// iceoryx2 服务配置

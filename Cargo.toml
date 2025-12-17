@@ -10,6 +10,8 @@ license = "MIT"
 default = []
 iceoryx2 = ["dep:iceoryx2"]
 io_uring = ["dep:tokio-uring"]
+simd = []  # SIMD 优化 (需要 nightly 或手动向量化)
+otlp = []  # OpenTelemetry OTLP 导出器
 
 [lib]
 name = "qaexchange"
@@ -54,6 +56,7 @@ rkyv = { version = "0.7", default-features = false, features = ["validation", "a
 
 # 日期时间
 chrono = "0.4"
+time = "0.3"  # rcgen 证书生成依赖
 
 # 日志
 log = "0.4"
@@ -84,9 +87,24 @@ config = "0.13"
 prometheus = "0.13"
 lazy_static = "1.4"
 
-# gRPC
-tonic = "0.12"
+# gRPC (with TLS support)
+tonic = { version = "0.12", features = ["tls", "tls-roots", "tls-webpki-roots"] }
 prost = "0.13"
+
+# TLS 证书生成和管理 @yutiansut @quantaxis
+rcgen = "0.13"  # 自签证书生成
+rustls = "0.23"  # TLS 实现
+rustls-pemfile = "2.2"  # PEM 文件解析
+tokio-rustls = "0.26"  # Tokio TLS 集成
+
+# OpenTelemetry 分布式追踪 @yutiansut @quantaxis
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.27"
+opentelemetry = { version = "0.26", features = ["trace"] }
+opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.26", features = ["tonic"] }
+opentelemetry-jaeger = { version = "0.22", features = ["rt-tokio"] }
 
 # DSL解析
 pest = "2.7"
