@@ -1,0 +1,20 @@
+[book]
+title = "QAExchange-RS 文档中心"
+authors = ["@yutiansut", "@quantaxis"]
+description = "高性能量化交易撮合系统文档"
+language = "zh"
+src = "."
+
+[build]
+build-dir = "output"
+
+[rust]
+edition = "2021"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+copy-fonts = true
+no-section-label = false
+git-repository-url = "https://github.com/quantaxis/qaexchange-rs"
+git-repository-icon = "fa-github"

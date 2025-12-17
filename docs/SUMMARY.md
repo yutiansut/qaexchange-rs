@@ -35,22 +35,31 @@
     - [二级索引](03_core_modules/storage/index.md)
     - [查询引擎](03_core_modules/storage/query_engine.md)
     - [复制系统](03_core_modules/storage/replication.md)
+  - [撮合引擎]()
+    - [撮合引擎模块](03_core_modules/matching/README.md)
+    - [测试指南](03_core_modules/matching/testing.md)
+    - [性能基准](03_core_modules/matching/benchmark.md)
+    - [压力测试](03_core_modules/matching/stress_testing.md)
   - [市场数据模块]()
     - [市场数据模块](03_core_modules/market/README.md)
     - [快照生成器](03_core_modules/market/snapshot_generator.md)
     - [K线聚合系统](03_core_modules/market/kline.md)
+    - [数据生产测试](03_core_modules/market/data_production_testing.md)
   - [通知系统]()
     - [架构设计](03_core_modules/notification/architecture.md)
     - [订阅过滤](03_core_modules/notification/subscription.md)
   - [因子计算系统]()
     - [因子系统概览](03_core_modules/factor/README.md)
     - [因子 WAL 集成](03_core_modules/factor/wal_persister.md)
+  - [集群管理]()
+    - [集群管理系统](03_core_modules/cluster/README.md)
 
 ---
 
 # API 文档
 
 - [API 文档](04_api/README.md)
+  - [完整协议文档](protocol/README.md)
   - [错误码](04_api/error_codes.md)
   - [管理端集成](04_api/admin_integration.md)
   - [HTTP API]()

@@ -11,6 +11,9 @@ pub mod recovery;
 pub mod snapshot_broadcaster;
 pub mod snapshot_generator;
 
+#[cfg(test)]
+mod data_production_tests;
+
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

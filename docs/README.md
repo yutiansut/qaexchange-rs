@@ -1,7 +1,7 @@
 # QAExchange-RS 文档中心
 
-**版本**: v1.3.0
-**最后更新**: 2025-12-15
+**版本**: v1.4.0
+**最后更新**: 2025-12-17
 
 欢迎使用 QAExchange-RS 文档！本文档中心提供完整的系统架构、API 参考、集成指南和开发文档。
 
@@ -40,9 +40,16 @@
 - [查询引擎](./03_core_modules/storage/query_engine.md) - Polars SQL 查询
 - [复制系统](./03_core_modules/storage/replication.md) - 主从复制与故障转移
 
+#### 撮合引擎 ✨ **新增**
+- [撮合引擎模块](./03_core_modules/matching/README.md) - 核心撮合引擎
+  - [测试指南](./03_core_modules/matching/testing.md) - 76个测试场景详解
+  - [性能基准](./03_core_modules/matching/benchmark.md) - 吞吐量/延迟测试报告
+  - [压力测试](./03_core_modules/matching/stress_testing.md) - 多标的多用户压力测试
+
 #### 市场数据模块 ✨ **新增**
 - [市场数据模块](./03_core_modules/market/README.md) - 行情数据服务总览
 - [快照生成器](./03_core_modules/market/snapshot_generator.md) - 每秒级别市场快照
+- [数据生产测试](./03_core_modules/market/data_production_testing.md) - 撮合后数据流测试 ✨ **最新**
 
 #### 通知系统
 - [通知架构](./03_core_modules/notification/architecture.md) - 零拷贝通知推送
@@ -153,9 +160,10 @@
 
 ### 按主题查找
 - **前后端协议**: [完整协议文档](./protocol/README.md) - HTTP REST API + WebSocket DIFF 协议完整规范 ✨ **推荐**
-- **性能优化**: [高性能架构](./02_architecture/high_performance.md), [解耦存储](./02_architecture/decoupled_storage.md), [压缩策略](./03_core_modules/storage/compression.md), [二级索引](./03_core_modules/storage/index.md)
+- **撮合引擎**: [撮合引擎模块](./03_core_modules/matching/README.md), [测试指南](./03_core_modules/matching/testing.md), [性能基准](./03_core_modules/matching/benchmark.md), [压力测试](./03_core_modules/matching/stress_testing.md) ✨ **新增**
+- **性能优化**: [高性能架构](./02_architecture/high_performance.md), [解耦存储](./02_architecture/decoupled_storage.md), [压缩策略](./03_core_modules/storage/compression.md), [二级索引](./03_core_modules/storage/index.md), [撮合性能基准](./03_core_modules/matching/benchmark.md)
 - **数据持久化**: [WAL](./03_core_modules/storage/wal.md), [SSTable](./03_core_modules/storage/sstable.md), [压缩策略](./03_core_modules/storage/compression.md)
-- **市场数据**: [快照生成器](./03_core_modules/market/snapshot_generator.md), [K线聚合系统](./03_core_modules/market/kline.md), [K线实时推送](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md)
+- **市场数据**: [快照生成器](./03_core_modules/market/snapshot_generator.md), [K线聚合系统](./03_core_modules/market/kline.md), [K线实时推送](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md), [数据生产测试](./03_core_modules/market/data_production_testing.md) ✨ **新增**
 - **协议集成**: [完整协议文档](./protocol/README.md), [DIFF 协议](./04_api/websocket/diff_protocol.md), [数据模型](./02_architecture/data_models.md)
 - **WebSocket**: [协议规范](./04_api/websocket/protocol.md), [前端集成](./05_integration/frontend/integration_guide.md), [K线推送](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md)
 - **测试部署**: [测试指南](./06_development/testing.md), [K线测试](./06_development/KLINE_TESTING_GUIDE.md), [部署指南](./06_development/deployment.md)
@@ -172,7 +180,9 @@
 |------|------|----------|------|
 | 快速开始 | v1.0.0 | 2025-10-06 | ✅ 完整 |
 | 系统架构 | v0.4.0 | 2025-11-24 | ✅ 完整（新增因子/集群/DSL层） |
-| 核心模块 | v1.2.0 | 2025-11-26 | ✅ 完整（新增压缩策略/二级索引/因子WAL） |
+| 核心模块 | v1.4.0 | 2025-12-17 | ✅ 完整（新增数据生产测试文档） |
+| **撮合引擎** | **v0.2.0** | **2025-12-17** | ✅ **新增（76测试/压力测试/性能基准）** |
+| **市场数据** | **v0.2.0** | **2025-12-17** | ✅ **新增（22个数据生产测试）** |
 | **协议文档** | **v1.0.0** | **2025-12-15** | ✅ **新增（HTTP REST + WebSocket DIFF）** |
 | API 参考 | v1.0.0 | 2025-10-06 | ✅ 完整 |
 | 集成指南 | v1.0.0 | 2025-10-06 | ✅ 完整 |
@@ -197,5 +207,5 @@
 
 ---
 
-**最后更新**: 2025-12-15
+**最后更新**: 2025-12-17
 **维护者**: @yutiansut @quantaxis

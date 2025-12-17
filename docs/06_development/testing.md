@@ -1,8 +1,8 @@
 # 测试指南
 
-**版本**: v0.1.0
-**更新日期**: 2025-10-03
-**开发团队**: @yutiansut
+**版本**: v0.2.0
+**更新日期**: 2025-12-17
+**开发团队**: @yutiansut @quantaxis
 
 ---
 
@@ -51,16 +51,27 @@ cargo test --lib
 
 **结果**:
 ```
-running 31 tests
-test result: ok. 31 passed; 0 failed; 0 ignored
+running 799 tests
+test result: ok. 799 passed; 0 failed; 0 ignored
 ```
 
 **测试分布**:
-- PreTradeCheck: 4 tests
-- OrderRouter: 6 tests
-- TradeGateway: 5 tests
-- SettlementEngine: 2 tests
-- AccountManager (from qars): 14 tests
+
+| 模块 | 测试数 | 说明 |
+|------|--------|------|
+| MatchingEngine | 76 | 撮合引擎测试（含压力测试） |
+| PreTradeCheck | 4 | 风控检查 |
+| OrderRouter | 6 | 订单路由 |
+| TradeGateway | 5 | 成交网关 |
+| SettlementEngine | 2 | 结算引擎 |
+| AccountManager | 14 | 账户管理 |
+| Storage/WAL | 50+ | 存储层测试 |
+| Factor | 30+ | 因子计算 |
+| Other | 600+ | 其他模块 |
+
+### 模块测试文档
+
+- **撮合引擎**: [测试指南](../03_core_modules/matching/testing.md) | [性能基准](../03_core_modules/matching/benchmark.md) | [压力测试](../03_core_modules/matching/stress_testing.md)
 
 ---
 
