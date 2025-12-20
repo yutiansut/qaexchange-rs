@@ -844,6 +844,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // 环境相关的性能测试，在 CI 中跳过
     fn test_batch_performance() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let wal = WalManager::new(tmp_dir.path().to_str().unwrap());

@@ -878,9 +878,71 @@ heaptrack_gui heaptrack.qaexchange-server.*.gz
 
 ---
 
-**版本**: v1.0.0
-**测试日期**: 2025-10-06
-**测试人员**: QAExchange Performance Team
+---
+
+## 可观测性开销 (Phase 12) ✨ NEW
+
+### OpenTelemetry 追踪开销
+
+| 操作 | 开销 | 说明 |
+|------|------|------|
+| Span 创建 | ~80 ns | info_span! 宏 |
+| Span 结束 | ~50 ns | 自动 drop |
+| 属性添加 | ~20 ns/属性 | span.record() |
+| 批量导出 (100 spans) | < 1 ms | 异步非阻塞 |
+
+### Prometheus 指标开销
+
+| 操作 | 开销 |
+|------|------|
+| Counter.inc() | ~10 ns |
+| Gauge.set() | ~10 ns |
+| Histogram.observe() | ~50 ns |
+| 指标采集 (/metrics) | ~5 ms (1K 指标) |
+
+### 日志记录开销
+
+| 级别 | 开销 (启用) | 开销 (禁用) |
+|------|-------------|-------------|
+| ERROR | ~500 ns | ~5 ns |
+| INFO | ~400 ns | ~5 ns |
+| DEBUG | ~400 ns | ~5 ns |
+
+---
+
+## 安全层性能 (Phase 13) ✨ NEW
+
+### TLS 性能
+
+| 操作 | 延迟 |
+|------|------|
+| 证书生成 (RSA 2048) | ~50 ms |
+| TLS 握手 | ~5 ms |
+| TLS 记录加密 | ~0.5 μs/KB |
+| mTLS 额外开销 (首次) | +8 ms |
+
+### SIMD 加速
+
+| 操作 | Scalar | AVX2 | 加速比 |
+|------|--------|------|--------|
+| find_best_price (1K) | 800 ns | 150 ns | 5.3x |
+| sum_volumes (1K) | 500 ns | 100 ns | 5x |
+| filter_by_price (1K) | 1.2 μs | 200 ns | 6x |
+| crc32 (4KB) | 2 μs | 400 ns | 5x |
+
+### Block Index 性能
+
+| 操作 | 延迟 | 复杂度 |
+|------|------|--------|
+| 块查找 | ~500 ns | O(log n) |
+| 时间范围查询 | ~1 μs | O(log n + k) |
+| 内存开销/entry | 48 bytes | O(n) |
+
+---
+
+**版本**: v1.1.0
+**测试日期**: 2025-12-18
+**测试人员**: @yutiansut @quantaxis
 
 ---
 

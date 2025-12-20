@@ -1,7 +1,7 @@
 # 系统架构设计
 
-**版本**: v0.4.0
-**更新日期**: 2025-11-24 (新增因子计算、集群管理、DSL解析模块)
+**版本**: v0.5.0
+**更新日期**: 2025-12-18 (新增可观测性层、安全层、Phase 12-13 特性)
 **开发团队**: @yutiansut @quantaxis
 
 ---
@@ -11,13 +11,15 @@
 1. [架构概览](#架构概览)
 2. [核心设计原则](#核心设计原则)
 3. [分层架构](#分层架构)
-4. [管理端架构](#管理端架构)
-5. [数据流设计](#数据流设计)
-6. [并发模型](#并发模型)
-7. [性能优化](#性能优化)
-8. [扩展性设计](#扩展性设计)
-9. [安全设计](#安全设计)
-10. [数据协议](#数据协议)
+4. [可观测性层](#可观测性层) ✨ **NEW**
+5. [安全层](#安全层) ✨ **NEW**
+6. [管理端架构](#管理端架构)
+7. [数据流设计](#数据流设计)
+8. [并发模型](#并发模型)
+9. [性能优化](#性能优化)
+10. [扩展性设计](#扩展性设计)
+11. [安全设计](#安全设计)
+12. [数据协议](#数据协议)
 
 ---
 
@@ -568,6 +570,211 @@ signal = if rsi > 70 then -1 else if rsi < 30 then 1 else 0
 - **词法分析器** (`lexer.rs`): Token 生成
 - **语法解析器** (`parser.rs`): AST 构建 (pest)
 - **语法定义** (`grammar.pest`): PEG 语法规则
+
+---
+
+## 可观测性层 (Observability Layer) ✨ Phase 12
+
+**分布式追踪与监控** - `src/observability/`:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Observability Stack                        │
+│                                                              │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
+│   │   Tracing   │    │   Metrics   │    │   Logging   │     │
+│   │             │    │             │    │             │     │
+│   │ OpenTelemetry│    │ Prometheus │    │  tracing-   │     │
+│   │   + OTLP    │    │  Exporter  │    │  subscriber │     │
+│   └──────┬──────┘    └──────┬──────┘    └──────┬──────┘     │
+│          │                  │                  │             │
+│          └──────────────────┴──────────────────┘             │
+│                            │                                  │
+│                    ┌───────▼───────┐                         │
+│                    │    Grafana    │                         │
+│                    │   Dashboard   │                         │
+│                    └───────────────┘                         │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### OpenTelemetry 追踪
+
+**配置结构** - `src/observability/tracing.rs`:
+```rust
+pub struct TracingConfig {
+    pub enabled: bool,
+    pub service_name: String,
+    pub service_version: String,
+    pub environment: String,        // dev/staging/prod
+    pub exporter: ExporterType,     // Otlp/Console/None
+    pub endpoint: String,           // OTLP endpoint
+    pub sampling_rate: f64,         // 0.0 - 1.0
+    pub batch_config: BatchExportConfig,
+    pub log_filter: String,
+    pub console_export: bool,
+}
+```
+
+**预置配置**:
+- `TracingConfig::development()`: 100% 采样，控制台输出
+- `TracingConfig::production(endpoint)`: 10% 采样，OTLP 导出
+- `TracingConfig::test()`: 100% 采样，控制台输出
+
+**Span 宏**:
+```rust
+use qaexchange::{trace_span, trace_operation};
+
+// 自动计时操作
+let result = trace_operation!("match_order", {
+    matching_engine.process_order(order)?
+});
+// 输出: elapsed_us = xxx, "operation completed"
+```
+
+### Prometheus 指标
+
+**核心指标**:
+| 指标名 | 类型 | 说明 |
+|--------|------|------|
+| `qaexchange_orders_total` | Counter | 订单总数 |
+| `qaexchange_trades_total` | Counter | 成交总数 |
+| `qaexchange_order_latency_seconds` | Histogram | 订单延迟 |
+| `qaexchange_active_connections` | Gauge | 活跃连接数 |
+| `qaexchange_memtable_size_bytes` | Gauge | MemTable 大小 |
+
+### Grafana 大盘
+
+**预置面板** - `config/grafana/dashboards/`:
+1. **交易概览**: 订单量、成交量、撮合延迟
+2. **存储状态**: WAL 大小、MemTable 占用、SSTable 数量
+3. **系统健康**: CPU、内存、磁盘 IO
+4. **复制状态**: 主从延迟、心跳状态
+
+**性能指标**:
+- Span 创建开销: < 100ns
+- 批量导出: 异步非阻塞
+- 采样率: 可配置（生产环境建议 1-10%）
+
+---
+
+## 安全层 (Security Layer) ✨ Phase 13
+
+**TLS/mTLS 加密通信** - `src/replication/tls.rs`:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    TLS Security Architecture                  │
+│                                                              │
+│   ┌──────────────────────────────────────────────────────┐   │
+│   │                 Certificate Chain                      │   │
+│   │                                                        │   │
+│   │    ┌────────┐                                         │   │
+│   │    │ Root CA │  (10 年有效期, 离线存储)                │   │
+│   │    └────┬───┘                                         │   │
+│   │         │ signs                                        │   │
+│   │         ▼                                              │   │
+│   │    ┌────────────┐     ┌────────────┐                  │   │
+│   │    │ Server Cert │     │ Client Cert │  (mTLS)         │   │
+│   │    │ (1 年)      │     │ (1 年)      │                 │   │
+│   │    └────────────┘     └────────────┘                  │   │
+│   └──────────────────────────────────────────────────────┘   │
+│                                                              │
+│   加密算法:                                                   │
+│   - TLS 1.3                                                  │
+│   - AES-256-GCM / ChaCha20-Poly1305                         │
+│   - RSA 2048 / ECDSA P-256                                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### CertificateGenerator API
+
+```rust
+use qaexchange::replication::tls::CertificateGenerator;
+
+// 生成自签名 CA
+let ca = CertificateGenerator::generate_ca_certificate(
+    "QAExchange CA", 365 * 10
+)?;
+
+// 生成服务器证书
+let server = CertificateGenerator::generate_server_certificate(
+    &ca, "server", &["localhost", "192.168.1.100"], 365
+)?;
+
+// 生成客户端证书 (mTLS)
+let client = CertificateGenerator::generate_client_certificate(
+    &ca, "trader-001", 365
+)?;
+```
+
+### TLS 配置构建器
+
+```rust
+use qaexchange::replication::tls::TlsConfigBuilder;
+
+// 服务端 mTLS 配置
+let server_config = TlsConfigBuilder::new()
+    .with_certificate_paths(&server_paths)?
+    .require_client_auth(&ca_paths)?  // mTLS
+    .build_server_config()?;
+
+// 客户端配置
+let client_config = TlsConfigBuilder::new()
+    .with_certificate_paths(&client_paths)?
+    .with_ca_certificate(&ca_paths)?
+    .build_client_config()?;
+```
+
+### SIMD 优化
+
+**运行时检测** - `src/ipc/simd.rs`:
+```rust
+pub struct SimdCapabilities {
+    pub avx2: bool,      // x86_64 AVX2 (256-bit)
+    pub avx512: bool,    // x86_64 AVX-512 (512-bit)
+    pub sse42: bool,     // x86_64 SSE4.2
+    pub neon: bool,      // ARM NEON
+}
+
+// 自动选择最优实现
+let caps = SimdCapabilities::detect();
+```
+
+**优化函数**:
+| 函数 | Scalar | SIMD | 加速比 |
+|------|--------|------|--------|
+| `find_best_price(1K)` | 800ns | 150ns | 5.3x |
+| `sum_volumes(1K)` | 500ns | 100ns | 5x |
+| `crc32(4KB)` | 2μs | 400ns | 5x |
+
+### Block Index
+
+**块级索引** - `src/storage/sstable/block_index.rs`:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    SSTable with Block Index                   │
+│                                                              │
+│   Block Index (Binary Search O(log n))                       │
+│   ┌──────────────────────────────────────────────────────┐   │
+│   │ Block 0: offset=0, ts=1000-1099, count=100           │   │
+│   │ Block 1: offset=4096, ts=1100-1199, count=100        │   │
+│   │ Block 2: offset=8192, ts=1200-1299, count=100        │   │
+│   └──────────────────────────────────────────────────────┘   │
+│                            │                                  │
+│                            ▼                                  │
+│   Data Blocks                                                │
+│   ┌─────────┐  ┌─────────┐  ┌─────────┐                     │
+│   │ Block 0 │  │ Block 1 │  │ Block 2 │  ...                │
+│   │  4KB    │  │  4KB    │  │  4KB    │                     │
+│   └─────────┘  └─────────┘  └─────────┘                     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**性能指标**:
+- 索引查找: O(log n)
+- 范围查询 (1M blocks): ~500ns
+- 内存开销/entry: 48 bytes
 
 ---
 

@@ -206,6 +206,34 @@ path = "examples/stress_test.rs"
 name = "high_performance_demo"
 path = "examples/high_performance_demo.rs"
 
+[[example]]
+name = "benchmark_million_orders"
+path = "examples/benchmark_million_orders.rs"
+
+[[example]]
+name = "benchmark_storage_system"
+path = "examples/benchmark_storage_system.rs"
+
+[[example]]
+name = "decoupled_storage_demo"
+path = "examples/decoupled_storage_demo.rs"
+
+[[example]]
+name = "full_trading_demo"
+path = "examples/full_trading_demo.rs"
+
+[[example]]
+name = "notification_demo"
+path = "examples/notification_demo.rs"
+
+[[example]]
+name = "storage_integration_demo"
+path = "examples/storage_integration_demo.rs"
+
+[[example]]
+name = "test_snapshot_generator"
+path = "examples/test_snapshot_generator.rs"
+
 [[bench]]
 name = "oltp_storage_bench"
 path = "benches/oltp_storage_bench.rs"

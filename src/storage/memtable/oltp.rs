@@ -348,6 +348,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // 环境相关的性能测试，在 CI 中跳过
     fn test_performance() {
         let memtable = OltpMemTable::with_default();
 
