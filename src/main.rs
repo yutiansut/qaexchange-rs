@@ -956,6 +956,9 @@ impl ExchangeServer {
         // 3.5. 从WAL恢复账户 (方案B - 补充快照遗漏的数据)
         self.recover_from_wal();
 
+        // 3.6. 从账户的 dailyorders 恢复订单索引到 order_router @yutiansut @quantaxis
+        self.order_router.restore_orders_from_accounts();
+
         // 4. 启动存储订阅器
         let _storage_handle = self.start_storage_subscriber();
 

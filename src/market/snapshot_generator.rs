@@ -286,7 +286,7 @@ impl MarketSnapshotGenerator {
         let mut ob = orderbook.write();
 
         // 获取买卖五档（qars 的 get_depth 不带参数，需要手动提取前5档）
-        ob.get_depth(); // 更新内部深度
+        //ob.get_depth(); // 更新内部深度
 
         // 从 qars orderbook 手动提取买卖5档（聚合相同价格的订单数量）
         let bids = if let Some(bid_orders) = ob.bid_queue.get_sorted_orders() {

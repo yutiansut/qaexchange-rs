@@ -116,7 +116,22 @@ pub async fn query_account(
                 });
 
             // ✨ 动态计算保证金 = 持仓保证金 + 挂单冻结保证金 @yutiansut @quantaxis
-            let margin = acc.get_margin() + acc.get_frozen_margin();
+            let position_margin = acc.get_margin();
+            let frozen_margin = acc.get_frozen_margin();
+            let margin = position_margin + frozen_margin;
+
+            // Debug: 检查 frozen HashMap 状态
+            let frozen_count = acc.frozen.len();
+            let frozen_keys: Vec<String> = acc.frozen.keys().cloned().collect();
+            log::info!(
+                "📊 [DEBUG] query_account: account_id={}, position_margin={:.2}, frozen_margin={:.2}, frozen_count={}, frozen_keys={:?}, money={:.2}",
+                account_id.as_str(),
+                position_margin,
+                frozen_margin,
+                frozen_count,
+                frozen_keys,
+                acc.money
+            );
 
             let info = AccountInfo {
                 user_id: acc.account_cookie.clone(),
@@ -896,13 +911,19 @@ pub async fn get_user_accounts(
                     )
                 });
 
+            // margin = 持仓保证金 + 冻结保证金（待处理订单）@yutiansut @quantaxis
+            let position_margin = acc.get_margin();
+            let frozen_margin = acc.get_frozen_margin();
+            let margin = position_margin + frozen_margin;
+
             serde_json::json!({
                 "account_id": acc.account_cookie.clone(),
                 "account_name": account_name,
                 "account_type": format!("{:?}", account_type),
                 "balance": acc.get_balance(),
                 "available": acc.money,
-                "margin": acc.get_margin(),
+                "margin": margin,
+                "frozen_margin": frozen_margin,
                 "risk_ratio": acc.get_riskratio(),
                 "created_at": created_at,
             })

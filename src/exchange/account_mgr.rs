@@ -608,6 +608,11 @@ impl AccountManager {
         let mut account = QA_Account::new_from_qifi(qifi);
         account.environment = "sim".to_string(); // 重置为 sim 模式
 
+        // ✨ 从待处理订单重建 frozen HashMap @yutiansut @quantaxis
+        // WAL 只存储 frozen 的总金额，不存储每个订单的 frozen 详情
+        // 需要从 dailyorders 中的待处理订单重建
+        self.rebuild_frozen_from_pending_orders(&mut account);
+
         // 存储账户
         self.accounts
             .insert(account_id.clone(), Arc::new(RwLock::new(account)));
@@ -645,6 +650,100 @@ impl AccountManager {
             user_id
         );
         Ok(())
+    }
+
+    /// 从待处理订单重建 frozen HashMap
+    ///
+    /// WAL 只存储 frozen 的总金额，不存储每个订单的 frozen 详情。
+    /// 此方法从 dailyorders 中的待处理订单（状态为 SUBMITTED）重建 frozen HashMap。
+    ///
+    /// # 计算公式
+    /// - coeff = preset.calc_coeff() * price (对于 BUY/SELL OPEN)
+    /// - frozen_money = coeff * volume_left
+    ///
+    /// @yutiansut @quantaxis
+    fn rebuild_frozen_from_pending_orders(&self, account: &mut crate::QA_Account) {
+        use qars::qaprotocol::qifi::account::Frozen;
+
+        // 只处理 SUBMITTED 状态的订单
+        let pending_orders: Vec<(String, String, f64, f64, String, String)> = account
+            .dailyorders
+            .iter()
+            .filter(|(_, order)| order.status == "SUBMITTED" || order.status == "ALIVE")
+            .map(|(order_id, order)| {
+                (
+                    order_id.clone(),
+                    order.instrument_id.clone(),
+                    order.volume_left,
+                    order.limit_price,
+                    order.direction.clone(),
+                    order.offset.clone(),
+                )
+            })
+            .collect();
+
+        if pending_orders.is_empty() {
+            log::debug!(
+                "No pending orders to rebuild frozen for account {}",
+                account.account_cookie
+            );
+            return;
+        }
+
+        log::info!(
+            "Rebuilding frozen HashMap for account {} from {} pending orders",
+            account.account_cookie,
+            pending_orders.len()
+        );
+
+        for (order_id, instrument_id, volume_left, price, direction, offset) in pending_orders {
+            // 只有 OPEN 订单需要冻结保证金
+            if offset != "OPEN" {
+                continue;
+            }
+
+            // 获取或创建持仓以获取 preset
+            if !account.hold.contains_key(&instrument_id) {
+                account.init_h(&instrument_id);
+            }
+
+            if let Some(pos) = account.hold.get(&instrument_id) {
+                // 计算 coeff: 根据买卖方向使用不同的保证金系数
+                let coeff = if direction == "BUY" {
+                    pos.preset.calc_coeff() * price
+                } else {
+                    pos.preset.calc_sellopencoeff() * price
+                };
+
+                let frozen_money = coeff * volume_left;
+
+                // 插入到 frozen HashMap
+                account.frozen.insert(
+                    order_id.clone(),
+                    Frozen {
+                        amount: volume_left,
+                        coeff,
+                        money: frozen_money,
+                    },
+                );
+
+                log::info!(
+                    "🔄 Rebuilt frozen: account={}, order_id={}, instrument={}, frozen_money={:.2}",
+                    account.account_cookie,
+                    order_id,
+                    instrument_id,
+                    frozen_money
+                );
+            }
+        }
+
+        let total_frozen: f64 = account.frozen.values().map(|f| f.money).sum();
+        log::info!(
+            "✅ Rebuilt frozen HashMap complete: account={}, frozen_count={}, total_frozen={:.2}",
+            account.account_cookie,
+            account.frozen.len(),
+            total_frozen
+        );
     }
 
     /// 更新账户余额（仅用于恢复）

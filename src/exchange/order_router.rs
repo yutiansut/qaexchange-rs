@@ -2216,6 +2216,84 @@ impl OrderRouter {
     pub fn get_order_count(&self) -> usize {
         self.orders.len()
     }
+
+    /// 从账户的 dailyorders 恢复订单索引
+    /// 在服务器重启后调用，从账户快照中恢复待处理订单到 order_router
+    /// @yutiansut @quantaxis
+    pub fn restore_orders_from_accounts(&self) {
+        let accounts = self.account_mgr.get_all_accounts();
+        let mut restored_count = 0;
+
+        for account_arc in accounts {
+            let account = account_arc.read();
+            let account_id = account.account_cookie.clone();
+
+            for (order_id, order) in &account.dailyorders {
+                // 只恢复待处理订单 (SUBMITTED/ALIVE)
+                if order.status != "SUBMITTED" && order.status != "ALIVE" {
+                    continue;
+                }
+
+                // 检查是否已经存在
+                if self.orders.contains_key(order_id) {
+                    continue;
+                }
+
+                // 解析订单状态
+                let status = match order.status.as_str() {
+                    "SUBMITTED" => OrderStatus::Submitted,
+                    "ALIVE" => OrderStatus::PartiallyFilled,
+                    _ => continue,
+                };
+
+                // 计算已成交量
+                let filled_volume = order.volume_orign - order.volume_left;
+
+                // 创建 OrderRouteInfo
+                let info = OrderRouteInfo {
+                    order: order.clone(),
+                    status,
+                    submit_time: order.insert_date_time / 1_000_000_000, // 纳秒转秒
+                    update_time: chrono::Utc::now().timestamp(),
+                    filled_volume,
+                    qa_order_id: order_id.clone(),
+                    matching_engine_order_id: None, // 重启后丢失，需要重新提交到撮合引擎
+                    time_condition: TimeCondition::GFD,
+                    volume_condition: VolumeCondition::ANY,
+                };
+
+                // 添加到订单映射
+                self.orders
+                    .insert(order_id.clone(), Arc::new(RwLock::new(info)));
+
+                // 更新用户订单索引 (注意：QIFI 的 user_id 实际上是 account_id)
+                self.user_orders
+                    .entry(account_id.clone())
+                    .or_insert_with(|| Arc::new(RwLock::new(Vec::new())))
+                    .write()
+                    .push(order_id.clone());
+
+                restored_count += 1;
+                log::info!(
+                    "🔄 Restored order: account={}, order_id={}, instrument={}, status={:?}, volume_left={}",
+                    account_id,
+                    order_id,
+                    order.instrument_id,
+                    status,
+                    order.volume_left
+                );
+            }
+        }
+
+        if restored_count > 0 {
+            log::info!(
+                "✅ Restored {} pending orders from account snapshots",
+                restored_count
+            );
+        } else {
+            log::debug!("No pending orders to restore from accounts");
+        }
+    }
 }
 
 #[cfg(test)]
