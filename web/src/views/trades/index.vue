@@ -87,9 +87,11 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="offset" label="开平" width="80" align="center">
+        <el-table-column prop="is_taker" label="主动/被动" width="100" align="center">
           <template slot-scope="scope">
-            {{ scope.row.offset === 'OPEN' ? '开仓' : '平仓' }}
+            <el-tag :type="scope.row.is_taker ? 'warning' : 'info'" size="mini">
+              {{ scope.row.is_taker ? '主动成交' : '被动成交' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="price" label="成交价" width="100" align="right">
@@ -171,23 +173,23 @@ export default {
         const trades = data.trades || []
 
         // 转换后端数据格式以匹配前端展示
+        // @yutiansut @quantaxis - 使用后端返回的 user_direction 字段
         this.tradeList = trades.map(trade => {
-          const isBuyer = trade.buy_user_id === this.currentUser
           const multiplier = 300
 
           return {
             trade_id: trade.trade_id,
-            order_id: isBuyer ? trade.buy_order_id : trade.sell_order_id,
+            order_id: trade.user_order_id, // 使用后端返回的用户订单ID
             instrument_id: trade.instrument_id,
-            direction: isBuyer ? 'BUY' : 'SELL',
+            direction: trade.user_direction, // 直接使用后端返回的用户方向
             offset: 'UNKNOWN', // Backend doesn't provide this, would need order details
             price: trade.price,
             volume: trade.volume,
             trade_amount: trade.price * trade.volume * multiplier,
             commission: trade.price * trade.volume * multiplier * 0.0001,
             trade_time: new Date(trade.timestamp / 1000000).toLocaleString('zh-CN'),
-            buy_user_id: trade.buy_user_id,
-            sell_user_id: trade.sell_user_id
+            is_taker: trade.is_taker, // 是否为主动方
+            opposite_order_id: trade.opposite_order_id // 对手方订单ID
           }
         })
 

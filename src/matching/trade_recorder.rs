@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// 成交记录
+/// @yutiansut @quantaxis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeRecord {
     pub trade_id: String,
@@ -18,6 +19,9 @@ pub struct TradeRecord {
     pub sell_user_id: String,
     pub buy_order_id: String,
     pub sell_order_id: String,
+    /// 主动方（taker）订单ID - 订单号较大的是主动方
+    /// 被动方（maker）订单ID是另一个（订单号较小）
+    pub taker_order_id: String,
     pub price: f64,
     pub volume: f64,
     pub timestamp: i64,
@@ -50,6 +54,8 @@ impl TradeRecorder {
     }
 
     /// 记录成交
+    /// @yutiansut @quantaxis
+    /// taker_order_id: 主动方订单ID（新下单的一方，订单号较大）
     pub fn record_trade(
         &self,
         instrument_id: String,
@@ -57,6 +63,7 @@ impl TradeRecorder {
         sell_user_id: String,
         buy_order_id: String,
         sell_order_id: String,
+        taker_order_id: String,
         price: f64,
         volume: f64,
         trading_day: String,
@@ -71,6 +78,7 @@ impl TradeRecorder {
             sell_user_id: sell_user_id.clone(),
             buy_order_id,
             sell_order_id,
+            taker_order_id,
             price,
             volume,
             timestamp,
@@ -220,12 +228,14 @@ mod tests {
     fn test_trade_recorder() {
         let recorder = TradeRecorder::new();
 
+        // order2 是 taker（主动方，订单号较大）
         let trade_id = recorder.record_trade(
             "TEST2301".to_string(),
             "user1".to_string(),
             "user2".to_string(),
             "order1".to_string(),
             "order2".to_string(),
+            "order2".to_string(), // taker_order_id
             100.0,
             10.0,
             "2025-10-03".to_string(),
@@ -239,6 +249,7 @@ mod tests {
         let trade = trade.unwrap();
         assert_eq!(trade.price, 100.0);
         assert_eq!(trade.volume, 10.0);
+        assert_eq!(trade.taker_order_id, "order2");
     }
 
     #[test]
@@ -251,6 +262,7 @@ mod tests {
             "user2".to_string(),
             "order1".to_string(),
             "order2".to_string(),
+            "order2".to_string(), // taker
             100.0,
             10.0,
             "2025-10-03".to_string(),
@@ -262,6 +274,7 @@ mod tests {
             "user3".to_string(),
             "order3".to_string(),
             "order4".to_string(),
+            "order4".to_string(), // taker
             101.0,
             20.0,
             "2025-10-03".to_string(),
@@ -281,6 +294,7 @@ mod tests {
             "user2".to_string(),
             "order1".to_string(),
             "order2".to_string(),
+            "order2".to_string(), // taker
             100.0,
             10.0,
             "2025-10-03".to_string(),
@@ -292,6 +306,7 @@ mod tests {
             "user3".to_string(),
             "order3".to_string(),
             "order4".to_string(),
+            "order4".to_string(), // taker
             110.0,
             20.0,
             "2025-10-03".to_string(),

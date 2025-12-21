@@ -21,7 +21,7 @@ use crate::exchange::order_router::{
 };
 use crate::exchange::settlement::AccountSettlement;
 use crate::exchange::{AccountManager, OrderRouter, SettlementEngine};
-use crate::matching::trade_recorder::TradeRecorder;
+use crate::matching::trade_recorder::{TradeRecord, TradeRecorder};
 use crate::storage::conversion::ConversionManager;
 use crate::storage::subscriber::SubscriberStats;
 use crate::user::UserManager;
@@ -43,6 +43,58 @@ pub struct AppState {
     pub server_start_time: DateTime<Utc>,
     /// WebSocket 连接数计数器 @yutiansut @quantaxis
     pub ws_connection_count: Arc<AtomicUsize>,
+}
+
+/// 用户成交视图 - 包含用户方向信息
+/// @yutiansut @quantaxis
+#[derive(Debug, Clone, Serialize)]
+pub struct UserTradeView {
+    pub trade_id: String,
+    pub instrument_id: String,
+    /// 用户在这笔成交中的方向（BUY/SELL）
+    pub user_direction: String,
+    /// 用户的订单ID
+    pub user_order_id: String,
+    /// 对手方订单ID
+    pub opposite_order_id: String,
+    /// 是否为主动方（taker）
+    pub is_taker: bool,
+    pub price: f64,
+    pub volume: f64,
+    pub timestamp: i64,
+    pub trading_day: String,
+}
+
+impl UserTradeView {
+    /// 从 TradeRecord 创建用户视图
+    /// account_id: 查询的账户ID，用于判断用户方向
+    pub fn from_trade_record(record: &TradeRecord, account_id: &str) -> Self {
+        // 判断用户是买方还是卖方
+        let is_buyer = record.buy_user_id == account_id;
+        let user_direction = if is_buyer { "BUY" } else { "SELL" }.to_string();
+
+        let (user_order_id, opposite_order_id) = if is_buyer {
+            (record.buy_order_id.clone(), record.sell_order_id.clone())
+        } else {
+            (record.sell_order_id.clone(), record.buy_order_id.clone())
+        };
+
+        // 判断是否为主动方：taker_order_id 等于用户的订单ID则为主动方
+        let is_taker = record.taker_order_id == user_order_id;
+
+        Self {
+            trade_id: record.trade_id.clone(),
+            instrument_id: record.instrument_id.clone(),
+            user_direction,
+            user_order_id,
+            opposite_order_id,
+            is_taker,
+            price: record.price,
+            volume: record.volume,
+            timestamp: record.timestamp,
+            trading_day: record.trading_day.clone(),
+        }
+    }
 }
 
 /// 健康检查
@@ -742,6 +794,8 @@ pub async fn withdraw(
 }
 
 /// 查询用户成交记录
+/// @yutiansut @quantaxis
+/// 返回 UserTradeView 列表，包含用户方向信息（BUY/SELL）和是否为主动方（is_taker）
 pub async fn query_user_trades(
     user_id: web::Path<String>,
     state: web::Data<Arc<AppState>>,
@@ -752,9 +806,14 @@ pub async fn query_user_trades(
     let mut all_trades = Vec::new();
     for account in accounts {
         let acc = account.read();
-        let account_id = &acc.account_cookie;
-        let trades = state.trade_recorder.get_trades_by_user(account_id); // 注意：这里的by_user实际上是by_account
-        all_trades.extend(trades);
+        let account_id = acc.account_cookie.clone();
+        let trades = state.trade_recorder.get_trades_by_user(&account_id);
+        // 转换为 UserTradeView，包含用户方向信息
+        let user_trades: Vec<UserTradeView> = trades
+            .iter()
+            .map(|t| UserTradeView::from_trade_record(t, &account_id))
+            .collect();
+        all_trades.extend(user_trades);
     }
 
     log::info!(
@@ -772,6 +831,8 @@ pub async fn query_user_trades(
 }
 
 /// 查询账户成交记录（按account_id）
+/// @yutiansut @quantaxis
+/// 返回 UserTradeView 列表，包含用户方向信息（BUY/SELL）和是否为主动方（is_taker）
 pub async fn query_account_trades(
     account_id: web::Path<String>,
     state: web::Data<Arc<AppState>>,
@@ -779,16 +840,22 @@ pub async fn query_account_trades(
     // 注意：TradeRecorder.by_user 实际上索引的是 account_id
     let trades = state.trade_recorder.get_trades_by_user(&account_id);
 
+    // 转换为 UserTradeView，包含用户方向信息
+    let user_trades: Vec<UserTradeView> = trades
+        .iter()
+        .map(|t| UserTradeView::from_trade_record(t, &account_id))
+        .collect();
+
     log::info!(
         "Querying trades for account: {}, found {} trades",
         account_id,
-        trades.len()
+        user_trades.len()
     );
 
     Ok(
         HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
-            "trades": trades,
-            "total": trades.len()
+            "trades": user_trades,
+            "total": user_trades.len()
         }))),
     )
 }

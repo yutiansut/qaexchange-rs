@@ -720,6 +720,8 @@ impl TradeGateway {
     ///
     /// 交易所成交，推送Trade回报给账户（不判断FILLED/PARTIAL_FILLED）
     /// 账户端收到TRADE后自己计算 volume_left 判断状态
+    /// @yutiansut @quantaxis
+    /// is_taker: 是否为主动方（taker），只有 taker 才记录到 TradeRecorder（避免重复记录）
     pub fn handle_trade_new(
         &self,
         exchange: &str, // 交易所代码
@@ -735,6 +737,7 @@ impl TradeGateway {
         opposite_user_id: Option<&str>, // ✨ 对手方user_id，用于成交记录正确区分买卖方 @yutiansut @quantaxis
         qa_order_id: &str, // ✨ qars内部订单ID，用于调用receive_deal_sim @yutiansut @quantaxis
         opposite_order_id_str: Option<&str>, // ✨ 对手方订单ID字符串，用于成交记录 @yutiansut @quantaxis
+        is_taker: bool, // ✨ 是否为主动方，只有 taker 记录到 TradeRecorder @yutiansut @quantaxis
     ) -> Result<i64, ExchangeError> {
         // 生成成交ID（统一事件序列）
         let trade_id = self.id_generator.next_sequence(instrument_id);
@@ -792,46 +795,55 @@ impl TradeGateway {
         })?;
 
         // 记录成交到 TradeRecorder（用于查询）
-        // ✨ 修复：正确设置 buy_user_id 和 sell_user_id @yutiansut @quantaxis
-        if let Some(recorder) = &self.trade_recorder {
-            let trading_day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        // ✨ 修复：只有 taker 才记录成交，避免重复记录 @yutiansut @quantaxis
+        // taker 是主动方（新下单的一方），maker 是被动方（挂在订单簿上的一方）
+        if is_taker {
+            if let Some(recorder) = &self.trade_recorder {
+                let trading_day = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
-            // 根据 direction 确定买卖方的 user_id
-            let (buy_user_id, sell_user_id) = match direction {
-                "BUY" => {
-                    // 当前方是买方，对手方是卖方
-                    let sell_id = opposite_user_id.unwrap_or(user_id).to_string();
-                    (user_id.to_string(), sell_id)
-                }
-                "SELL" => {
-                    // 当前方是卖方，对手方是买方
-                    let buy_id = opposite_user_id.unwrap_or(user_id).to_string();
-                    (buy_id, user_id.to_string())
-                }
-                _ => (user_id.to_string(), user_id.to_string()), // fallback
-            };
+                // 根据 direction 确定买卖方的 user_id
+                let (buy_user_id, sell_user_id) = match direction {
+                    "BUY" => {
+                        // 当前方（taker）是买方，对手方（maker）是卖方
+                        let sell_id = opposite_user_id.unwrap_or(user_id).to_string();
+                        (user_id.to_string(), sell_id)
+                    }
+                    "SELL" => {
+                        // 当前方（taker）是卖方，对手方（maker）是买方
+                        let buy_id = opposite_user_id.unwrap_or(user_id).to_string();
+                        (buy_id, user_id.to_string())
+                    }
+                    _ => (user_id.to_string(), user_id.to_string()), // fallback
+                };
 
-            // ✨ 根据 direction 确定 buy_order_id 和 sell_order_id @yutiansut @quantaxis
-            let opposite_id = opposite_order_id_str
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("opposite_{}", opposite_order_id.unwrap_or(0)));
+                // ✨ 根据 direction 确定 buy_order_id 和 sell_order_id @yutiansut @quantaxis
+                let opposite_id = opposite_order_id_str
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("opposite_{}", opposite_order_id.unwrap_or(0)));
 
-            let (buy_order_id, sell_order_id) = match direction {
-                "BUY" => (order_id.to_string(), opposite_id),
-                "SELL" => (opposite_id, order_id.to_string()),
-                _ => (order_id.to_string(), "unknown".to_string()),
-            };
+                let (buy_order_id, sell_order_id) = match direction {
+                    "BUY" => (order_id.to_string(), opposite_id),
+                    "SELL" => (opposite_id, order_id.to_string()),
+                    _ => (order_id.to_string(), "unknown".to_string()),
+                };
 
-            recorder.record_trade(
-                instrument_id.to_string(),
-                buy_user_id,   // ✨ 正确的买方user_id
-                sell_user_id,  // ✨ 正确的卖方user_id
-                buy_order_id,  // ✨ 正确的买方order_id
-                sell_order_id, // ✨ 正确的卖方order_id
-                price,
-                volume,
-                trading_day,
-            );
+                // taker_order_id 就是当前订单ID（主动方）
+                let taker_order_id = order_id.to_string();
+
+                recorder.record_trade(
+                    instrument_id.to_string(),
+                    buy_user_id,    // ✨ 正确的买方user_id
+                    sell_user_id,   // ✨ 正确的卖方user_id
+                    buy_order_id,   // ✨ 正确的买方order_id
+                    sell_order_id,  // ✨ 正确的卖方order_id
+                    taker_order_id, // ✨ 主动方订单ID
+                    price,
+                    volume,
+                    trading_day,
+                );
+            }
+        } else {
+            log::debug!("🔍 Skipping trade record for maker (is_taker=false): order_id={}", order_id);
         }
 
         // 更新快照生成器的成交统计

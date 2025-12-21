@@ -912,7 +912,8 @@ impl OrderRouter {
                                     "🔍     Processing Accepted event for order {}",
                                     order_id
                                 );
-                                self.handle_success_result(order_id, order, success)?;
+                                // Accepted 事件不涉及成交记录，is_taker 参数无影响
+                                self.handle_success_result(order_id, order, success, true)?;
                                 handled_accepted = true;
                             } else {
                                 log::debug!(
@@ -936,13 +937,14 @@ impl OrderRouter {
                             // 我们需要更新对手单的状态（如果它属于我们管理的订单）
 
                             if !handled_trade {
-                                // 第一个事件：新订单的成交
+                                // 第一个事件：新订单的成交（taker - 主动方）
                                 log::debug!(
-                                    "🔍     Processing NEW order trade: order_id={}, opposite={}",
+                                    "🔍     Processing TAKER order trade: order_id={}, opposite={}",
                                     match_order_id,
                                     opposite_order_id
                                 );
-                                self.handle_success_result(order_id, order, success.clone())?;
+                                // ✨ is_taker=true: 主动方，记录成交到 TradeRecorder @yutiansut @quantaxis
+                                self.handle_success_result(order_id, order, success.clone(), true)?;
                                 handled_trade = true;
                             } else {
                                 // 第二个事件：对手单（挂单方）的成交
@@ -967,10 +969,12 @@ impl OrderRouter {
                                         if let Some(maker_info) = self.orders.get(&maker_order_str) {
                                             let maker_order_data = maker_info.read().order.clone();
                                             // 处理挂单方的成交 - 更新其账户持仓和资金
+                                            // ✨ is_taker=false: 被动方（maker），不记录成交到 TradeRecorder @yutiansut @quantaxis
                                             self.handle_success_result(
                                                 &maker_order_str,
                                                 &maker_order_data,
                                                 success,
+                                                false, // maker 不记录成交
                                             )?;
                                         }
                                     } else {
@@ -989,7 +993,8 @@ impl OrderRouter {
                         }
                         _ => {
                             // 其他事件正常处理（Cancelled, Amended等）
-                            self.handle_success_result(order_id, order, success)?;
+                            // 不涉及成交记录，is_taker 参数无影响
+                            self.handle_success_result(order_id, order, success, true)?;
                         }
                     }
                 }
@@ -1026,11 +1031,15 @@ impl OrderRouter {
     }
 
     /// 处理成功的撮合结果 (Phase 6: 使用新的回报机制)
+    /// 处理成交结果
+    /// @yutiansut @quantaxis
+    /// is_taker: 是否为主动方（taker），只有 taker 才记录到 TradeRecorder
     fn handle_success_result(
         &self,
         order_id: &str,
         order: &Order,
         success: Success,
+        is_taker: bool, // ✨ 是否为主动方
     ) -> Result<(), ExchangeError> {
         match success {
             Success::Accepted { id, order_type: _, ts } => {
@@ -1195,6 +1204,7 @@ impl OrderRouter {
                     opposite_user_id.as_deref(), // ✨ 传递对手方user_id
                     &qa_order_id, // ✨ 传递qars订单ID
                     opposite_order_id_str.as_deref(), // ✨ 传递对手方真实订单ID
+                    is_taker, // ✨ 是否为主动方，只有 taker 记录成交 @yutiansut @quantaxis
                 )?;
 
                 log::debug!(
@@ -1305,6 +1315,7 @@ impl OrderRouter {
                     opposite_user_id.as_deref(), // ✨ 传递对手方user_id
                     &qa_order_id, // ✨ 传递qars订单ID
                     opposite_order_id_str.as_deref(), // ✨ 传递对手方真实订单ID
+                    is_taker, // ✨ 是否为主动方，只有 taker 记录成交 @yutiansut @quantaxis
                 )?;
 
                 log::debug!(
@@ -1528,7 +1539,8 @@ impl OrderRouter {
                     log::info!("Cancel order success: {:?}", success);
                     // ✨ 调用 handle_success_result 处理撤单成功事件
                     // 这会触发 Success::Cancelled 分支，更新订单状态并释放冻结资金
-                    if let Err(e) = self.handle_success_result(&req.order_id, &order, success) {
+                    // 撤单不涉及成交记录，is_taker 参数无影响
+                    if let Err(e) = self.handle_success_result(&req.order_id, &order, success, true) {
                         log::error!("Failed to handle cancel success result: {:?}", e);
                     }
                 }
