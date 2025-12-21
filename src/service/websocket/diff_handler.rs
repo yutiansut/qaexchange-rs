@@ -1322,8 +1322,8 @@ impl DiffHandler {
                     ctx_addr.do_send(SendDiffMessage { message: rtn_data });
                 }
                 None => {
-                    // 超时或用户不存在
-                    log::warn!("peek_message timeout for user: {}", user_id);
+                    // 超时或用户不存在（正常情况：无数据更新）@yutiansut @quantaxis
+                    log::debug!("peek_message timeout for user: {}", user_id);
                 }
             }
         });
