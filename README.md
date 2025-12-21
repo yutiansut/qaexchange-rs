@@ -10,7 +10,35 @@
 
 高性能量化交易所系统 - 基于 QARS 核心架构构建
 
-![pic](docs/pics/orderbook.png)
+---
+
+## 📸 系统截图
+
+### 仪表盘与监控
+![Dashboard](docs/pics/dashboard.png)
+![Monitor](docs/pics/monitor.png)
+
+### 账户管理
+![Accounts](docs/pics/accounts.png)
+![Accounts History](docs/pics/accountshistory.png)
+
+### 交易功能
+![Trading](docs/pics/trading.png)
+![Order](docs/pics/order.png)
+![Batch Order](docs/pics/batchorder.png)
+![Conditional Order](docs/pics/conditionalorder.png)
+
+### 持仓与风控
+![Holding](docs/pics/holding.png)
+![Risk](docs/pics/risk.png)
+
+### K线与行情
+![KLine](docs/pics/kline.png)
+
+### 历史记录
+![Trade History](docs/pics/tradehistory.png)
+![Transfer](docs/pics/transfer.png)
+
 ---
 
 ## 🆕 v1.5.0 更新亮点

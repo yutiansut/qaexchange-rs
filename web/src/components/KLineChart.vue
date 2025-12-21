@@ -1,5 +1,12 @@
 <template>
   <div ref="container" class="kline-chart-container">
+    <!-- ✨ 数据加载提示 @yutiansut @quantaxis -->
+    <div v-if="!klineData || klineData.length === 0" class="loading-overlay">
+      <div class="loading-content">
+        <i class="el-icon-loading"></i>
+        <span>等待 {{ symbol }} {{ periodLabel }} K线数据...</span>
+      </div>
+    </div>
     <div ref="chart" class="kline-chart"></div>
   </div>
 </template>
@@ -9,25 +16,51 @@
 // HQChart 有多种导出方式，需要正确处理
 import HQChart from 'hqchart'
 
-// ✨ 调试 HQChart 导出结构 @yutiansut @quantaxis
-console.log('[KLineChart] 🔍 HQChart raw export:', HQChart)
-console.log('[KLineChart] 🔍 HQChart keys:', HQChart ? Object.keys(HQChart) : 'null')
-
-// 详细检查 HQChart.Chart
-if (HQChart && HQChart.Chart) {
-  console.log('[KLineChart] 🔍 HQChart.Chart:', HQChart.Chart)
-  console.log('[KLineChart] 🔍 HQChart.Chart keys:', Object.keys(HQChart.Chart).slice(0, 20))
-  // ✨ 正确的初始化方法是 jsChartInit，不是 Init @yutiansut @quantaxis
-  console.log('[KLineChart] 🔍 HQChart.Chart.jsChartInit:', typeof HQChart.Chart.jsChartInit)
-  console.log('[KLineChart] 🔍 HQChart.Chart.JSChart:', typeof HQChart.Chart.JSChart)
-}
-
-// ✨ HQChart.Chart 包含 jsChartInit (= JSChart.Init) 和 JSChart 构造函数 @yutiansut @quantaxis
+// ✨ HQChart.Chart 包含 jsChartInit 和 JSChart 构造函数 @yutiansut @quantaxis
 const JSChartLib = HQChart.Chart
 
-console.log('[KLineChart] ✅ Using HQChart.Chart as JSChartLib')
-console.log('[KLineChart] 🔍 JSChartLib.jsChartInit:', typeof JSChartLib.jsChartInit)
-console.log('[KLineChart] 🔍 JSChartLib.JSChart:', typeof JSChartLib.JSChart)
+// ✨ 禁用 HQChart 内部调试日志 @yutiansut @quantaxis
+// HQChart 使用 JSConsole 对象控制日志输出（通过 HQChart.Chart.JSConsole 导出）
+// 覆盖为空函数可以禁用 JSComplier.Execute、parser 等内部日志
+if (JSChartLib && JSChartLib.JSConsole) {
+  JSChartLib.JSConsole.Chart.Log = function() {}
+  JSChartLib.JSConsole.Complier.Log = function() {}
+  if (JSChartLib.JSConsole.JSTable) {
+    JSChartLib.JSConsole.JSTable.Log = function() {}
+  }
+}
+
+// ✨ 禁用 HQChart 默认 API 请求 @yutiansut @quantaxis
+// HQChart 默认会向 http://127.0.0.1:8080 发送 HTTP 请求获取数据
+// 需要同时设置 JSChart 和 JSComplier 的 Domain
+if (JSChartLib) {
+  // 1. 设置主图表 API 域名（g_JSChartResource.Domain）
+  if (typeof JSChartLib.SetDomain === 'function') {
+    JSChartLib.SetDomain('', '')
+  }
+
+  // 2. 设置编译器 API 域名（g_JSComplierResource.Domain）
+  if (JSChartLib.JSComplier && typeof JSChartLib.JSComplier.SetDomain === 'function') {
+    JSChartLib.JSComplier.SetDomain('', '')
+  }
+
+  // 3. 直接修改 g_JSChartResource（如果可访问）
+  if (typeof JSChartLib.GetResource === 'function') {
+    const resource = JSChartLib.GetResource()
+    if (resource) {
+      resource.Domain = ''
+      resource.CacheDomain = ''
+      // 禁用指标相关的 API
+      if (resource.Index) {
+        resource.Index.StockHistoryDayApiUrl = ''
+        resource.Index.MarketLongShortApiUrl = ''
+        resource.Index.MarketAttentionApiUrl = ''
+        resource.Index.MarketHeatApiUrl = ''
+        resource.Index.CustomIndexHeatApiUrl = ''
+      }
+    }
+  }
+}
 
 /**
  * K线图表组件
@@ -85,6 +118,22 @@ export default {
     }
   },
 
+  computed: {
+    // ✨ 周期标签 @yutiansut @quantaxis
+    periodLabel() {
+      const labels = {
+        0: '日线',
+        3: '3秒',
+        4: '1分钟',
+        5: '5分钟',
+        6: '15分钟',
+        7: '30分钟',
+        8: '60分钟'
+      }
+      return labels[this.period] || `${this.period}周期`
+    }
+  },
+
   data() {
     return {
       jsChart: null,
@@ -92,6 +141,7 @@ export default {
       isChartReady: false,
       initRetryCount: 0,  // ✨ 初始化重试计数器 @yutiansut @quantaxis
       pendingData: null,  // ✨ 待处理数据（图表未准备好时缓存）@yutiansut @quantaxis
+      needsReinit: false, // ✨ 标记是否需要重新初始化（切换周期/合约时）@yutiansut @quantaxis
       // ✨ 因子历史数据缓存（用于叠加显示）@yutiansut @quantaxis
       factorHistory: {
         ma5: [],
@@ -113,25 +163,35 @@ export default {
   },
 
   watch: {
-    symbol(newVal) {
-      if (this.jsChart && newVal) {
-        console.log('[KLineChart] Symbol changed to:', newVal)
-        this.reinitChart()
+    // ✨ 监听合约变化 @yutiansut @quantaxis
+    symbol(newVal, oldVal) {
+      if (newVal && newVal !== oldVal) {
+        this.pendingData = null
+        this.resetFactorHistory()
+        this.needsReinit = true
       }
     },
 
-    period(newVal) {
-      if (this.jsChart) {
-        console.log('[KLineChart] Period changed to:', newVal)
-        this.reinitChart()
+    // ✨ 监听周期变化 @yutiansut @quantaxis
+    period(newVal, oldVal) {
+      if (newVal !== oldVal) {
+        this.pendingData = null
+        this.resetFactorHistory()
+        this.needsReinit = true
       }
     },
 
+    // ✨ 监听外部K线数据变化 @yutiansut @quantaxis
     klineData: {
-      handler(newData) {
-        console.log('[KLineChart] klineData updated, length:', newData ? newData.length : 0)
+      handler(newData, oldData) {
         if (newData && newData.length > 0) {
-          this.updateChartData(newData)
+          if (this.needsReinit) {
+            this.needsReinit = false
+            this.pendingData = newData
+            this.reinitChartFast()
+          } else {
+            this.updateChartData(newData)
+          }
         }
       },
       deep: true,
@@ -142,7 +202,6 @@ export default {
     factorData: {
       handler(newFactors) {
         if (this.showFactorOverlay && newFactors && Object.keys(newFactors).length > 0) {
-          console.log('[KLineChart] Factor data updated:', Object.keys(newFactors))
           this.updateFactorHistory(newFactors)
           this.renderFactorOverlay()
         }
@@ -169,13 +228,8 @@ export default {
 
   mounted() {
     // ✨ 延迟初始化，确保父容器已渲染完成 @yutiansut @quantaxis
-    console.log('[KLineChart] 🚀 Component mounted, scheduling initChart in 500ms')
     this.$nextTick(() => {
-      console.log('[KLineChart] 🚀 $nextTick fired, setting timeout')
-      setTimeout(() => {
-        console.log('[KLineChart] 🚀 Timeout fired, calling initChart')
-        this.initChart()
-      }, 500)  // 延迟500ms，确保CSS已应用
+      setTimeout(() => this.initChart(), 500)
     })
   },
 
@@ -188,158 +242,72 @@ export default {
 
   methods: {
     // 转换K线数据为HQChart格式 @yutiansut @quantaxis
-    // ✨ 修复：分钟K线需要 YYYYMMDDHHMMSS 格式
     // HQChart格式: [[date, yclose, open, high, low, close, vol, amount], ...]
     convertToHQChartFormat(data) {
-      if (!data || data.length === 0) {
-        console.log('[KLineChart] convertToHQChartFormat: no data')
-        return []
-      }
+      if (!data || data.length === 0) return []
 
-      console.log('[KLineChart] Converting', data.length, 'bars, period:', this.period)
-      console.log('[KLineChart] 📊 First input data:', data[0])
-
-      return data.map((k, index) => {
+      return data.map(k => {
         const date = new Date(k.datetime)
-
         let dateNum
         if (this.period === 0) {
-          // 日线：YYYYMMDD 格式
-          dateNum = date.getFullYear() * 10000 +
-                   (date.getMonth() + 1) * 100 +
-                   date.getDate()
+          // 日线：YYYYMMDD
+          dateNum = date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate()
         } else {
-          // 分钟线：YYYYMMDDHHMMSS 格式
-          // HQChart 分钟K线需要完整的日期时间
-          dateNum = date.getFullYear() * 10000000000 +
-                   (date.getMonth() + 1) * 100000000 +
-                   date.getDate() * 1000000 +
-                   date.getHours() * 10000 +
-                   date.getMinutes() * 100 +
-                   date.getSeconds()
+          // 分钟线：YYYYMMDDHHMM
+          const datePart = date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate()
+          const timePart = date.getHours() * 100 + date.getMinutes()
+          dateNum = datePart * 10000 + timePart
         }
-
-        // HQChart K线数据格式：
-        // [日期, 前收, 开, 高, 低, 收, 量, 额]
-        // 注意：我们没有前收价，用开盘价代替
-        const hqBar = [
-          dateNum,           // 日期（日线YYYYMMDD，分钟线YYYYMMDDHHMMSS）
-          k.open,            // 前收（用开盘价代替）
-          k.open,            // 开盘价
-          k.high,            // 最高价
-          k.low,             // 最低价
-          k.close,           // 收盘价
-          k.volume || 0,     // 成交量
-          k.amount || 0      // 成交额
-        ]
-
-        if (index === 0) {
-          console.log('[KLineChart] 📊 First HQChart bar:', hqBar)
-          console.log('[KLineChart] 📊 Date conversion:', {
-            datetime_ms: k.datetime,
-            date_object: date.toLocaleString(),
-            dateNum: dateNum
-          })
-        }
-
-        return hqBar
+        return [dateNum, k.open, k.open, k.high, k.low, k.close, k.volume || 0, k.amount || 0]
       })
     },
 
-    // ✨ 初始化图表（使用自定义数据源）@yutiansut @quantaxis
+    // ✨ 初始化图表 @yutiansut @quantaxis
     initChart() {
-      console.log('[KLineChart] 🎯 initChart() called for:', this.symbol)
-      console.log('[KLineChart] 🎯 pendingData:', this.pendingData ? this.pendingData.length + ' bars' : 'null')
-      console.log('[KLineChart] 🎯 klineData:', this.klineData ? this.klineData.length + ' bars' : 'null')
-
-      // 调整容器大小
       this.onSize()
 
-      // 检查容器尺寸
       const container = this.$refs.container
       const chartEl = this.$refs.chart
-      if (!container || !chartEl) {
-        console.error('[KLineChart] Container or chart element not found!')
-        return
-      }
-      console.log('[KLineChart] Container size:', container.offsetWidth, 'x', container.offsetHeight)
-      console.log('[KLineChart] Chart element size:', chartEl.offsetWidth, 'x', chartEl.offsetHeight)
-      console.log('[KLineChart] Container computed height:', window.getComputedStyle(container).height)
-
-      const parent = container.parentElement
-      if (parent) {
-        console.log('[KLineChart] Parent element:', parent.className, parent.offsetWidth, 'x', parent.offsetHeight)
-      }
+      if (!container || !chartEl) return
 
       if (container.offsetWidth === 0 || container.offsetHeight === 0) {
-        console.error('[KLineChart] ❌ Container has zero dimensions!')
-
-        // 打印父元素链
-        const parentChain = []
-        let el = container
-        for (let i = 0; i < 3; i++) {
-          el = el.parentElement
-          if (el) {
-            parentChain.push(el.className + ' (' + el.offsetWidth + 'x' + el.offsetHeight + ')')
-          } else {
-            parentChain.push('null')
-          }
-        }
-        console.error('[KLineChart] Parent chain:', parentChain)
-
-        // ⚠️ 最多重试10次，避免无限循环
+        // 容器尺寸为0，重试
         if (!this.initRetryCount) this.initRetryCount = 0
         this.initRetryCount++
         if (this.initRetryCount < 10) {
-          console.warn('[KLineChart] Retry', this.initRetryCount, '/10 in 200ms')
           setTimeout(() => this.initChart(), 200)
-        } else {
-          console.error('[KLineChart] ❌ Initialization failed after 10 retries!')
         }
         return
       }
 
-      // 转换初始数据
-      const hqData = this.convertToHQChartFormat(this.klineData)
-      console.log('[KLineChart] Initial data converted:', hqData.length, 'bars')
-
-      // 自定义数据 NetworkFilter - 直接返回本地数据
-      // ✨ 优先使用 pendingData（缓存的数据），然后是 klineData @yutiansut @quantaxis
+      // 自定义 NetworkFilter - 拦截所有 HTTP 请求，返回本地数据 @yutiansut @quantaxis
+      // 关键：设置 data.PreventDefault = true 阻止 HQChart 发送默认 HTTP 请求
       const self = this
       const customNetworkFilter = function(data, callback) {
-        console.log('[KLineChart] NetworkFilter called, request:', data.Name)
+        // 阻止所有默认 HTTP 请求
+        data.PreventDefault = true
 
-        // ✨ HQChart 内部有多种数据请求类型，需要全部拦截 @yutiansut @quantaxis
-        // 注意: HQChart 内部有拼写错误 "Reqeust" (应该是 "Request")
         const klineRequestTypes = [
-          'KLineChartContainer::RequestHistoryData',      // 日线历史数据
-          'KLineChartContainer::ReqeustHistoryMinuteData', // 分钟线历史数据 (注意 HQChart 的拼写错误)
-          'KLineChartContainer::RequestMinuteRealtimeData', // 分钟线实时数据
-          'KLineChartContainer::RequestRealtimeData',      // 实时数据
-          'KLineChartContainer::RequestFlowCapitalData'    // 流通市值数据
+          'KLineChartContainer::RequestHistoryData',
+          'KLineChartContainer::ReqeustHistoryMinuteData',
+          'KLineChartContainer::RequestHistoryMinuteData',
+          'KLineChartContainer::RequestMinuteRealtimeData'
         ]
 
-        // 返回K线历史数据
         if (klineRequestTypes.includes(data.Name)) {
-          // ✨ 优先使用缓存的数据 @yutiansut @quantaxis
           const sourceData = self.pendingData || self.klineData
-          const klineData = self.convertToHQChartFormat(sourceData)
-          console.log('[KLineChart] NetworkFilter returning', klineData.length, 'K-line bars for request:', data.Name)
-
-          // HQChart 期望的返回格式
-          const result = {
+          callback({
             code: 0,
             symbol: self.symbol,
             name: self.symbol,
-            data: klineData
-          }
-          callback(result)
+            data: self.convertToHQChartFormat(sourceData)
+          })
           return true
         }
 
-        // 其他请求走默认处理（返回 false 表示不拦截）
-        console.log('[KLineChart] NetworkFilter: unhandled request type:', data.Name)
-        return false
+        // 拦截所有其他请求，返回空数据（避免 HTTP 请求）
+        callback({ code: 0, symbol: self.symbol, name: self.symbol, data: [] })
+        return true
       }
 
       // K线图配置
@@ -392,61 +360,50 @@ export default {
 
       // 创建图表
       try {
-        // ✨ HQChart 正确的初始化方法 @yutiansut @quantaxis
-        // - jsChartInit(element) = JSChart.Init(element) 返回 JSChart 实例
-        // - JSChart 是构造函数，可以 new JSChart(element)
         const hasJsChartInit = JSChartLib && typeof JSChartLib.jsChartInit === 'function'
         const hasJSChart = JSChartLib && typeof JSChartLib.JSChart === 'function'
-        console.log('[KLineChart] 📊 Creating chart with JSChartLib:', typeof JSChartLib,
-          'jsChartInit:', hasJsChartInit ? 'function' : 'not found',
-          'JSChart:', hasJSChart ? 'function' : 'not found')
 
-        // ✨ 优先使用 jsChartInit，其次使用 JSChart 构造函数 @yutiansut @quantaxis
         if (hasJsChartInit) {
-          // 使用 jsChartInit (= JSChart.Init) 初始化
           this.jsChart = JSChartLib.jsChartInit(this.$refs.chart)
-          console.log('[KLineChart] ✅ Chart created via jsChartInit')
         } else if (hasJSChart) {
-          // 使用 JSChart 构造函数
           this.jsChart = new JSChartLib.JSChart(this.$refs.chart)
-          console.log('[KLineChart] ✅ Chart created via new JSChart()')
         } else {
-          throw new Error('Cannot find valid HQChart initialization method (jsChartInit or JSChart not found)')
+          throw new Error('Cannot find valid HQChart initialization method')
         }
 
         this.jsChart.SetOption(this.option)
         this.isChartReady = true
-        this.initRetryCount = 0  // ✨ 重置重试计数器
+        this.initRetryCount = 0
 
-        console.log('[KLineChart] ✅ Chart initialized successfully!')
-
-        // ✨ 优先使用缓存的待处理数据，然后是 props 传入的数据 @yutiansut @quantaxis
+        // 加载数据
         const dataToLoad = this.pendingData || this.klineData
         if (dataToLoad && dataToLoad.length > 0) {
-          console.log('[KLineChart] 📊 Loading data after init:', dataToLoad.length, 'bars (source:', this.pendingData ? 'pendingData' : 'klineData', ')')
-          this.pendingData = null  // 清除缓存
-          this.$nextTick(() => {
-            this.updateChartData(dataToLoad)
-          })
-        } else {
-          console.log('[KLineChart] ⚠️ No data available after init')
+          this.pendingData = null
+          this.$nextTick(() => this.updateChartData(dataToLoad))
         }
       } catch (error) {
-        console.error('[KLineChart] Failed to initialize chart:', error)
+        console.error('[KLineChart] Init failed:', error)
       }
     },
 
-    // ✨ 重新初始化图表（周期/合约变化时）@yutiansut @quantaxis
+    // 重新初始化图表
     reinitChart() {
       if (this.jsChart) {
         this.jsChart.OnDestroy && this.jsChart.OnDestroy()
         this.jsChart = null
         this.isChartReady = false
       }
+      this.$nextTick(() => this.initChart())
+    },
 
-      this.$nextTick(() => {
-        this.initChart()
-      })
+    // 快速重新初始化
+    reinitChartFast() {
+      if (this.jsChart) {
+        this.jsChart.OnDestroy && this.jsChart.OnDestroy()
+        this.jsChart = null
+        this.isChartReady = false
+      }
+      this.$nextTick(() => this.initChart())
     },
 
     // 调整容器大小
@@ -467,61 +424,26 @@ export default {
       }
     },
 
-    // ✨ 更新图表数据（核心方法）@yutiansut @quantaxis
+    // 更新图表数据
     updateChartData(data) {
-      if (!data || data.length === 0) {
-        console.log('[KLineChart] No data to update')
-        return
-      }
+      if (!data || data.length === 0) return
 
       if (!this.jsChart || !this.isChartReady) {
-        // ✨ 图表未准备好，缓存数据等待初始化完成后加载 @yutiansut @quantaxis
-        console.log('[KLineChart] Chart not ready, caching', data.length, 'bars for later. jsChart:', !!this.jsChart, 'isChartReady:', this.isChartReady)
         this.pendingData = data
         return
       }
 
-      console.log('[KLineChart] Updating chart with', data.length, 'bars')
-
-      // 打印第一条和最后一条数据用于调试
-      if (data.length > 0) {
-        console.log('[KLineChart] First bar:', JSON.stringify(data[0]))
-        console.log('[KLineChart] Last bar:', JSON.stringify(data[data.length - 1]))
-      }
-
       try {
-        // 检查可用的更新方法
-        const methods = {
-          ReloadChartData: typeof this.jsChart.ReloadChartData === 'function',
-          RequestHistoryData: typeof this.jsChart.RequestHistoryData === 'function',
-          ChangeSymbol: typeof this.jsChart.ChangeSymbol === 'function',
-          SetOption: typeof this.jsChart.SetOption === 'function'
-        }
-        console.log('[KLineChart] Available update methods:', methods)
-
-        // 方法1：使用 ChangeSymbol 触发重新加载
-        if (methods.ChangeSymbol) {
-          console.log('[KLineChart] Using ChangeSymbol to reload')
+        if (typeof this.jsChart.ChangeSymbol === 'function') {
           this.jsChart.ChangeSymbol(this.symbol)
-        } else if (methods.ReloadChartData) {
-          // 方法2：使用 ReloadChartData 重新加载数据
-          console.log('[KLineChart] Using ReloadChartData')
+        } else if (typeof this.jsChart.ReloadChartData === 'function') {
           this.jsChart.ReloadChartData()
-        } else if (methods.RequestHistoryData) {
-          // 方法3：直接请求历史数据
-          console.log('[KLineChart] Using RequestHistoryData')
+        } else if (typeof this.jsChart.RequestHistoryData === 'function') {
           this.jsChart.RequestHistoryData()
         } else {
-          // 方法4：重新初始化图表（最后手段）
-          console.log('[KLineChart] No update method available, reinitializing chart')
           this.reinitChart()
         }
-
-        console.log('[KLineChart] Chart data updated successfully')
       } catch (error) {
-        console.error('[KLineChart] Failed to update chart data:', error)
-        // 出错时尝试重新初始化
-        console.log('[KLineChart] Attempting reinit after error')
         this.reinitChart()
       }
     },
@@ -529,12 +451,10 @@ export default {
     // 切换周期
     changePeriod(period) {
       if (!this.jsChart) return
-
       try {
         this.jsChart.ChangePeriod(period)
-        console.log('[KLineChart] Changed period to:', period)
       } catch (error) {
-        console.error('[KLineChart] Failed to change period:', error)
+        // ignore
       }
     },
 
@@ -606,7 +526,6 @@ export default {
         }
       })
 
-      console.log('[KLineChart] Factor overlay rendered')
     },
 
     /**
@@ -735,10 +654,47 @@ export default {
   width: 100%;
   height: 100%;
   background-color: #1a1a1a;
+  position: relative;
 
   .kline-chart {
     width: 100%;
     height: 100%;
+  }
+
+  // ✨ 加载提示样式 @yutiansut @quantaxis
+  .loading-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(26, 26, 26, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+
+    .loading-content {
+      text-align: center;
+      color: #a6adc8;
+
+      i {
+        font-size: 32px;
+        color: #89b4fa;
+        margin-bottom: 12px;
+        display: block;
+        animation: spin 1s linear infinite;
+      }
+
+      span {
+        font-size: 14px;
+      }
+    }
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
   }
 }
 </style>

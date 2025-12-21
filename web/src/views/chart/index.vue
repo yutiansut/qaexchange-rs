@@ -110,93 +110,49 @@ export default {
   },
 
   watch: {
-    // 当选中合约变化时，订阅K线数据
-    selectedInstrument(newVal) {
-      if (newVal && this.isConnected) {
-        this.subscribeKLine()
+    // 当选中合约变化时，清除旧数据并订阅新K线数据
+    selectedInstrument(newVal, oldVal) {
+      if (newVal && newVal !== oldVal) {
+        this.klineDataList = []
+        if (this.isConnected) this.subscribeKLine()
       }
     },
 
-    // ✨ 监听整个 snapshot 变化，调试 klines 数据 @yutiansut @quantaxis
-    snapshot: {
-      handler(newSnapshot) {
-        // 调试：打印完整快照的 klines 结构
-        if (newSnapshot && newSnapshot.klines) {
-          console.log('[ChartPage] 📊 snapshot.klines received:', JSON.stringify(newSnapshot.klines, null, 2))
-        }
-      },
-      deep: true
-    },
-
-    // 监听K线数据更新（WebSocket实时推送）@yutiansut @quantaxis
-    // ✨ 添加 immediate: true 确保数据到达时立即触发
+    // 监听K线数据更新
     'snapshot.klines': {
       immediate: true,
       handler(newKlines) {
-        console.log('[ChartPage] 📊 snapshot.klines watcher triggered:', {
-          hasKlines: !!newKlines,
-          instrument: this.selectedInstrument,
-          period: this.klinePeriod
-        })
-
-        if (!newKlines || !this.selectedInstrument) {
-          console.log('[ChartPage] ⚠️ No klines or no instrument selected')
-          return
-        }
-
-        console.log('[ChartPage] 📊 Available instruments in klines:', Object.keys(newKlines))
+        if (!newKlines || !this.selectedInstrument) return
 
         const instrumentKlines = newKlines[this.selectedInstrument]
-        if (!instrumentKlines) {
-          console.log('[ChartPage] ⚠️ No klines for instrument:', this.selectedInstrument)
-          return
-        }
+        if (!instrumentKlines) return
 
         const durationNs = this.periodToNs(this.klinePeriod).toString()
-        console.log('[ChartPage] 📊 Looking for duration:', durationNs, 'Available:', Object.keys(instrumentKlines))
-
         const periodKlines = instrumentKlines[durationNs]
-        if (!periodKlines || !periodKlines.data) {
-          console.log('[ChartPage] ⚠️ No period klines for duration:', durationNs)
-          return
-        }
+        if (!periodKlines || !periodKlines.data) return
 
-        // 转换为数组格式
-        console.log('[ChartPage] 📊 Raw period klines data:', periodKlines.data)
+        // 转换K线数据格式
+        const klineArray = Object.values(periodKlines.data).map(k => ({
+          datetime: k.datetime / 1000000,
+          open: k.open,
+          high: k.high,
+          low: k.low,
+          close: k.close,
+          volume: k.volume,
+          amount: k.amount || (k.volume * k.close)
+        }))
 
-        const klineArray = Object.values(periodKlines.data).map(k => {
-          const converted = {
-            datetime: k.datetime / 1000000,  // 纳秒转毫秒
-            open: k.open,
-            high: k.high,
-            low: k.low,
-            close: k.close,
-            volume: k.volume,
-            amount: k.amount || (k.volume * k.close)
-          }
-          console.log('[ChartPage] 📊 Converted K-line:', {
-            original_datetime: k.datetime,
-            converted_datetime: converted.datetime,
-            readable_time: new Date(converted.datetime).toLocaleString(),
-            ohlc: [k.open, k.high, k.low, k.close]
-          })
-          return converted
-        })
-
-        // 按时间排序
         klineArray.sort((a, b) => a.datetime - b.datetime)
-
         this.klineDataList = klineArray
-        console.log('[ChartPage] ✅ K-line data updated:', klineArray.length, 'bars')
-        console.log('[ChartPage] 📊 Sample kline data:', klineArray[0])
       },
       deep: true
     },
 
-    // 当K线周期变化时，重新订阅
-    klinePeriod() {
-      if (this.selectedInstrument && this.isConnected) {
-        this.subscribeKLine()
+    // 当K线周期变化时，清除旧数据并重新订阅
+    klinePeriod(newVal, oldVal) {
+      if (newVal !== oldVal) {
+        this.klineDataList = []
+        if (this.selectedInstrument && this.isConnected) this.subscribeKLine()
       }
     }
   },
@@ -231,33 +187,16 @@ export default {
       }
     },
 
-    // ✨ 订阅K线数据（增强调试）@yutiansut @quantaxis
+    // 订阅K线数据
     subscribeKLine() {
-      console.log('[ChartPage] 📊 subscribeKLine called:', {
-        instrument: this.selectedInstrument,
-        isConnected: this.isConnected,
-        period: this.klinePeriod
-      })
+      if (!this.selectedInstrument || !this.isConnected) return
 
-      if (!this.selectedInstrument || !this.isConnected) {
-        console.warn('[ChartPage] ⚠️ Cannot subscribe K-line: not connected or no instrument selected')
-        return
-      }
-
-      const durationNs = this.periodToNs(this.klinePeriod)
-      const chartConfig = {
+      this.setChart({
         chart_id: 'chart_page',
         instrument_id: this.selectedInstrument,
         period: this.klinePeriod,
         count: 500
-      }
-
-      console.log('[ChartPage] 📊 Calling setChart with config:', chartConfig)
-      console.log('[ChartPage] 📊 Duration in ns:', durationNs)
-
-      this.setChart(chartConfig)
-
-      console.log('[ChartPage] ✅ setChart called successfully')
+      })
     },
 
     // 转换周期为纳秒
@@ -275,7 +214,7 @@ export default {
     },
 
     onInstrumentChange(value) {
-      console.log('[ChartPage] Instrument changed to:', value)
+      // 合约切换由 watcher 处理
     }
   }
 }
