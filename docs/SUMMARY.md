@@ -111,7 +111,7 @@
     - [市场数据增强](08_advanced/implementation_summaries/market_data.md)
     - [管理功能](08_advanced/implementation_summaries/management_features.md)
     - [K线聚合系统](08_advanced/implementation_summaries/kline_system.md)
-    - [K线实时推送系统](../KLINE_IMPLEMENTATION_SUMMARY.md)
+    - [K线实时推送系统](06_development/KLINE_IMPLEMENTATION_SUMMARY.md)
   - [技术深度解析]()
     - [市场数据增强实现](08_advanced/technical_deep_dive/market_data_enhancement.md)
   - [阶段报告]()

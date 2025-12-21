@@ -136,7 +136,7 @@
 #### 实现总结
 - [市场数据实现](./08_advanced/implementation_summaries/market_data.md) - Phase 9 市场数据增强
 - [管理功能实现](./08_advanced/implementation_summaries/management_features.md) - Phase 10 用户管理
-- [K线实时推送系统](../KLINE_IMPLEMENTATION_SUMMARY.md) - K线聚合与WebSocket推送完整实现 ✨ **最新**
+- [K线实时推送系统](./06_development/KLINE_IMPLEMENTATION_SUMMARY.md) - K线聚合与WebSocket推送完整实现 ✨ **最新**
 
 #### 技术深度
 - [市场数据增强](./08_advanced/technical_deep_dive/market_data_enhancement.md) - L1 缓存与 WAL 恢复
