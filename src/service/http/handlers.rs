@@ -115,8 +115,8 @@ pub async fn query_account(
                     )
                 });
 
-            // ✨ 动态计算保证金：从所有持仓累加，而非使用可能过期的静态字段 @yutiansut @quantaxis
-            let margin = acc.get_margin();
+            // ✨ 动态计算保证金 = 持仓保证金 + 挂单冻结保证金 @yutiansut @quantaxis
+            let margin = acc.get_margin() + acc.get_frozen_margin();
 
             let info = AccountInfo {
                 user_id: acc.account_cookie.clone(),
@@ -124,7 +124,7 @@ pub async fn query_account(
                 balance: acc.accounts.balance,
                 available: acc.money,
                 frozen,
-                margin,  // ✨ 修复: 使用动态计算的 margin
+                margin,
                 profit: acc.accounts.close_profit,
                 risk_ratio: acc.accounts.risk_ratio,
                 account_type: format!("{:?}", account_type).to_lowercase(),
