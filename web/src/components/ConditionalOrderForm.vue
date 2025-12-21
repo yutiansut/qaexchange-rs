@@ -430,7 +430,18 @@ export default {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+// @yutiansut @quantaxis - 条件单表单暗色主题
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+
 .conditional-order-form {
   max-width: 700px;
   margin: 0 auto;
@@ -439,15 +450,15 @@ export default {
 
 .conditional-order-form h3 {
   margin: 0 0 20px 0;
-  color: #333;
+  color: $dark-text-primary !important;
   font-size: 20px;
 }
 
 .form {
-  background: white;
+  background: $dark-bg-card !important;
   padding: 20px;
   border-radius: 4px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid $dark-border !important;
 }
 
 .form-group {
@@ -457,7 +468,7 @@ export default {
 .form-group label {
   display: block;
   margin-bottom: 8px;
-  color: #666;
+  color: $dark-text-secondary !important;
   font-size: 14px;
   font-weight: 500;
 }
@@ -466,17 +477,28 @@ export default {
 .form-group select {
   width: 100%;
   padding: 10px;
-  border: 1px solid #ddd;
+  border: 1px solid $dark-border !important;
   border-radius: 4px;
   font-size: 14px;
   box-sizing: border-box;
+  background: $dark-bg-tertiary !important;
+  color: $dark-text-primary !important;
+}
+
+.form-group input::placeholder {
+  color: $dark-text-muted !important;
+}
+
+.form-group select option {
+  background: $dark-bg-card !important;
+  color: $dark-text-primary !important;
 }
 
 .form-group input:focus,
 .form-group select:focus {
   outline: none;
-  border-color: #409EFF;
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
+  border-color: $primary-color !important;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
 }
 
 .form-row {
@@ -494,22 +516,24 @@ export default {
 
 .condition-btn {
   padding: 10px;
-  border: 2px solid #ddd;
-  background: white;
+  border: 2px solid $dark-border !important;
+  background: $dark-bg-tertiary !important;
   border-radius: 4px;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.3s;
+  color: $dark-text-secondary !important;
 }
 
 .condition-btn:hover {
-  border-color: #409EFF;
+  border-color: $primary-color !important;
+  color: $primary-color !important;
 }
 
 .condition-btn.active {
-  border-color: #409EFF;
-  background: rgba(64, 158, 255, 0.1);
-  color: #409EFF;
+  border-color: $primary-color !important;
+  background: rgba(24, 144, 255, 0.15) !important;
+  color: $primary-color !important;
 }
 
 .form-actions {
@@ -519,7 +543,7 @@ export default {
 .btn-submit {
   width: 100%;
   padding: 12px;
-  background: #409EFF;
+  background: $primary-color;
   color: white;
   border: none;
   border-radius: 4px;
@@ -530,31 +554,32 @@ export default {
 }
 
 .btn-submit:hover:not(:disabled) {
-  background: #66b1ff;
+  background: #40a9ff;
 }
 
 .btn-disabled {
-  background: #c0c4cc !important;
+  background: $dark-bg-tertiary !important;
+  color: $dark-text-muted !important;
   cursor: not-allowed;
 }
 
 .error-message {
   margin-top: 15px;
   padding: 12px;
-  background: #fef0f0;
-  border: 1px solid #fde2e2;
+  background: rgba(245, 108, 108, 0.1) !important;
+  border: 1px solid rgba(245, 108, 108, 0.3) !important;
   border-radius: 4px;
-  color: #f56c6c;
+  color: #f56c6c !important;
   font-size: 14px;
 }
 
 .success-message {
   margin-top: 15px;
   padding: 12px;
-  background: #f0f9eb;
-  border: 1px solid #e1f3d8;
+  background: rgba(103, 194, 58, 0.1) !important;
+  border: 1px solid rgba(103, 194, 58, 0.3) !important;
   border-radius: 4px;
-  color: #67c23a;
+  color: #67c23a !important;
   font-size: 14px;
 }
 
@@ -565,59 +590,60 @@ export default {
 
 .conditional-orders h4 {
   margin: 0 0 15px 0;
-  color: #333;
+  color: $dark-text-primary !important;
   font-size: 16px;
 }
 
 .orders-table {
   width: 100%;
   border-collapse: collapse;
-  background: white;
+  background: $dark-bg-card !important;
   border-radius: 4px;
   overflow: hidden;
-  border: 1px solid #e0e0e0;
+  border: 1px solid $dark-border !important;
 }
 
 .orders-table th,
 .orders-table td {
   padding: 10px 8px;
   text-align: left;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid $dark-border !important;
   font-size: 13px;
+  color: $dark-text-primary !important;
 }
 
 .orders-table th {
-  background: #f5f7fa;
-  color: #666;
+  background: $dark-bg-secondary !important;
+  color: $dark-text-secondary !important;
   font-weight: 500;
 }
 
 .direction-buy {
-  color: #f56c6c;
+  color: #f56c6c !important;
 }
 
 .direction-sell {
-  color: #67c23a;
+  color: #67c23a !important;
 }
 
 .status-pending {
-  color: #e6a23c;
+  color: #e6a23c !important;
 }
 
 .status-triggered {
-  color: #67c23a;
+  color: #67c23a !important;
 }
 
 .status-cancelled {
-  color: #909399;
+  color: $dark-text-muted !important;
 }
 
 .status-expired {
-  color: #909399;
+  color: $dark-text-muted !important;
 }
 
 .status-failed {
-  color: #f56c6c;
+  color: #f56c6c !important;
 }
 
 .btn-cancel {

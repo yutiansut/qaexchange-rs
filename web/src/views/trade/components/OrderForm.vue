@@ -269,14 +269,98 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+// @yutiansut @quantaxis - 深色主题订单表单
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+$buy-color: #f5222d;
+$sell-color: #52c41a;
+
 .order-form {
   padding: 20px 10px;
+
+  // 表单标签颜色
+  ::v-deep .el-form-item__label {
+    color: $dark-text-secondary !important;
+  }
+
+  // 输入框样式
+  ::v-deep .el-input__inner,
+  ::v-deep .el-select .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &::placeholder {
+      color: $dark-text-muted;
+    }
+
+    &:focus {
+      border-color: $primary-color !important;
+    }
+  }
+
+  // 输入框数字控件
+  ::v-deep .el-input-number {
+    .el-input__inner {
+      text-align: left;
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-primary !important;
+    }
+
+    .el-input-number__decrease,
+    .el-input-number__increase {
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-secondary !important;
+
+      &:hover {
+        color: $primary-color !important;
+      }
+    }
+  }
+
+  // 单选按钮组
+  ::v-deep .el-radio-group {
+    .el-radio-button__inner {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-secondary;
+    }
+
+    .el-radio-button__orig-radio:checked + .el-radio-button__inner {
+      background: $primary-color;
+      border-color: $primary-color;
+      color: white;
+    }
+  }
 
   .price-shortcuts,
   .volume-shortcuts {
     margin-top: 10px;
     display: flex;
     gap: 5px;
+
+    .el-button {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-secondary;
+
+      &:hover {
+        border-color: $primary-color;
+        color: $primary-color;
+      }
+
+      &.el-button--primary {
+        background: $primary-color;
+        border-color: $primary-color;
+        color: white;
+      }
+    }
   }
 
   .estimated-amount,
@@ -284,39 +368,38 @@ export default {
     .amount {
       font-size: 18px;
       font-weight: 600;
-      color: #303133;
+      color: $dark-text-primary;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     .desc {
       font-size: 12px;
-      color: #909399;
+      color: $dark-text-muted;
       margin-left: 10px;
     }
   }
 
   .buy-button {
-    background: #f56c6c;
-    border-color: #f56c6c;
+    background: $buy-color !important;
+    border-color: $buy-color !important;
+    font-size: 16px;
+    font-weight: 600;
 
     &:hover {
-      background: #f78989;
-      border-color: #f78989;
+      background: lighten($buy-color, 10%) !important;
+      border-color: lighten($buy-color, 10%) !important;
     }
   }
 
   .sell-button {
-    background: #67c23a;
-    border-color: #67c23a;
+    background: $sell-color !important;
+    border-color: $sell-color !important;
+    font-size: 16px;
+    font-weight: 600;
 
     &:hover {
-      background: #85ce61;
-      border-color: #85ce61;
-    }
-  }
-
-  ::v-deep .el-input-number {
-    .el-input__inner {
-      text-align: left;
+      background: lighten($sell-color, 10%) !important;
+      border-color: lighten($sell-color, 10%) !important;
     }
   }
 }

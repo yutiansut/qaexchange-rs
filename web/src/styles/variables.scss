@@ -25,14 +25,19 @@ $dark-text-primary: #f0f6fc;
 $dark-text-secondary: #8b949e;
 $dark-text-muted: #6e7681;
 
-// ============= 浅色主题 =============
-$light-bg-primary: #f5f7fa;
-$light-bg-secondary: #ffffff;
-$light-bg-card: #ffffff;
-$light-border: #e4e7ed;
-$light-text-primary: #303133;
-$light-text-secondary: #606266;
-$light-text-muted: #909399;
+// ============= 浅色主题（柔和灰色调）@yutiansut @quantaxis =============
+$light-bg-primary: #f0f2f5;        // 页面背景 - 柔和浅灰
+$light-bg-secondary: #fafbfc;      // 次级背景 - 近白
+$light-bg-card: #ffffff;           // 卡片背景 - 纯白
+$light-bg-hover: #f5f7fa;          // 悬停背景 - 浅灰
+$light-bg-table-header: #fafbfc;   // 表头背景
+$light-bg-table-stripe: #fafbfc;   // 斑马纹背景
+$light-border: #e8eaed;            // 边框 - 柔和边框
+$light-border-light: #f0f0f0;      // 浅边框
+$light-text-primary: #1f2329;      // 主文字 - 深灰而非纯黑
+$light-text-secondary: #646a73;    // 次级文字
+$light-text-muted: #8f959e;        // 弱化文字
+$light-text-placeholder: #bbbfc4;  // 占位符文字
 
 // ============= 功能色 =============
 $success-color: #52c41a;

@@ -48,66 +48,65 @@
       <el-button icon="el-icon-refresh" @click="resetFilters">重置</el-button>
     </div>
 
-    <!-- 账户列表 -->
+    <!-- 账户列表 @yutiansut @quantaxis -->
     <div class="table-container">
-      <vxe-table
+      <el-table
         ref="accountTable"
         :data="accounts"
         border
         stripe
-        resizable
-        highlight-hover-row
-        :loading="loading"
-        :sort-config="{ trigger: 'cell', remote: false }"
+        highlight-current-row
+        v-loading="loading"
         height="500"
+        style="width: 100%"
       >
-        <vxe-table-column field="account_id" title="账户ID" width="200" sortable show-overflow="tooltip"></vxe-table-column>
-        <vxe-table-column field="user_id" title="用户ID" width="200" sortable show-overflow="tooltip"></vxe-table-column>
-        <vxe-table-column field="account_name" title="账户名称" width="150"></vxe-table-column>
-        <vxe-table-column field="account_type" title="账户类型" width="120">
-          <template slot-scope="{ row }">
-            <el-tag :type="row.account_type === 'Individual' ? 'success' : 'warning'" size="small">
-              {{ row.account_type === 'Individual' ? '个人' : '机构' }}
+        <el-table-column prop="account_id" label="账户ID" width="200" sortable show-overflow-tooltip></el-table-column>
+        <el-table-column prop="user_id" label="用户ID" width="200" sortable show-overflow-tooltip></el-table-column>
+        <el-table-column prop="account_name" label="账户名称" width="150"></el-table-column>
+        <el-table-column prop="account_type" label="账户类型" width="120">
+          <template slot-scope="scope">
+            <el-tag :type="scope.row.account_type === 'Individual' ? 'success' : 'warning'" size="small">
+              {{ scope.row.account_type === 'Individual' ? '个人' : '机构' }}
             </el-tag>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="balance" title="总权益" width="140" align="right">
-          <template slot-scope="{ row }">
-            <span :class="{ 'positive': row.balance > 0 }">
-              {{ row.balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </el-table-column>
+        <el-table-column prop="balance" label="总权益" width="140" align="right">
+          <template slot-scope="scope">
+            <span :class="{ 'positive': scope.row.balance > 0 }">
+              {{ scope.row.balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
             </span>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="available" title="可用资金" width="140" align="right">
-          <template slot-scope="{ row }">
-            {{ row.available.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </el-table-column>
+        <el-table-column prop="available" label="可用资金" width="140" align="right">
+          <template slot-scope="scope">
+            {{ scope.row.available.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="margin_used" title="占用保证金" width="140" align="right">
-          <template slot-scope="{ row }">
-            {{ row.margin_used.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </el-table-column>
+        <el-table-column prop="margin_used" label="占用保证金" width="140" align="right">
+          <template slot-scope="scope">
+            {{ (scope.row.margin_used || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="risk_ratio" title="风险率" width="120" align="right">
-          <template slot-scope="{ row }">
-            <el-tag :type="getRiskTagType(row.risk_ratio)" size="small">
-              {{ (row.risk_ratio * 100).toFixed(2) }}%
+        </el-table-column>
+        <el-table-column prop="risk_ratio" label="风险率" width="120" align="right">
+          <template slot-scope="scope">
+            <el-tag :type="getRiskTagType(scope.row.risk_ratio)" size="small">
+              {{ (scope.row.risk_ratio * 100).toFixed(2) }}%
             </el-tag>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="created_at" title="创建时间" width="180">
-          <template slot-scope="{ row }">
-            {{ formatTimestamp(row.created_at) }}
+        </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="180">
+          <template slot-scope="scope">
+            {{ formatTimestamp(scope.row.created_at) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column title="操作" width="200" fixed="right">
-          <template slot-scope="{ row }">
-            <el-button size="mini" type="text" @click="showAccountDetail(row)">详情</el-button>
-            <el-button size="mini" type="text" @click="showDepositDialog(row)">入金</el-button>
-            <el-button size="mini" type="text" @click="showWithdrawDialog(row)">出金</el-button>
+        </el-table-column>
+        <el-table-column label="操作" width="200" fixed="right">
+          <template slot-scope="scope">
+            <el-button size="mini" type="text" @click="showAccountDetail(scope.row)">详情</el-button>
+            <el-button size="mini" type="text" @click="showDepositDialog(scope.row)">入金</el-button>
+            <el-button size="mini" type="text" @click="showWithdrawDialog(scope.row)">出金</el-button>
           </template>
-        </vxe-table-column>
-      </vxe-table>
+        </el-table-column>
+      </el-table>
 
       <!-- 分页 -->
       <div class="pagination-container">
@@ -387,19 +386,36 @@ export default {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+// @yutiansut @quantaxis - 账户管理页面深色主题
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+$success-color: #52c41a;
+$danger-color: #f5222d;
+$warning-color: #faad14;
+
 .accounts-container {
   padding: 20px;
+  min-height: 100%;
+  background: $dark-bg-primary;
 }
 
 .page-header {
   margin-bottom: 20px;
-}
 
-.page-header h2 {
-  margin: 0 0 20px 0;
-  font-size: 24px;
-  font-weight: 500;
+  h2 {
+    margin: 0 0 20px 0;
+    font-size: 24px;
+    font-weight: 600;
+    color: $dark-text-primary;
+  }
 }
 
 .header-stats {
@@ -410,6 +426,16 @@ export default {
 
 .stat-card {
   flex: 1;
+
+  ::v-deep.el-card {
+    background: $dark-bg-card !important;
+    border: 1px solid $dark-border !important;
+    border-radius: 10px;
+
+    .el-card__body {
+      padding: 20px;
+    }
+  }
 }
 
 .stat-item {
@@ -417,33 +443,262 @@ export default {
 }
 
 .stat-label {
-  font-size: 14px;
-  color: #909399;
-  margin-bottom: 8px;
+  font-size: 13px;
+  color: $dark-text-secondary;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .stat-value {
-  font-size: 24px;
-  font-weight: 500;
-  color: #303133;
+  font-size: 26px;
+  font-weight: 700;
+  color: $dark-text-primary;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .filter-container {
   margin-bottom: 20px;
+  padding: 16px;
+  background: $dark-bg-secondary;
+  border-radius: 8px;
+  border: 1px solid $dark-border;
+
+  ::v-deep .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &::placeholder {
+      color: $dark-text-muted;
+    }
+  }
+
+  ::v-deep .el-select .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+  }
+
+  ::v-deep .el-button--primary {
+    background: $primary-color;
+    border-color: $primary-color;
+  }
+
+  ::v-deep .el-button--default {
+    background: $dark-bg-tertiary;
+    border-color: $dark-border;
+    color: $dark-text-secondary;
+
+    &:hover {
+      border-color: $primary-color;
+      color: $primary-color;
+    }
+  }
 }
 
 .table-container {
-  background: white;
+  background: $dark-bg-card;
   padding: 20px;
-  border-radius: 4px;
+  border-radius: 8px;
+  border: 1px solid $dark-border;
+
+  ::v-deep .el-table {
+    background: transparent !important;
+
+    &::before {
+      display: none;
+    }
+
+    th.el-table__cell {
+      background: $dark-bg-secondary !important;
+      border-bottom: 1px solid $dark-border !important;
+      color: $dark-text-secondary !important;
+      font-weight: 600;
+    }
+
+    td.el-table__cell {
+      background: $dark-bg-card !important;
+      border-bottom: 1px solid $dark-border !important;
+      color: $dark-text-primary !important;
+    }
+
+    tr {
+      background: $dark-bg-card !important;
+    }
+
+    .el-table__row--striped td.el-table__cell {
+      background: $dark-bg-secondary !important;
+    }
+
+    .el-table__row:hover > td.el-table__cell {
+      background: $dark-bg-tertiary !important;
+    }
+
+    .cell {
+      color: $dark-text-primary !important;
+    }
+
+    .el-table__fixed-right {
+      th.el-table__cell,
+      td.el-table__cell {
+        background: $dark-bg-card !important;
+      }
+    }
+
+    .el-table__empty-block {
+      background: $dark-bg-card;
+    }
+
+    .el-table__empty-text {
+      color: $dark-text-muted;
+    }
+  }
 }
 
 .pagination-container {
   margin-top: 20px;
   text-align: right;
+
+  ::v-deep .el-pagination {
+    .btn-prev,
+    .btn-next,
+    .el-pager li {
+      background: $dark-bg-tertiary !important;
+      color: $dark-text-secondary !important;
+      border: none;
+
+      &:hover {
+        color: $primary-color !important;
+      }
+
+      &.active {
+        background: $primary-color !important;
+        color: white !important;
+      }
+    }
+
+    .el-pagination__total,
+    .el-pagination__jump {
+      color: $dark-text-secondary;
+    }
+
+    .el-input__inner {
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-primary !important;
+    }
+  }
 }
 
 .positive {
-  color: #67C23A;
+  color: $success-color !important;
+  font-weight: 600;
+}
+
+// 标签样式
+::v-deep .el-tag {
+  border: none;
+  font-weight: 600;
+
+  &--success {
+    background: rgba($success-color, 0.15);
+    color: $success-color;
+  }
+
+  &--warning {
+    background: rgba($warning-color, 0.15);
+    color: $warning-color;
+  }
+
+  &--danger {
+    background: rgba($danger-color, 0.15);
+    color: $danger-color;
+  }
+}
+
+// 对话框
+::v-deep .el-dialog {
+  background: $dark-bg-card;
+  border: 1px solid $dark-border;
+  border-radius: 12px;
+
+  .el-dialog__header {
+    background: $dark-bg-secondary;
+    border-bottom: 1px solid $dark-border;
+    border-radius: 12px 12px 0 0;
+
+    .el-dialog__title {
+      color: $dark-text-primary;
+    }
+
+    .el-dialog__headerbtn .el-dialog__close {
+      color: $dark-text-secondary;
+    }
+  }
+
+  .el-dialog__body {
+    background: $dark-bg-card;
+  }
+
+  .el-dialog__footer {
+    background: $dark-bg-secondary;
+    border-top: 1px solid $dark-border;
+    border-radius: 0 0 12px 12px;
+  }
+
+  .el-form-item__label {
+    color: $dark-text-secondary;
+  }
+
+  .el-input__inner,
+  .el-textarea__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+  }
+
+  .el-input-number {
+    .el-input__inner {
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-primary !important;
+    }
+
+    .el-input-number__decrease,
+    .el-input-number__increase {
+      background: $dark-bg-secondary;
+      border-color: $dark-border;
+      color: $dark-text-secondary;
+    }
+  }
+}
+
+// 下拉菜单
+::v-deep .el-select-dropdown {
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border !important;
+
+  .el-select-dropdown__item {
+    color: $dark-text-primary;
+
+    &:hover {
+      background: $dark-bg-tertiary;
+    }
+
+    &.selected {
+      color: $primary-color;
+      font-weight: 600;
+    }
+  }
+}
+
+// 操作按钮
+::v-deep .el-button--text {
+  color: $primary-color;
+
+  &:hover {
+    color: lighten($primary-color, 10%);
+  }
 }
 </style>

@@ -489,13 +489,38 @@ export default {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+// @yutiansut @quantaxis - 深色主题样式
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+
 .my-accounts-container {
   padding: 20px;
+  background: $dark-bg-primary;
+  min-height: calc(100vh - 60px);
 }
 
 .header-card {
   margin-bottom: 20px;
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border !important;
+
+  ::v-deep .el-card__header {
+    background: $dark-bg-secondary !important;
+    border-bottom: 1px solid $dark-border !important;
+    padding: 15px 20px !important;
+  }
+
+  ::v-deep .el-card__body {
+    background: $dark-bg-card !important;
+  }
 }
 
 .card-header {
@@ -508,6 +533,7 @@ export default {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
+  color: $dark-text-primary !important;
 }
 
 .stats-row {
@@ -517,39 +543,259 @@ export default {
 .stat-card {
   text-align: center;
   padding: 20px;
-  background: #f5f7fa;
-  border-radius: 4px;
+  background: $dark-bg-tertiary !important;
+  border-radius: 8px;
+  border: 1px solid $dark-border;
 }
 
 .stat-label {
   font-size: 14px;
-  color: #909399;
+  color: $dark-text-secondary !important;
   margin-bottom: 8px;
 }
 
 .stat-value {
   font-size: 24px;
   font-weight: 600;
-  color: #303133;
+  color: $dark-text-primary !important;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .accounts-card {
   margin-top: 20px;
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border !important;
+
+  ::v-deep .el-card__body {
+    background: $dark-bg-card !important;
+    padding: 20px !important;
+  }
+
+  // 表格样式
+  ::v-deep .el-table {
+    background: transparent !important;
+    color: $dark-text-primary !important;
+
+    &::before {
+      background-color: $dark-border !important;
+    }
+
+    // 表头
+    th.el-table__cell {
+      background: $dark-bg-secondary !important;
+      color: $dark-text-secondary !important;
+      border-bottom: 1px solid $dark-border !important;
+      font-weight: 600;
+    }
+
+    // 表格行
+    tr {
+      background: $dark-bg-card !important;
+    }
+
+    // 单元格
+    td.el-table__cell {
+      background: $dark-bg-card !important;
+      color: $dark-text-primary !important;
+      border-bottom: 1px solid $dark-border !important;
+    }
+
+    // hover 行
+    .el-table__row:hover > td.el-table__cell {
+      background: $dark-bg-tertiary !important;
+    }
+
+    // 固定列
+    .el-table__fixed,
+    .el-table__fixed-right {
+      background: $dark-bg-card !important;
+
+      &::before {
+        background-color: $dark-border !important;
+      }
+
+      .el-table__fixed-body-wrapper {
+        background: $dark-bg-card !important;
+      }
+    }
+
+    // 空数据
+    .el-table__empty-block {
+      background: $dark-bg-card !important;
+    }
+
+    .el-table__empty-text {
+      color: $dark-text-muted !important;
+    }
+  }
+
+  // 文本链接按钮
+  ::v-deep .el-button--text {
+    color: $primary-color !important;
+
+    &:hover {
+      color: lighten($primary-color, 15%) !important;
+    }
+  }
 }
 
 .money {
-  font-family: 'Monaco', 'Courier New', monospace;
+  font-family: 'JetBrains Mono', 'Monaco', monospace;
   font-weight: 500;
+  color: $dark-text-primary !important;
 }
 
 .empty-state {
   padding: 40px 0;
   text-align: center;
+
+  ::v-deep .el-empty__description p {
+    color: $dark-text-muted !important;
+  }
 }
 
 .form-tip {
   font-size: 12px;
-  color: #909399;
+  color: $dark-text-muted !important;
   margin-top: 5px;
+}
+
+// 标签样式
+::v-deep .el-tag {
+  border: none !important;
+
+  &.el-tag--info {
+    background: rgba($primary-color, 0.15) !important;
+    color: $primary-color !important;
+  }
+
+  &.el-tag--success {
+    background: rgba(82, 196, 26, 0.15) !important;
+    color: #52c41a !important;
+  }
+
+  &.el-tag--warning {
+    background: rgba(250, 173, 20, 0.15) !important;
+    color: #faad14 !important;
+  }
+
+  &.el-tag--danger {
+    background: rgba(245, 34, 45, 0.15) !important;
+    color: #f5222d !important;
+  }
+}
+
+// 对话框样式
+::v-deep .el-dialog {
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border !important;
+  border-radius: 8px !important;
+
+  .el-dialog__header {
+    background: $dark-bg-secondary !important;
+    border-bottom: 1px solid $dark-border !important;
+    padding: 15px 20px !important;
+    border-radius: 8px 8px 0 0 !important;
+
+    .el-dialog__title {
+      color: $dark-text-primary !important;
+    }
+
+    .el-dialog__headerbtn .el-dialog__close {
+      color: $dark-text-secondary !important;
+
+      &:hover {
+        color: $dark-text-primary !important;
+      }
+    }
+  }
+
+  .el-dialog__body {
+    background: $dark-bg-card !important;
+    padding: 20px !important;
+  }
+
+  .el-dialog__footer {
+    background: $dark-bg-card !important;
+    border-top: 1px solid $dark-border !important;
+    padding: 15px 20px !important;
+  }
+}
+
+// 表单样式
+::v-deep .el-form {
+  .el-form-item__label {
+    color: $dark-text-secondary !important;
+  }
+
+  .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &::placeholder {
+      color: $dark-text-muted !important;
+    }
+
+    &:focus {
+      border-color: $primary-color !important;
+    }
+
+    &[disabled] {
+      background: $dark-bg-secondary !important;
+      color: $dark-text-muted !important;
+    }
+  }
+
+  // 数字输入框
+  .el-input-number {
+    .el-input__inner {
+      text-align: left;
+    }
+
+    .el-input-number__decrease,
+    .el-input-number__increase {
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-secondary !important;
+
+      &:hover {
+        color: $primary-color !important;
+      }
+    }
+  }
+}
+
+// 下拉选择框
+::v-deep .el-select-dropdown {
+  background: $dark-bg-secondary !important;
+  border-color: $dark-border !important;
+
+  .el-select-dropdown__item {
+    color: $dark-text-primary !important;
+
+    &:hover, &.hover {
+      background: $dark-bg-tertiary !important;
+    }
+
+    &.selected {
+      color: $primary-color !important;
+      font-weight: 600;
+    }
+  }
+}
+
+// 按钮样式
+::v-deep .el-button {
+  &.el-button--default {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &:hover {
+      border-color: $primary-color !important;
+      color: $primary-color !important;
+    }
+  }
 }
 </style>

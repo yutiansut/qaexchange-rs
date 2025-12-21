@@ -322,7 +322,7 @@ $dark-text-secondary: #8b949e;
 .layout {
   display: flex;
   min-height: 100vh;
-  background: #f5f7fa;
+  background: #f0f2f5;  // 柔和灰色背景 @yutiansut @quantaxis
 }
 
 // 侧边栏
@@ -491,11 +491,11 @@ $dark-text-secondary: #8b949e;
   margin-left: $sidebar-collapsed-width;
 }
 
-// 顶部栏
+// 顶部栏 - 柔和灰色 @yutiansut @quantaxis
 .top-header {
   height: $header-height;
-  background: white;
-  border-bottom: 1px solid #e4e7ed;
+  background: #ffffff;
+  border-bottom: 1px solid #e8eaed;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -503,13 +503,14 @@ $dark-text-secondary: #8b949e;
   position: sticky;
   top: 0;
   z-index: 100;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
 .header-left {
   .page-title {
     font-size: 18px;
     font-weight: 600;
-    color: #303133;
+    color: #1f2329;  // 深灰而非纯黑
   }
 }
 
@@ -561,7 +562,7 @@ $dark-text-secondary: #8b949e;
   transition: background 0.2s ease;
 
   &:hover {
-    background: #f5f7fa;
+    background: #f0f2f5;  // 柔和灰色 @yutiansut @quantaxis
   }
 
   .user-avatar {
@@ -574,7 +575,7 @@ $dark-text-secondary: #8b949e;
     .user-name {
       font-size: 14px;
       font-weight: 500;
-      color: #303133;
+      color: #1f2329;  // 深灰而非纯黑
       line-height: 1.2;
     }
 
@@ -584,7 +585,7 @@ $dark-text-secondary: #8b949e;
   }
 
   .el-icon-caret-bottom {
-    color: #909399;
+    color: #8f959e;
     font-size: 12px;
   }
 }

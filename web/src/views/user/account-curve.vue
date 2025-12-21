@@ -97,52 +97,50 @@
         </el-button>
       </div>
 
-      <vxe-table
+      <el-table
         ref="dataTable"
         :data="curveData"
         border
         stripe
-        resizable
-        highlight-hover-row
         height="300"
       >
-        <vxe-table-column field="date" title="日期" width="120"></vxe-table-column>
-        <vxe-table-column field="balance" title="权益" width="130" align="right">
-          <template slot-scope="{ row }">
-            {{ row.balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        <el-table-column prop="date" label="日期" width="120"></el-table-column>
+        <el-table-column prop="balance" label="权益" width="130" align="right">
+          <template slot-scope="scope">
+            {{ scope.row.balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="available" title="可用资金" width="130" align="right">
-          <template slot-scope="{ row }">
-            {{ row.available.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </el-table-column>
+        <el-table-column prop="available" label="可用资金" width="130" align="right">
+          <template slot-scope="scope">
+            {{ scope.row.available.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="margin" title="保证金" width="130" align="right">
-          <template slot-scope="{ row }">
-            {{ row.margin.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </el-table-column>
+        <el-table-column prop="margin" label="保证金" width="130" align="right">
+          <template slot-scope="scope">
+            {{ scope.row.margin.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="daily_profit" title="日盈亏" width="130" align="right">
-          <template slot-scope="{ row }">
-            <span :style="{ color: row.daily_profit >= 0 ? '#F56C6C' : '#67C23A' }">
-              {{ row.daily_profit >= 0 ? '+' : '' }}{{ row.daily_profit.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </el-table-column>
+        <el-table-column prop="daily_profit" label="日盈亏" width="130" align="right">
+          <template slot-scope="scope">
+            <span :style="{ color: scope.row.daily_profit >= 0 ? '#F56C6C' : '#67C23A' }">
+              {{ scope.row.daily_profit >= 0 ? '+' : '' }}{{ scope.row.daily_profit.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
             </span>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="daily_profit_rate" title="日收益率" width="120" align="right">
-          <template slot-scope="{ row }">
-            <span :style="{ color: row.daily_profit_rate >= 0 ? '#F56C6C' : '#67C23A' }">
-              {{ row.daily_profit_rate >= 0 ? '+' : '' }}{{ (row.daily_profit_rate * 100).toFixed(2) }}%
+        </el-table-column>
+        <el-table-column prop="daily_profit_rate" label="日收益率" width="120" align="right">
+          <template slot-scope="scope">
+            <span :style="{ color: scope.row.daily_profit_rate >= 0 ? '#F56C6C' : '#67C23A' }">
+              {{ scope.row.daily_profit_rate >= 0 ? '+' : '' }}{{ (scope.row.daily_profit_rate * 100).toFixed(2) }}%
             </span>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="trade_count" title="交易笔数" width="100" align="center"></vxe-table-column>
-        <vxe-table-column field="commission" title="手续费" width="120" align="right">
-          <template slot-scope="{ row }">
-            {{ row.commission.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </el-table-column>
+        <el-table-column prop="trade_count" label="交易笔数" width="100" align="center"></el-table-column>
+        <el-table-column prop="commission" label="手续费" width="120" align="right">
+          <template slot-scope="scope">
+            {{ scope.row.commission.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
-        </vxe-table-column>
-      </vxe-table>
+        </el-table-column>
+      </el-table>
     </el-card>
   </div>
 </template>
@@ -503,9 +501,24 @@ export default {
 </script>
 
 
-<style scoped>
+<style lang="scss" scoped>
+// @yutiansut @quantaxis - 深色主题样式
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+$buy-color: #f5222d;
+$sell-color: #52c41a;
+
 .account-curve-container {
   padding: 20px;
+  background: $dark-bg-primary;
+  min-height: calc(100vh - 60px);
 }
 
 .page-header {
@@ -517,13 +530,35 @@ export default {
 
 .page-header h2 {
   margin: 0;
-  color: #303133;
+  color: $dark-text-primary !important;
 }
 
 .header-controls {
   display: flex;
   align-items: center;
   gap: 15px;
+
+  // 下拉选择框
+  ::v-deep .el-select .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+  }
+
+  // 单选按钮组
+  ::v-deep .el-radio-group {
+    .el-radio-button__inner {
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-secondary !important;
+    }
+
+    .el-radio-button__orig-radio:checked + .el-radio-button__inner {
+      background: $primary-color !important;
+      border-color: $primary-color !important;
+      color: white !important;
+    }
+  }
 }
 
 .stats-row {
@@ -532,14 +567,15 @@ export default {
 
 .stat-card {
   padding: 20px;
-  background: #fff;
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border;
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .stat-label {
   font-size: 14px;
-  color: #909399;
+  color: $dark-text-secondary !important;
   margin-bottom: 10px;
 }
 
@@ -547,14 +583,84 @@ export default {
   font-size: 28px;
   font-weight: bold;
   margin-bottom: 5px;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .stat-extra {
   font-size: 12px;
-  color: #606266;
+  color: $dark-text-muted !important;
 }
 
 .chart-card, .data-card {
   margin-bottom: 20px;
+
+  ::v-deep .el-card {
+    background: $dark-bg-card !important;
+    border: 1px solid $dark-border !important;
+
+    .el-card__header {
+      background: $dark-bg-secondary !important;
+      border-bottom: 1px solid $dark-border !important;
+      color: $dark-text-primary !important;
+    }
+
+    .el-card__body {
+      background: $dark-bg-card !important;
+    }
+  }
+
+  // 表格样式
+  ::v-deep .el-table {
+    background: transparent !important;
+    color: $dark-text-primary !important;
+
+    &::before {
+      background-color: $dark-border !important;
+    }
+
+    th.el-table__cell {
+      background: $dark-bg-secondary !important;
+      color: $dark-text-secondary !important;
+      border-bottom: 1px solid $dark-border !important;
+      font-weight: 600;
+    }
+
+    tr {
+      background: $dark-bg-card !important;
+    }
+
+    td.el-table__cell {
+      background: $dark-bg-card !important;
+      color: $dark-text-primary !important;
+      border-bottom: 1px solid $dark-border !important;
+    }
+
+    .el-table__row:hover > td.el-table__cell {
+      background: $dark-bg-tertiary !important;
+    }
+
+    .el-table__row--striped .el-table__cell {
+      background: rgba($dark-bg-tertiary, 0.5) !important;
+    }
+  }
+}
+
+// 下拉选择框样式
+::v-deep .el-select-dropdown {
+  background: $dark-bg-secondary !important;
+  border-color: $dark-border !important;
+
+  .el-select-dropdown__item {
+    color: $dark-text-primary !important;
+
+    &:hover, &.hover {
+      background: $dark-bg-tertiary !important;
+    }
+
+    &.selected {
+      color: $primary-color !important;
+      font-weight: 600;
+    }
+  }
 }
 </style>

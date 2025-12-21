@@ -527,7 +527,15 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-// @yutiansut @quantaxis - 仪表盘样式
+// @yutiansut @quantaxis - 深色主题仪表盘样式
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
 $primary-color: #1890ff;
 $success-color: #52c41a;
 $warning-color: #faad14;
@@ -535,6 +543,8 @@ $danger-color: #f5222d;
 
 .dashboard {
   padding: 0;
+  background: $dark-bg-primary;
+  min-height: 100%;
 }
 
 // 统计卡片
@@ -546,15 +556,17 @@ $danger-color: #f5222d;
 }
 
 .stat-card {
-  background: white;
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border;
   border-radius: 12px;
   padding: 20px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   transition: all 0.3s ease;
 
   &:hover {
     transform: translateY(-4px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    border-color: rgba($primary-color, 0.3);
   }
 
   .stat-header {
@@ -591,20 +603,20 @@ $danger-color: #f5222d;
     gap: 4px;
 
     &.up {
-      background: rgba($success-color, 0.1);
+      background: rgba($success-color, 0.15);
       color: $success-color;
     }
     &.down {
-      background: rgba($danger-color, 0.1);
+      background: rgba($danger-color, 0.15);
       color: $danger-color;
     }
     &.warning {
-      background: rgba($warning-color, 0.1);
+      background: rgba($warning-color, 0.15);
       color: $warning-color;
     }
     &.normal {
-      background: rgba(#909399, 0.1);
-      color: #909399;
+      background: rgba($dark-text-muted, 0.15);
+      color: $dark-text-secondary;
     }
   }
 
@@ -614,13 +626,14 @@ $danger-color: #f5222d;
     .stat-value {
       font-size: 28px;
       font-weight: 700;
-      color: #303133;
+      color: $dark-text-primary !important;
       line-height: 1.2;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     .stat-title {
       font-size: 14px;
-      color: #909399;
+      color: $dark-text-secondary !important;
       margin-top: 4px;
     }
   }
@@ -630,23 +643,24 @@ $danger-color: #f5222d;
     justify-content: space-between;
     align-items: center;
     padding-top: 12px;
-    border-top: 1px solid #f0f0f0;
+    border-top: 1px solid $dark-border;
 
     .label {
       font-size: 12px;
-      color: #909399;
+      color: $dark-text-muted !important;
     }
 
     .value {
       font-size: 13px;
       font-weight: 600;
-      color: #606266;
+      color: $dark-text-secondary !important;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     .progress-bar {
       flex: 1;
       height: 6px;
-      background: #f0f0f0;
+      background: $dark-bg-tertiary;
       border-radius: 3px;
       overflow: hidden;
 
@@ -677,9 +691,10 @@ $danger-color: #f5222d;
 }
 
 .chart-card {
-  background: white;
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border;
   border-radius: 12px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   overflow: hidden;
 
   &.wide {
@@ -688,16 +703,17 @@ $danger-color: #f5222d;
 
   .chart-header {
     padding: 16px 20px;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid $dark-border;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    background: $dark-bg-secondary !important;
 
     h3 {
       margin: 0;
       font-size: 16px;
       font-weight: 600;
-      color: #303133;
+      color: $dark-text-primary !important;
     }
 
     .chart-legend {
@@ -706,7 +722,7 @@ $danger-color: #f5222d;
 
       .legend-item {
         font-size: 12px;
-        color: #909399;
+        color: $dark-text-secondary !important;
 
         &::before {
           content: '';
@@ -719,7 +735,7 @@ $danger-color: #f5222d;
 
         &.pending::before { background: $warning-color; }
         &.filled::before { background: $success-color; }
-        &.cancelled::before { background: #909399; }
+        &.cancelled::before { background: $dark-text-muted; }
       }
     }
 
@@ -729,7 +745,7 @@ $danger-color: #f5222d;
 
       .task-stat {
         font-size: 12px;
-        color: #606266;
+        color: $dark-text-secondary !important;
         display: flex;
         align-items: center;
         gap: 6px;
@@ -750,10 +766,26 @@ $danger-color: #f5222d;
 
   .chart-body {
     padding: 16px;
+    background: $dark-bg-card !important;
 
     .chart {
       height: 280px;
     }
+  }
+}
+
+// 单选按钮组 - 深色主题
+::v-deep .el-radio-group {
+  .el-radio-button__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-secondary !important;
+  }
+
+  .el-radio-button__orig-radio:checked + .el-radio-button__inner {
+    background: $primary-color !important;
+    border-color: $primary-color !important;
+    color: white !important;
   }
 }
 
@@ -765,19 +797,20 @@ $danger-color: #f5222d;
 }
 
 .status-card {
-  background: white;
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border;
   border-radius: 12px;
   padding: 16px 20px;
   display: flex;
   align-items: center;
   gap: 16px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 
   .status-icon {
     width: 44px;
     height: 44px;
     border-radius: 10px;
-    background: rgba($primary-color, 0.1);
+    background: rgba($primary-color, 0.15);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -785,7 +818,7 @@ $danger-color: #f5222d;
     color: $primary-color;
 
     &.healthy {
-      background: rgba($success-color, 0.1);
+      background: rgba($success-color, 0.15);
       color: $success-color;
     }
   }
@@ -793,14 +826,14 @@ $danger-color: #f5222d;
   .status-info {
     .status-title {
       font-size: 12px;
-      color: #909399;
+      color: $dark-text-muted !important;
       margin-bottom: 4px;
     }
 
     .status-value {
       font-size: 15px;
       font-weight: 600;
-      color: #303133;
+      color: $dark-text-primary !important;
     }
   }
 }

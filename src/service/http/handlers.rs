@@ -369,26 +369,40 @@ pub async fn get_equity_curve(
 
     let mut account_responses = Vec::new();
     for account in accounts {
-        // ✨ 使用 write() 以便调用 get_margin() 动态计算 @yutiansut @quantaxis
-        let (account_id, account_name, balance) = {
-            let acc = account.read();
+        // ✨ 获取账户真实数据 @yutiansut @quantaxis
+        let (account_id, account_name, balance, available, margin) = {
+            let mut acc = account.write();  // 需要 write() 因为 get_margin() 需要可变引用
             (
                 acc.account_cookie.clone(),
                 acc.user_cookie.clone(),
                 acc.accounts.balance,
+                acc.accounts.available,
+                acc.get_margin(),  // 动态计算保证金
             )
         };
 
         let settlements = state.settlement_engine.get_account_settlements(&account_id);
         let mut points = convert_settlements(settlements);
 
-        // ✨ 无结算记录时生成模拟权益曲线数据 @yutiansut @quantaxis
+        // ✨ 无结算记录时使用当前账户真实数据（不再生成模拟数据）@yutiansut @quantaxis
         if points.is_empty() {
             log::info!(
-                "📈 [Equity Curve] No settlements for account {}, generating mock data",
-                account_id
+                "📈 [Equity Curve] No settlements for account {}, using current real balance: {}",
+                account_id,
+                balance
             );
-            points = generate_mock_equity_points(balance, 30);  // 生成30天模拟数据
+            // 使用当前真实数据作为今天的数据点
+            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            points.push(EquityCurvePoint {
+                date: today,
+                balance,
+                available,
+                margin,
+                daily_profit: 0.0,      // 无历史数据，无法计算日盈亏
+                daily_profit_rate: 0.0,
+                trade_count: 0,
+                commission: 0.0,
+            });
         }
 
         let stats = compute_statistics(&points);
@@ -484,74 +498,6 @@ fn convert_settlements(mut settlements: Vec<AccountSettlement>) -> Vec<EquityCur
         });
 
         prev_balance = Some(settlement.balance);
-    }
-
-    points
-}
-
-/// ✨ 生成模拟权益曲线数据（无真实结算时使用）@yutiansut @quantaxis
-///
-/// 生成逼真的历史权益曲线，包含：
-/// - 日收益波动 (±2% 日波动率)
-/// - 合理的回撤特征
-/// - 趋势性收益
-fn generate_mock_equity_points(initial_balance: f64, days: usize) -> Vec<EquityCurvePoint> {
-    use chrono::{Duration, Utc};
-    use rand::Rng;
-
-    let mut rng = rand::thread_rng();
-    let mut points = Vec::with_capacity(days);
-
-    // 使用初始余额，若为0则使用默认值
-    let base_balance: f64 = if initial_balance > 0.0 { initial_balance } else { 1_000_000.0 };
-    let mut current_balance = base_balance;
-    let now = Utc::now();
-
-    // 日波动率 (约2%)
-    let daily_volatility: f64 = 0.02;
-    // 长期日均收益率 (年化约10%，日化约0.04%)
-    let drift: f64 = 0.0004;
-
-    for i in 0..days {
-        let date = now - Duration::days((days - 1 - i) as i64);
-        let date_str = date.format("%Y-%m-%d").to_string();
-
-        // 生成日收益率 (使用几何布朗运动模型)
-        let random_shock: f64 = rng.gen_range(-1.0..1.0);
-        let daily_return = drift + daily_volatility * random_shock;
-
-        // 模拟交易数量和手续费
-        let trade_count: i32 = rng.gen_range(0..20);
-        let commission: f64 = trade_count as f64 * rng.gen_range(5.0..50.0);
-
-        // 计算日盈亏
-        let daily_profit = current_balance * daily_return - commission;
-        let prev_balance = current_balance;
-        current_balance += daily_profit;
-
-        // 确保余额不会变成负数
-        current_balance = f64::max(current_balance, base_balance * 0.5);
-
-        // 计算保证金占用 (约5-15%)
-        let margin: f64 = current_balance * rng.gen_range(0.05..0.15);
-        let available = current_balance - margin;
-
-        let daily_profit_rate = if prev_balance.abs() > f64::EPSILON {
-            daily_profit / prev_balance
-        } else {
-            0.0
-        };
-
-        points.push(EquityCurvePoint {
-            date: date_str,
-            balance: current_balance,
-            available,
-            margin,
-            daily_profit,
-            daily_profit_rate,
-            trade_count,
-            commission,
-        });
     }
 
     points

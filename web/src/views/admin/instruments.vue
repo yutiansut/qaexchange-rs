@@ -8,68 +8,65 @@
 
     <!-- 合约列表 -->
     <div class="table-container">
-      <vxe-table
+      <el-table
         ref="instrumentTable"
         :data="instruments"
         border
         stripe
-        resizable
-        highlight-hover-row
-        :loading="loading"
-        :sort-config="{ trigger: 'cell', remote: false }"
+        v-loading="loading"
         height="600"
       >
-        <vxe-table-column field="instrument_id" title="合约代码" width="120" sortable></vxe-table-column>
-        <vxe-table-column field="instrument_name" title="合约名称" width="150"></vxe-table-column>
-        <vxe-table-column field="instrument_type" title="类型" width="100" sortable>
-          <template slot-scope="{ row }">
-            <el-tag :type="getTypeTagType(row.instrument_type)" size="small">
-              {{ getTypeName(row.instrument_type) }}
+        <el-table-column prop="instrument_id" label="合约代码" width="120" sortable></el-table-column>
+        <el-table-column prop="instrument_name" label="合约名称" width="150"></el-table-column>
+        <el-table-column prop="instrument_type" label="类型" width="100" sortable>
+          <template slot-scope="scope">
+            <el-tag :type="getTypeTagType(scope.row.instrument_type)" size="small">
+              {{ getTypeName(scope.row.instrument_type) }}
             </el-tag>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="exchange" title="交易所" width="100"></vxe-table-column>
-        <vxe-table-column field="contract_multiplier" title="合约乘数" width="100" align="right"></vxe-table-column>
-        <vxe-table-column field="price_tick" title="最小变动价位" width="120" align="right">
-          <template slot-scope="{ row }">
-            {{ row.price_tick.toFixed(2) }}
+        </el-table-column>
+        <el-table-column prop="exchange" label="交易所" width="100"></el-table-column>
+        <el-table-column prop="contract_multiplier" label="合约乘数" width="100" align="right"></el-table-column>
+        <el-table-column prop="price_tick" label="最小变动价位" width="120" align="right">
+          <template slot-scope="scope">
+            {{ scope.row.price_tick.toFixed(2) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="margin_rate" title="保证金率" width="100" align="right">
-          <template slot-scope="{ row }">
-            {{ (row.margin_rate * 100).toFixed(1) }}%
+        </el-table-column>
+        <el-table-column prop="margin_rate" label="保证金率" width="100" align="right">
+          <template slot-scope="scope">
+            {{ (scope.row.margin_rate * 100).toFixed(1) }}%
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="commission_rate" title="手续费率" width="100" align="right">
-          <template slot-scope="{ row }">
-            {{ (row.commission_rate * 100).toFixed(2) }}%
+        </el-table-column>
+        <el-table-column prop="commission_rate" label="手续费率" width="100" align="right">
+          <template slot-scope="scope">
+            {{ (scope.row.commission_rate * 100).toFixed(2) }}%
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="status" title="状态" width="100" sortable>
-          <template slot-scope="{ row }">
-            <el-tag :type="getStatusTagType(row.status)" size="small">
-              {{ getStatusName(row.status) }}
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="100" sortable>
+          <template slot-scope="scope">
+            <el-tag :type="getStatusTagType(scope.row.status)" size="small">
+              {{ getStatusName(scope.row.status) }}
             </el-tag>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="list_date" title="上市日期" width="120"></vxe-table-column>
-        <vxe-table-column field="expire_date" title="到期日期" width="120"></vxe-table-column>
-        <vxe-table-column title="操作" width="200" fixed="right">
-          <template slot-scope="{ row }">
-            <el-button size="mini" type="text" @click="showEditDialog(row)">编辑</el-button>
+        </el-table-column>
+        <el-table-column prop="list_date" label="上市日期" width="120"></el-table-column>
+        <el-table-column prop="expire_date" label="到期日期" width="120"></el-table-column>
+        <el-table-column label="操作" width="200" fixed="right">
+          <template slot-scope="scope">
+            <el-button size="mini" type="text" @click="showEditDialog(scope.row)">编辑</el-button>
             <el-button
               size="mini"
               type="text"
-              v-if="row.status === 'active'"
-              @click="suspendInstrument(row)"
+              v-if="scope.row.status === 'active'"
+              @click="suspendInstrument(scope.row)"
             >
               暂停交易
             </el-button>
             <el-button
               size="mini"
               type="text"
-              v-if="row.status === 'suspended'"
-              @click="resumeInstrument(row)"
+              v-if="scope.row.status === 'suspended'"
+              @click="resumeInstrument(scope.row)"
             >
               恢复交易
             </el-button>
@@ -77,13 +74,13 @@
               size="mini"
               type="text"
               style="color: #F56C6C"
-              @click="delistInstrument(row)"
+              @click="delistInstrument(scope.row)"
             >
               下市
             </el-button>
           </template>
-        </vxe-table-column>
-      </vxe-table>
+        </el-table-column>
+      </el-table>
     </div>
 
     <!-- 创建/编辑合约对话框 -->
@@ -484,9 +481,22 @@ export default {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+// @yutiansut @quantaxis - 深色主题样式
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+
 .instruments-container {
   padding: 20px;
+  background: $dark-bg-primary;
+  min-height: calc(100vh - 60px);
 }
 
 .page-header {
@@ -498,13 +508,209 @@ export default {
 
 .page-header h2 {
   margin: 0;
-  color: #303133;
+  color: $dark-text-primary !important;
 }
 
 .table-container {
-  background: #fff;
-  border-radius: 4px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   padding: 20px;
+
+  // 表格样式
+  ::v-deep .el-table {
+    background: transparent !important;
+    color: $dark-text-primary !important;
+
+    &::before {
+      background-color: $dark-border !important;
+    }
+
+    th.el-table__cell {
+      background: $dark-bg-secondary !important;
+      color: $dark-text-secondary !important;
+      border-bottom: 1px solid $dark-border !important;
+      font-weight: 600;
+    }
+
+    tr {
+      background: $dark-bg-card !important;
+    }
+
+    td.el-table__cell {
+      background: $dark-bg-card !important;
+      color: $dark-text-primary !important;
+      border-bottom: 1px solid $dark-border !important;
+    }
+
+    .el-table__row:hover > td.el-table__cell {
+      background: $dark-bg-tertiary !important;
+    }
+
+    .el-table__row--striped .el-table__cell {
+      background: rgba($dark-bg-tertiary, 0.5) !important;
+    }
+
+    .el-table__fixed,
+    .el-table__fixed-right {
+      background: $dark-bg-card !important;
+
+      &::before {
+        background-color: $dark-border !important;
+      }
+    }
+  }
+
+  ::v-deep .el-button--text {
+    color: $primary-color !important;
+
+    &:hover {
+      color: lighten($primary-color, 15%) !important;
+    }
+  }
+}
+
+// 标签样式
+::v-deep .el-tag {
+  border: none !important;
+
+  &.el-tag--primary {
+    background: rgba($primary-color, 0.15) !important;
+    color: $primary-color !important;
+  }
+
+  &.el-tag--success {
+    background: rgba(82, 196, 26, 0.15) !important;
+    color: #52c41a !important;
+  }
+
+  &.el-tag--warning {
+    background: rgba(250, 173, 20, 0.15) !important;
+    color: #faad14 !important;
+  }
+
+  &.el-tag--info {
+    background: rgba($dark-text-muted, 0.15) !important;
+    color: $dark-text-secondary !important;
+  }
+}
+
+// 对话框样式
+::v-deep .el-dialog {
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border !important;
+  border-radius: 8px !important;
+
+  .el-dialog__header {
+    background: $dark-bg-secondary !important;
+    border-bottom: 1px solid $dark-border !important;
+    padding: 15px 20px !important;
+    border-radius: 8px 8px 0 0 !important;
+
+    .el-dialog__title {
+      color: $dark-text-primary !important;
+    }
+
+    .el-dialog__headerbtn .el-dialog__close {
+      color: $dark-text-secondary !important;
+    }
+  }
+
+  .el-dialog__body {
+    background: $dark-bg-card !important;
+    padding: 20px !important;
+  }
+
+  .el-dialog__footer {
+    background: $dark-bg-card !important;
+    border-top: 1px solid $dark-border !important;
+    padding: 15px 20px !important;
+  }
+}
+
+// 表单样式
+::v-deep .el-form {
+  .el-form-item__label {
+    color: $dark-text-secondary !important;
+  }
+
+  .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &::placeholder {
+      color: $dark-text-muted !important;
+    }
+
+    &:focus {
+      border-color: $primary-color !important;
+    }
+
+    &[disabled] {
+      background: $dark-bg-secondary !important;
+      color: $dark-text-muted !important;
+    }
+  }
+
+  .el-input-number {
+    .el-input-number__decrease,
+    .el-input-number__increase {
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-secondary !important;
+
+      &:hover {
+        color: $primary-color !important;
+      }
+    }
+  }
+
+  .el-select .el-input__inner {
+    background: $dark-bg-tertiary !important;
+  }
+}
+
+// 日期选择器
+::v-deep .el-date-editor {
+  .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+  }
+}
+
+// 下拉选择框
+::v-deep .el-select-dropdown {
+  background: $dark-bg-secondary !important;
+  border-color: $dark-border !important;
+
+  .el-select-dropdown__item {
+    color: $dark-text-primary !important;
+
+    &:hover, &.hover {
+      background: $dark-bg-tertiary !important;
+    }
+
+    &.selected {
+      color: $primary-color !important;
+      font-weight: 600;
+    }
+  }
+}
+
+// 按钮样式
+::v-deep .el-button {
+  &.el-button--default {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &:hover {
+      border-color: $primary-color !important;
+      color: $primary-color !important;
+    }
+  }
 }
 </style>

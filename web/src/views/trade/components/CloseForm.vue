@@ -307,14 +307,111 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+// @yutiansut @quantaxis - 深色主题平仓表单
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+$warning-color: #faad14;
+
 .close-form {
   padding: 20px 10px;
+
+  // 表单标签颜色
+  ::v-deep .el-form-item__label {
+    color: $dark-text-secondary !important;
+  }
+
+  // 输入框样式
+  ::v-deep .el-input__inner,
+  ::v-deep .el-select .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &::placeholder {
+      color: $dark-text-muted;
+    }
+
+    &:focus {
+      border-color: $primary-color !important;
+    }
+  }
+
+  // 输入框数字控件
+  ::v-deep .el-input-number {
+    .el-input__inner {
+      text-align: left;
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-primary !important;
+    }
+
+    .el-input-number__decrease,
+    .el-input-number__increase {
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-secondary !important;
+
+      &:hover {
+        color: $primary-color !important;
+      }
+    }
+  }
+
+  // 单选按钮组
+  ::v-deep .el-radio-group {
+    .el-radio-button__inner {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-secondary;
+    }
+
+    .el-radio-button__orig-radio:checked + .el-radio-button__inner {
+      background: $primary-color;
+      border-color: $primary-color;
+      color: white;
+    }
+  }
+
+  // Alert 提示框深色主题
+  ::v-deep .el-alert--info {
+    background: rgba($primary-color, 0.1) !important;
+    border: 1px solid rgba($primary-color, 0.3) !important;
+
+    .el-alert__title {
+      color: $dark-text-primary !important;
+    }
+
+    .el-alert__description {
+      color: $dark-text-secondary !important;
+    }
+  }
 
   .price-shortcuts,
   .volume-shortcuts {
     margin-top: 10px;
     display: flex;
     gap: 5px;
+
+    .el-button {
+      background: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-secondary;
+
+      &:hover {
+        border-color: $primary-color;
+        color: $primary-color;
+      }
+
+      &.el-button--primary {
+        background: $primary-color;
+        border-color: $primary-color;
+        color: white;
+      }
+    }
   }
 
   .available-hint {
@@ -323,9 +420,22 @@ export default {
     font-size: 12px;
   }
 
-  ::v-deep .el-input-number {
-    .el-input__inner {
-      text-align: left;
+  // 平仓按钮
+  ::v-deep .el-button--warning {
+    background: $warning-color !important;
+    border-color: $warning-color !important;
+    font-size: 16px;
+    font-weight: 600;
+
+    &:hover {
+      background: lighten($warning-color, 10%) !important;
+      border-color: lighten($warning-color, 10%) !important;
+    }
+
+    &.is-disabled {
+      background: $dark-bg-tertiary !important;
+      border-color: $dark-border !important;
+      color: $dark-text-muted !important;
     }
   }
 }

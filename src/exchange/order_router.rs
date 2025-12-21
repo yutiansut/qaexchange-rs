@@ -2219,10 +2219,11 @@ impl OrderRouter {
 
     /// 从账户的 dailyorders 恢复订单索引
     /// 在服务器重启后调用，从账户快照中恢复待处理订单到 order_router
-    /// @yutiansut @quantaxis
+    /// ✨ 修复：同时将订单重新提交到撮合引擎订单簿，以支持撤单操作 @yutiansut @quantaxis
     pub fn restore_orders_from_accounts(&self) {
         let accounts = self.account_mgr.get_all_accounts();
         let mut restored_count = 0;
+        let mut orderbook_restored_count = 0;
 
         for account_arc in accounts {
             let account = account_arc.read();
@@ -2246,8 +2247,67 @@ impl OrderRouter {
                     _ => continue,
                 };
 
-                // 计算已成交量
+                // 计算已成交量和剩余量
                 let filled_volume = order.volume_orign - order.volume_left;
+                let remaining_volume = order.volume_left;
+
+                // ✨ 关键修复：将订单重新提交到撮合引擎订单簿 @yutiansut @quantaxis
+                let mut matching_engine_order_id: Option<u64> = None;
+
+                // 只有剩余数量 > 0 的订单才需要恢复到订单簿
+                if remaining_volume > 0.0 {
+                    if let Some(orderbook) = self.matching_engine.get_orderbook(&order.instrument_id) {
+                        // 转换订单方向
+                        let direction = match order.direction.as_str() {
+                            "BUY" => OrderDirection::BUY,
+                            "SELL" => OrderDirection::SELL,
+                            _ => {
+                                log::warn!("⚠️ Invalid direction for order {}: {}", order_id, order.direction);
+                                continue;
+                            }
+                        };
+
+                        // 创建撮合订单请求（使用剩余量，不是原始量）
+                        let asset = InstrumentAsset::from_code(&order.instrument_id);
+                        let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+
+                        let match_request = crate::matching::orders::new_limit_order_request(
+                            asset,
+                            direction,
+                            order.limit_price,
+                            remaining_volume,  // 使用剩余量
+                            timestamp,
+                        );
+
+                        // 提交到订单簿
+                        let mut ob = orderbook.write();
+                        let results: Vec<_> = ob.process_order(match_request).into_iter().collect();
+                        drop(ob);
+
+                        // 从结果中获取 matching_engine_order_id
+                        for result in results {
+                            if let Ok(Success::Accepted { id, .. }) = result {
+                                matching_engine_order_id = Some(id);
+
+                                // ✨ 存储反向映射 @yutiansut @quantaxis
+                                self.engine_id_to_order.insert(id, order_id.clone());
+                                self.engine_id_to_user.insert(id, order.user_id.clone());
+
+                                orderbook_restored_count += 1;
+                                log::info!(
+                                    "📚 Restored order to orderbook: order_id={}, engine_id={}, instrument={}, volume={}",
+                                    order_id, id, order.instrument_id, remaining_volume
+                                );
+                                break;
+                            }
+                        }
+                    } else {
+                        log::warn!(
+                            "⚠️ Orderbook not found for instrument {}, order {} cannot be restored to orderbook",
+                            order.instrument_id, order_id
+                        );
+                    }
+                }
 
                 // 创建 OrderRouteInfo
                 let info = OrderRouteInfo {
@@ -2257,7 +2317,7 @@ impl OrderRouter {
                     update_time: chrono::Utc::now().timestamp(),
                     filled_volume,
                     qa_order_id: order_id.clone(),
-                    matching_engine_order_id: None, // 重启后丢失，需要重新提交到撮合引擎
+                    matching_engine_order_id, // ✨ 现在有值了！
                     time_condition: TimeCondition::GFD,
                     volume_condition: VolumeCondition::ANY,
                 };
@@ -2275,20 +2335,22 @@ impl OrderRouter {
 
                 restored_count += 1;
                 log::info!(
-                    "🔄 Restored order: account={}, order_id={}, instrument={}, status={:?}, volume_left={}",
+                    "🔄 Restored order: account={}, order_id={}, instrument={}, status={:?}, volume_left={}, engine_id={:?}",
                     account_id,
                     order_id,
                     order.instrument_id,
                     status,
-                    order.volume_left
+                    order.volume_left,
+                    matching_engine_order_id
                 );
             }
         }
 
         if restored_count > 0 {
             log::info!(
-                "✅ Restored {} pending orders from account snapshots",
-                restored_count
+                "✅ Restored {} pending orders from account snapshots ({} restored to orderbook)",
+                restored_count,
+                orderbook_restored_count
             );
         } else {
             log::debug!("No pending orders to restore from accounts");

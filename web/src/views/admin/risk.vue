@@ -84,50 +84,48 @@
           </div>
         </div>
 
-        <vxe-table
+        <el-table
           ref="accountTable"
           :data="filteredAccounts"
           border
           stripe
-          resizable
-          highlight-hover-row
-          :loading="loading"
-          :sort-config="{ trigger: 'cell', defaultSort: { field: 'risk_ratio', order: 'desc' } }"
+          v-loading="loading"
+          :default-sort="{ prop: 'risk_ratio', order: 'descending' }"
           height="500"
         >
-          <vxe-table-column field="user_id" title="账户ID" width="180" sortable></vxe-table-column>
-          <vxe-table-column field="balance" title="总权益" width="130" align="right" sortable>
+          <el-table-column prop="user_id" label="账户ID" width="180" sortable></el-table-column>
+          <el-table-column prop="balance" label="总权益" width="130" align="right" sortable>
             <template slot-scope="scope">
               {{ scope.row.balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
             </template>
-          </vxe-table-column>
-          <vxe-table-column field="margin_used" title="占用保证金" width="130" align="right" sortable>
+          </el-table-column>
+          <el-table-column prop="margin_used" label="占用保证金" width="130" align="right" sortable>
             <template slot-scope="scope">
               {{ scope.row.margin_used.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
             </template>
-          </vxe-table-column>
-          <vxe-table-column field="available" title="可用资金" width="130" align="right" sortable>
+          </el-table-column>
+          <el-table-column prop="available" label="可用资金" width="130" align="right" sortable>
             <template slot-scope="scope">
               {{ scope.row.available.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
             </template>
-          </vxe-table-column>
-          <vxe-table-column field="float_profit" title="浮动盈亏" width="130" align="right" sortable>
+          </el-table-column>
+          <el-table-column prop="float_profit" label="浮动盈亏" width="130" align="right" sortable>
             <template slot-scope="scope">
               <span :style="{ color: scope.row.float_profit >= 0 ? '#F56C6C' : '#67C23A' }">
                 {{ scope.row.float_profit >= 0 ? '+' : '' }}{{ scope.row.float_profit.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
               </span>
             </template>
-          </vxe-table-column>
-          <vxe-table-column field="position_count" title="持仓数" width="90" align="center" sortable></vxe-table-column>
-          <vxe-table-column field="risk_ratio" title="风险率" width="120" align="right" sortable>
+          </el-table-column>
+          <el-table-column prop="position_count" label="持仓数" width="90" align="center" sortable></el-table-column>
+          <el-table-column prop="risk_ratio" label="风险率" width="120" align="right" sortable>
             <template slot-scope="scope">
               <el-tag :type="getRiskTagType(scope.row.risk_ratio)" size="small">
                 {{ (scope.row.risk_ratio * 100).toFixed(1) }}%
               </el-tag>
             </template>
-          </vxe-table-column>
-          <vxe-table-column field="position_count" title="持仓品种数" width="120" align="center" sortable></vxe-table-column>
-          <vxe-table-column title="操作" width="150" fixed="right">
+          </el-table-column>
+          <el-table-column prop="position_count" label="持仓品种数" width="120" align="center" sortable></el-table-column>
+          <el-table-column label="操作" width="150" fixed="right">
             <template slot-scope="scope">
               <el-button
                 size="mini"
@@ -146,8 +144,8 @@
                 强平
               </el-button>
             </template>
-          </vxe-table-column>
-        </vxe-table>
+          </el-table-column>
+        </el-table>
       </el-tab-pane>
 
       <!-- 强平记录 -->
@@ -164,47 +162,45 @@
           ></el-date-picker>
         </div>
 
-        <vxe-table
+        <el-table
           ref="liquidationTable"
           :data="liquidations"
           border
           stripe
-          resizable
-          highlight-hover-row
-          :loading="liquidationLoading"
+          v-loading="liquidationLoading"
           height="500"
         >
-          <vxe-table-column field="liquidation_time" title="强平时间" width="180"></vxe-table-column>
-          <vxe-table-column field="user_id" title="用户ID" width="150"></vxe-table-column>
-          <vxe-table-column field="user_name" title="用户名" width="150"></vxe-table-column>
-          <vxe-table-column field="pre_balance" title="强平前权益" width="130" align="right">
+          <el-table-column prop="liquidation_time" label="强平时间" width="180"></el-table-column>
+          <el-table-column prop="user_id" label="用户ID" width="150"></el-table-column>
+          <el-table-column prop="user_name" label="用户名" width="150"></el-table-column>
+          <el-table-column prop="pre_balance" label="强平前权益" width="130" align="right">
             <template slot-scope="scope">
               {{ scope.row.pre_balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
             </template>
-          </vxe-table-column>
-          <vxe-table-column field="loss_amount" title="亏损金额" width="130" align="right">
+          </el-table-column>
+          <el-table-column prop="loss_amount" label="亏损金额" width="130" align="right">
             <template slot-scope="scope">
               <span style="color: #67C23A">
                 -{{ scope.row.loss_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
               </span>
             </template>
-          </vxe-table-column>
-          <vxe-table-column field="instrument_id" title="强平合约" width="120"></vxe-table-column>
-          <vxe-table-column field="liquidation_price" title="强平价格" width="120" align="right">
+          </el-table-column>
+          <el-table-column prop="instrument_id" label="强平合约" width="120"></el-table-column>
+          <el-table-column prop="liquidation_price" label="强平价格" width="120" align="right">
             <template slot-scope="scope">
               {{ scope.row.liquidation_price.toFixed(2) }}
             </template>
-          </vxe-table-column>
-          <vxe-table-column field="liquidation_volume" title="强平数量" width="100" align="center"></vxe-table-column>
-          <vxe-table-column field="trigger_type" title="触发类型" width="120">
+          </el-table-column>
+          <el-table-column prop="liquidation_volume" label="强平数量" width="100" align="center"></el-table-column>
+          <el-table-column prop="trigger_type" label="触发类型" width="120">
             <template slot-scope="scope">
               <el-tag :type="scope.row.trigger_type === 'auto' ? 'danger' : 'warning'" size="small">
                 {{ scope.row.trigger_type === 'auto' ? '自动强平' : '手动强平' }}
               </el-tag>
             </template>
-          </vxe-table-column>
-          <vxe-table-column field="operator" title="操作员" width="120"></vxe-table-column>
-        </vxe-table>
+          </el-table-column>
+          <el-table-column prop="operator" label="操作员" width="120"></el-table-column>
+        </el-table>
       </el-tab-pane>
     </el-tabs>
 
@@ -528,9 +524,25 @@ export default {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+// @yutiansut @quantaxis - 深色主题样式
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+$danger-color: #f5222d;
+$warning-color: #faad14;
+$success-color: #52c41a;
+
 .risk-container {
   padding: 20px;
+  background: $dark-bg-primary;
+  min-height: calc(100vh - 60px);
 }
 
 .page-header {
@@ -542,7 +554,7 @@ export default {
 
 .page-header h2 {
   margin: 0;
-  color: #303133;
+  color: $dark-text-primary !important;
 }
 
 .header-actions {
@@ -558,6 +570,11 @@ export default {
   margin-left: 0;
 }
 
+// 开关样式
+::v-deep .el-switch__label {
+  color: $dark-text-secondary !important;
+}
+
 .stats-row {
   margin-bottom: 20px;
 }
@@ -566,9 +583,10 @@ export default {
   display: flex;
   align-items: center;
   padding: 20px;
-  background: #fff;
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border;
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .stat-icon {
@@ -577,38 +595,109 @@ export default {
 }
 
 .stat-card.danger .stat-icon {
-  color: #F56C6C;
+  color: $danger-color;
 }
 
 .stat-card.critical .stat-icon {
-  color: #E6A23C;
+  color: $warning-color;
 }
 
 .stat-card.warning .stat-icon {
-  color: #E6A23C;
+  color: $warning-color;
 }
 
 .stat-card.info .stat-icon {
-  color: #409EFF;
+  color: $primary-color;
 }
 
 .stat-value {
   font-size: 28px;
   font-weight: bold;
-  color: #303133;
+  color: $dark-text-primary !important;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .stat-label {
   font-size: 14px;
-  color: #909399;
+  color: $dark-text-secondary !important;
   margin-top: 5px;
 }
 
 .tabs-container {
-  background: #fff;
-  border-radius: 4px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   padding: 20px;
+
+  // 标签页样式
+  ::v-deep .el-tabs__item {
+    color: $dark-text-secondary !important;
+
+    &.is-active {
+      color: $primary-color !important;
+    }
+
+    &:hover {
+      color: $primary-color !important;
+    }
+  }
+
+  ::v-deep .el-tabs__nav-wrap::after {
+    background-color: $dark-border !important;
+  }
+
+  // 表格样式
+  ::v-deep .el-table {
+    background: transparent !important;
+    color: $dark-text-primary !important;
+
+    &::before {
+      background-color: $dark-border !important;
+    }
+
+    th.el-table__cell {
+      background: $dark-bg-secondary !important;
+      color: $dark-text-secondary !important;
+      border-bottom: 1px solid $dark-border !important;
+      font-weight: 600;
+    }
+
+    tr {
+      background: $dark-bg-card !important;
+    }
+
+    td.el-table__cell {
+      background: $dark-bg-card !important;
+      color: $dark-text-primary !important;
+      border-bottom: 1px solid $dark-border !important;
+    }
+
+    .el-table__row:hover > td.el-table__cell {
+      background: $dark-bg-tertiary !important;
+    }
+
+    .el-table__row--striped .el-table__cell {
+      background: rgba($dark-bg-tertiary, 0.5) !important;
+    }
+
+    .el-table__fixed,
+    .el-table__fixed-right {
+      background: $dark-bg-card !important;
+
+      &::before {
+        background-color: $dark-border !important;
+      }
+    }
+  }
+
+  ::v-deep .el-button--text {
+    color: $primary-color !important;
+
+    &:hover {
+      color: lighten($primary-color, 15%) !important;
+    }
+  }
 }
 
 .table-toolbar {
@@ -616,11 +705,22 @@ export default {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 15px;
+
+  ::v-deep .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &::placeholder {
+      color: $dark-text-muted !important;
+    }
+  }
 }
 
 .toolbar-right {
   display: flex;
   align-items: center;
+  color: $dark-text-secondary !important;
 }
 
 .toolbar-right > * {
@@ -629,5 +729,94 @@ export default {
 
 .toolbar-right > *:first-child {
   margin-left: 0;
+}
+
+// 标签样式
+::v-deep .el-tag {
+  border: none !important;
+
+  &.el-tag--success {
+    background: rgba($success-color, 0.15) !important;
+    color: $success-color !important;
+  }
+
+  &.el-tag--warning {
+    background: rgba($warning-color, 0.15) !important;
+    color: $warning-color !important;
+  }
+
+  &.el-tag--danger {
+    background: rgba($danger-color, 0.15) !important;
+    color: $danger-color !important;
+  }
+
+  &.el-tag--info {
+    background: rgba($primary-color, 0.15) !important;
+    color: $primary-color !important;
+  }
+}
+
+// 对话框样式
+::v-deep .el-dialog {
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border !important;
+  border-radius: 8px !important;
+
+  .el-dialog__header {
+    background: $dark-bg-secondary !important;
+    border-bottom: 1px solid $dark-border !important;
+
+    .el-dialog__title {
+      color: $dark-text-primary !important;
+    }
+  }
+
+  .el-dialog__body {
+    background: $dark-bg-card !important;
+  }
+}
+
+// 描述列表样式
+::v-deep .el-descriptions {
+  .el-descriptions-item__label {
+    background: $dark-bg-secondary !important;
+    color: $dark-text-secondary !important;
+  }
+
+  .el-descriptions-item__content {
+    background: $dark-bg-card !important;
+    color: $dark-text-primary !important;
+  }
+
+  .el-descriptions__body {
+    background: $dark-bg-card !important;
+  }
+
+  &.is-bordered .el-descriptions-item__cell {
+    border-color: $dark-border !important;
+  }
+}
+
+// 日期选择器
+::v-deep .el-date-editor {
+  .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+  }
+}
+
+// 按钮样式
+::v-deep .el-button {
+  &.el-button--default {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &:hover {
+      border-color: $primary-color !important;
+      color: $primary-color !important;
+    }
+  }
 }
 </style>

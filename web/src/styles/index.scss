@@ -65,38 +65,119 @@ html, body {
   border-color: $error-color;
 }
 
-// 输入框
+// 输入框 - 柔和边框 @yutiansut @quantaxis
 .el-input__inner {
   border-radius: $radius-sm;
+  border-color: $light-border;
+  background-color: #ffffff;
+  color: $light-text-primary;
   transition: all $transition-fast;
+
+  &::placeholder {
+    color: $light-text-placeholder;
+  }
+
+  &:hover {
+    border-color: darken($light-border, 10%);
+  }
+
+  &:focus {
+    border-color: $primary-color;
+    box-shadow: 0 0 0 2px rgba($primary-color, 0.1);
+  }
+}
+
+// 文本域
+.el-textarea__inner {
+  border-color: $light-border;
+  color: $light-text-primary;
+
+  &::placeholder {
+    color: $light-text-placeholder;
+  }
 
   &:focus {
     border-color: $primary-color;
   }
 }
 
-// 卡片
+// 卡片 - 柔和阴影 @yutiansut @quantaxis
 .el-card {
   border-radius: $radius-md;
-  border: none;
-  box-shadow: $shadow-sm;
+  border: 1px solid $light-border-light;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  background-color: #ffffff;
+
+  .el-card__header {
+    background-color: $light-bg-secondary;
+    border-bottom: 1px solid $light-border-light;
+    color: $light-text-primary;
+    font-weight: 500;
+  }
+
+  .el-card__body {
+    color: $light-text-primary;
+  }
 
   &:hover {
-    box-shadow: $shadow-md;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    border-color: $light-border;
   }
 }
 
-// 表格
+// 表格 - 柔和灰色主题 @yutiansut @quantaxis
 .el-table {
   font-size: 13px;
+  color: $light-text-primary;
+  background-color: transparent;
 
-  th {
-    background-color: $light-bg-primary !important;
+  // 表头 - 柔和灰色背景
+  th.el-table__cell {
+    background-color: $light-bg-table-header !important;
     font-weight: 600;
+    color: $light-text-secondary !important;
+    border-bottom: 1px solid $light-border !important;
   }
 
-  .el-table__row:hover > td {
-    background-color: rgba($primary-color, 0.05) !important;
+  // 单元格
+  td.el-table__cell {
+    color: $light-text-primary;
+    border-bottom: 1px solid $light-border-light !important;
+  }
+
+  // 斑马纹 - 使用柔和灰色
+  .el-table__row--striped td.el-table__cell {
+    background-color: $light-bg-table-stripe !important;
+  }
+
+  // hover 行 - 柔和蓝灰色
+  .el-table__row:hover > td.el-table__cell {
+    background-color: #f0f7ff !important;
+  }
+
+  // 当前选中行
+  .current-row > td.el-table__cell {
+    background-color: #e6f4ff !important;
+  }
+
+  // 表格边框
+  &.el-table--border {
+    border: 1px solid $light-border;
+    border-radius: 4px;
+    overflow: hidden;
+
+    &::after, &::before {
+      background-color: $light-border;
+    }
+
+    .el-table__cell {
+      border-right: 1px solid $light-border-light;
+    }
+  }
+
+  // 空数据提示
+  .el-table__empty-text {
+    color: $light-text-muted;
   }
 }
 
@@ -132,6 +213,106 @@ html, body {
 
 .el-tabs__active-bar {
   background-color: $primary-color;
+}
+
+// ============= Element UI 额外修复 @yutiansut @quantaxis =============
+
+// 下拉菜单 hover 修复
+.el-dropdown-menu__item {
+  color: $light-text-primary !important;
+
+  &:hover, &:focus {
+    background-color: rgba($primary-color, 0.08) !important;
+    color: $primary-color !important;
+  }
+}
+
+// Select 下拉选项 hover 修复
+.el-select-dropdown__item {
+  color: $light-text-primary !important;
+
+  &.hover, &:hover {
+    background-color: rgba($primary-color, 0.08) !important;
+    color: $light-text-primary !important;
+  }
+
+  &.selected {
+    color: $primary-color !important;
+    font-weight: 600;
+  }
+}
+
+// Autocomplete 下拉选项
+.el-autocomplete-suggestion li {
+  color: $light-text-primary !important;
+
+  &:hover, &.highlighted {
+    background-color: rgba($primary-color, 0.08) !important;
+  }
+}
+
+// 表格排序图标
+.el-table .sort-caret {
+  border-color: transparent !important;
+
+  &.ascending {
+    border-bottom-color: $light-text-secondary !important;
+  }
+
+  &.descending {
+    border-top-color: $light-text-secondary !important;
+  }
+}
+
+.el-table .ascending .sort-caret.ascending,
+.el-table .descending .sort-caret.descending {
+  border-bottom-color: $primary-color !important;
+  border-top-color: $primary-color !important;
+}
+
+// Tag 标签对比度
+.el-tag--info {
+  background-color: rgba(144, 147, 153, 0.1);
+  border-color: rgba(144, 147, 153, 0.2);
+  color: $light-text-secondary;
+}
+
+// 输入框 placeholder
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder {
+  color: $light-text-muted;
+}
+
+// Descriptions 描述列表
+.el-descriptions-item__label {
+  color: $light-text-secondary !important;
+}
+
+.el-descriptions-item__content {
+  color: $light-text-primary !important;
+}
+
+// 分页器
+.el-pagination {
+  .el-pager li {
+    color: $light-text-primary;
+
+    &:hover {
+      color: $primary-color;
+    }
+
+    &.active {
+      color: $primary-color;
+    }
+  }
+
+  button {
+    color: $light-text-primary;
+
+    &:disabled {
+      color: $light-text-muted;
+    }
+  }
 }
 
 // ============= 交易相关样式 =============
@@ -278,6 +459,79 @@ html, body {
 
   .el-tabs__nav-wrap::after {
     background-color: $dark-border;
+  }
+}
+
+// ============= VXE-Table 样式修复 @yutiansut @quantaxis =============
+.vxe-table {
+  // 基础样式
+  font-size: 13px;
+  color: $light-text-primary;
+
+  // 表头
+  .vxe-header--column {
+    background-color: $light-bg-primary !important;
+    color: $light-text-primary !important;
+    font-weight: 600;
+  }
+
+  // 单元格
+  .vxe-body--column {
+    color: $light-text-primary !important;
+  }
+
+  // hover 行 - 修复白底白字问题
+  .vxe-body--row.row--hover {
+    background-color: rgba($primary-color, 0.08) !important;
+
+    .vxe-body--column {
+      color: $light-text-primary !important;
+    }
+
+    .vxe-cell {
+      color: $light-text-primary !important;
+    }
+  }
+
+  // 选中行
+  .vxe-body--row.row--current {
+    background-color: rgba($primary-color, 0.12) !important;
+  }
+
+  // 斑马纹
+  .vxe-body--row.row--stripe {
+    background-color: rgba(0, 0, 0, 0.02);
+  }
+
+  // 边框
+  .vxe-table--border-line {
+    border-color: $light-border;
+  }
+
+  // 修复 tooltip 溢出显示
+  .vxe-cell--tooltip {
+    color: $light-text-primary;
+  }
+}
+
+// VXE-Table 分页器
+.vxe-pager {
+  color: $light-text-primary;
+
+  .vxe-pager--btn-wrapper {
+    .vxe-pager--num-btn {
+      color: $light-text-primary;
+
+      &:hover {
+        background-color: rgba($primary-color, 0.1);
+        color: $primary-color;
+      }
+
+      &.is--active {
+        background-color: $primary-color;
+        color: white;
+      }
+    }
   }
 }
 

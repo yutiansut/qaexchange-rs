@@ -864,14 +864,16 @@ $primary-color: #1890ff;
     }
 
     .el-card__header {
+      background: $dark-bg-card !important;
       border-bottom: 1px solid $dark-border;
       padding: 12px 16px;
-      color: $dark-text-primary;
+      color: $dark-text-primary !important;
       font-weight: 600;
     }
 
     .el-card__body {
       padding: 16px;
+      background: $dark-bg-card !important;
     }
   }
 
@@ -988,24 +990,34 @@ $primary-color: #1890ff;
     }
   }
 
-  // 订单簿
+  // 订单簿 - 修复文字可见性 @yutiansut @quantaxis
   .orderbook {
+    ::v-deep .el-card__header {
+      background: $dark-bg-card !important;
+      color: $dark-text-primary !important;
+    }
+
     .orderbook-content {
       font-family: 'JetBrains Mono', 'Monaco', monospace;
       font-size: 13px;
+      background: $dark-bg-card !important;
 
       .header-row {
         display: flex;
         justify-content: space-between;
         padding: 8px 12px;
-        background: $dark-bg-tertiary;
+        background: $dark-bg-tertiary !important;
         font-weight: 600;
-        color: $dark-text-muted;
+        color: $dark-text-secondary !important;
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.5px;
         border-radius: 4px;
         margin-bottom: 4px;
+
+        span {
+          color: $dark-text-secondary !important;
+        }
       }
 
       .order-row {
@@ -1017,9 +1029,10 @@ $primary-color: #1890ff;
         transition: all 0.15s ease;
         border-radius: 4px;
         margin: 1px 0;
+        background: transparent;
 
         &:hover {
-          background: $dark-bg-tertiary;
+          background: $dark-bg-tertiary !important;
         }
 
         .price,
@@ -1033,7 +1046,7 @@ $primary-color: #1890ff;
         }
 
         .volume {
-          color: $dark-text-secondary;
+          color: $dark-text-secondary !important;
         }
 
         .volume-bar {
@@ -1046,12 +1059,12 @@ $primary-color: #1890ff;
         }
 
         &.ask-row {
-          .price { color: $sell-color; }
+          .price { color: $sell-color !important; }
           .volume-bar { background: $sell-color; }
         }
 
         &.bid-row {
-          .price { color: $buy-color; }
+          .price { color: $buy-color !important; }
           .volume-bar { background: $buy-color; }
         }
       }
@@ -1066,22 +1079,28 @@ $primary-color: #1890ff;
         .price {
           font-size: 18px;
           font-weight: 700;
-          color: $dark-text-primary;
+          color: $dark-text-primary !important;
 
-          &.price-up { color: $buy-color; }
-          &.price-down { color: $sell-color; }
+          &.price-up { color: $buy-color !important; }
+          &.price-down { color: $sell-color !important; }
         }
       }
     }
   }
 
-  // 最新成交
+  // 最新成交 - 修复文字可见性 @yutiansut @quantaxis
   .recent-trades {
+    ::v-deep .el-card__header {
+      background: $dark-bg-card !important;
+      color: $dark-text-primary !important;
+    }
+
     .trades-list {
       font-family: 'JetBrains Mono', 'Monaco', monospace;
       font-size: 12px;
       max-height: 280px;
       overflow-y: auto;
+      background: $dark-bg-card !important;
 
       &::-webkit-scrollbar {
         width: 4px;
@@ -1096,9 +1115,9 @@ $primary-color: #1890ff;
         display: grid;
         grid-template-columns: 70px 1fr 60px;
         padding: 8px 12px;
-        background: $dark-bg-tertiary;
+        background: $dark-bg-tertiary !important;
         font-weight: 600;
-        color: $dark-text-muted;
+        color: $dark-text-secondary !important;
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.5px;
@@ -1106,6 +1125,10 @@ $primary-color: #1890ff;
         top: 0;
         z-index: 1;
         border-radius: 4px;
+
+        span {
+          color: $dark-text-secondary !important;
+        }
       }
 
       .trade-row {
@@ -1116,15 +1139,15 @@ $primary-color: #1890ff;
         transition: background 0.15s ease;
 
         &:hover {
-          background: $dark-bg-tertiary;
+          background: $dark-bg-tertiary !important;
         }
 
-        &.buy-trade .price { color: $buy-color; }
-        &.sell-trade .price { color: $sell-color; }
+        &.buy-trade .price { color: $buy-color !important; }
+        &.sell-trade .price { color: $sell-color !important; }
 
-        .time { color: $dark-text-muted; }
+        .time { color: $dark-text-muted !important; }
         .price { font-weight: 600; }
-        .volume { color: $dark-text-secondary; }
+        .volume { color: $dark-text-secondary !important; }
       }
     }
   }
@@ -1133,8 +1156,13 @@ $primary-color: #1890ff;
   .order-panel {
     min-height: 400px;
 
+    ::v-deep .el-card__body {
+      background: $dark-bg-card !important;
+    }
+
     ::v-deep .el-tabs {
       .el-tabs__header {
+        background: $dark-bg-card !important;
         border-bottom: 1px solid $dark-border;
         margin: 0;
       }
@@ -1143,9 +1171,14 @@ $primary-color: #1890ff;
         background: $dark-border;
       }
 
+      .el-tabs__nav {
+        background: $dark-bg-card !important;
+      }
+
       .el-tabs__item {
         color: $dark-text-secondary;
         font-weight: 500;
+        background: transparent !important;
 
         &:hover { color: $dark-text-primary; }
 
@@ -1161,6 +1194,7 @@ $primary-color: #1890ff;
 
       .el-tabs__content {
         padding: 16px 0;
+        background: $dark-bg-card !important;
       }
     }
 
@@ -1182,48 +1216,209 @@ $primary-color: #1890ff;
     }
   }
 
-  // 当前委托
+  // 当前委托 - 修复文字可见性 @yutiansut @quantaxis
   .pending-orders {
+    // 强制覆盖全局样式
+    &.el-card {
+      background: $dark-bg-card !important;
+      border-color: $dark-border !important;
+    }
+
+    ::v-deep .el-card__header {
+      background: $dark-bg-card !important;
+      background-color: $dark-bg-card !important;
+      color: $dark-text-primary !important;
+      border-bottom-color: $dark-border !important;
+    }
+
+    ::v-deep .el-card__body {
+      background: $dark-bg-card !important;
+      background-color: $dark-bg-card !important;
+      padding: 0 !important;
+    }
+
     ::v-deep .el-table {
-      background: transparent;
-      color: $dark-text-primary;
+      background: $dark-bg-card !important;
+      background-color: $dark-bg-card !important;
+      color: $dark-text-primary !important;
 
-      &::before { background: $dark-border; }
+      // 表格边框
+      &::before,
+      &::after {
+        background-color: $dark-border !important;
+      }
 
-      th {
+      // 表格包装器
+      .el-table__header-wrapper,
+      .el-table__body-wrapper,
+      .el-table__footer-wrapper {
+        background: $dark-bg-card !important;
+        background-color: $dark-bg-card !important;
+      }
+
+      // 表头
+      .el-table__header {
         background: $dark-bg-tertiary !important;
-        color: $dark-text-secondary;
-        border-bottom: 1px solid $dark-border;
-        font-weight: 600;
+
+        th,
+        th.el-table__cell {
+          background: $dark-bg-tertiary !important;
+          background-color: $dark-bg-tertiary !important;
+          color: $dark-text-secondary !important;
+          border-bottom: 1px solid $dark-border !important;
+          border-right-color: $dark-border !important;
+          font-weight: 600;
+
+          .cell {
+            color: $dark-text-secondary !important;
+          }
+        }
       }
 
-      tr {
-        background: transparent;
+      // 表体
+      .el-table__body {
+        background: $dark-bg-card !important;
 
-        &:hover > td { background: $dark-bg-tertiary !important; }
+        tr,
+        tr.el-table__row {
+          background: $dark-bg-card !important;
+          background-color: $dark-bg-card !important;
+
+          td,
+          td.el-table__cell {
+            background: $dark-bg-card !important;
+            background-color: $dark-bg-card !important;
+            border-bottom: 1px solid $dark-border !important;
+            border-right-color: $dark-border !important;
+            color: $dark-text-primary !important;
+
+            .cell {
+              color: $dark-text-primary !important;
+            }
+          }
+        }
+
+        // 斑马纹行
+        tr.el-table__row--striped,
+        .el-table__row--striped {
+          background: $dark-bg-secondary !important;
+
+          td,
+          td.el-table__cell {
+            background: $dark-bg-secondary !important;
+            background-color: $dark-bg-secondary !important;
+            color: $dark-text-primary !important;
+
+            .cell {
+              color: $dark-text-primary !important;
+            }
+          }
+        }
+
+        // 悬停行 - 确保文字可见
+        tr:hover,
+        tr.el-table__row:hover,
+        .el-table__row:hover {
+          td,
+          td.el-table__cell,
+          > td.el-table__cell {
+            background: $dark-bg-tertiary !important;
+            background-color: $dark-bg-tertiary !important;
+            color: $dark-text-primary !important;
+
+            .cell {
+              color: $dark-text-primary !important;
+            }
+          }
+        }
       }
 
-      td {
-        border-bottom: 1px solid $dark-border;
-        color: $dark-text-primary;
+      // 固定列
+      .el-table__fixed,
+      .el-table__fixed-right {
+        background: $dark-bg-card !important;
+        box-shadow: none !important;
+
+        .el-table__fixed-header-wrapper,
+        .el-table__fixed-body-wrapper {
+          background: $dark-bg-card !important;
+        }
+
+        th,
+        th.el-table__cell {
+          background: $dark-bg-tertiary !important;
+          color: $dark-text-secondary !important;
+        }
+
+        td,
+        td.el-table__cell {
+          background: $dark-bg-card !important;
+          color: $dark-text-primary !important;
+        }
+
+        tr.el-table__row--striped td,
+        tr.el-table__row--striped td.el-table__cell {
+          background: $dark-bg-secondary !important;
+        }
+
+        tr:hover td,
+        tr:hover td.el-table__cell {
+          background: $dark-bg-tertiary !important;
+        }
       }
 
+      // 固定列阴影
+      .el-table__fixed-right::before,
+      .el-table__fixed::before {
+        background-color: $dark-border !important;
+      }
+
+      // 空数据
       .el-table__empty-block {
-        background: transparent;
+        background: $dark-bg-card !important;
+        background-color: $dark-bg-card !important;
       }
 
       .el-table__empty-text {
-        color: $dark-text-muted;
+        color: $dark-text-muted !important;
+      }
+
+      // 排序图标
+      .sort-caret {
+        border-color: transparent !important;
+
+        &.ascending {
+          border-bottom-color: $dark-text-secondary !important;
+        }
+
+        &.descending {
+          border-top-color: $dark-text-secondary !important;
+        }
+      }
+
+      // 滚动条
+      .el-table__body-wrapper::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+
+      .el-table__body-wrapper::-webkit-scrollbar-thumb {
+        background: $dark-border;
+        border-radius: 3px;
+      }
+
+      .el-table__body-wrapper::-webkit-scrollbar-track {
+        background: $dark-bg-secondary;
       }
     }
 
     .buy-text {
-      color: $buy-color;
+      color: $buy-color !important;
       font-weight: 600;
     }
 
     .sell-text {
-      color: $sell-color;
+      color: $sell-color !important;
       font-weight: 600;
     }
   }

@@ -71,62 +71,59 @@
 
     <!-- 流水列表 -->
     <div class="table-container">
-      <vxe-table
+      <el-table
         ref="transactionTable"
         :data="filteredTransactions"
         border
         stripe
-        resizable
-        highlight-hover-row
-        :loading="loading"
-        :sort-config="{ trigger: 'cell', remote: false }"
+        v-loading="loading"
         height="500"
       >
-        <vxe-table-column field="transaction_id" title="交易ID" width="180" sortable></vxe-table-column>
-        <vxe-table-column field="user_id" title="用户ID" width="150" sortable></vxe-table-column>
-        <vxe-table-column field="transaction_type" title="交易类型" width="120" sortable>
-          <template slot-scope="{ row }">
-            <el-tag :type="getTypeTagType(row.transaction_type)" size="small">
-              {{ getTypeName(row.transaction_type) }}
+        <el-table-column prop="transaction_id" label="交易ID" width="180" sortable></el-table-column>
+        <el-table-column prop="user_id" label="用户ID" width="150" sortable></el-table-column>
+        <el-table-column prop="transaction_type" label="交易类型" width="120" sortable>
+          <template slot-scope="scope">
+            <el-tag :type="getTypeTagType(scope.row.transaction_type)" size="small">
+              {{ getTypeName(scope.row.transaction_type) }}
             </el-tag>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="amount" title="金额" width="140" align="right" sortable>
-          <template slot-scope="{ row }">
-            <span :class="getAmountClass(row.transaction_type)">
-              {{ formatAmount(row.transaction_type, row.amount) }}
+        </el-table-column>
+        <el-table-column prop="amount" label="金额" width="140" align="right" sortable>
+          <template slot-scope="scope">
+            <span :class="getAmountClass(scope.row.transaction_type)">
+              {{ formatAmount(scope.row.transaction_type, scope.row.amount) }}
             </span>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="balance_before" title="交易前余额" width="140" align="right">
-          <template slot-scope="{ row }">
-            {{ row.balance_before.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </el-table-column>
+        <el-table-column prop="balance_before" label="交易前余额" width="140" align="right">
+          <template slot-scope="scope">
+            {{ scope.row.balance_before.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="balance_after" title="交易后余额" width="140" align="right">
-          <template slot-scope="{ row }">
-            {{ row.balance_after.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </el-table-column>
+        <el-table-column prop="balance_after" label="交易后余额" width="140" align="right">
+          <template slot-scope="scope">
+            {{ scope.row.balance_after.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="status" title="状态" width="100" sortable>
-          <template slot-scope="{ row }">
-            <el-tag :type="getStatusTagType(row.status)" size="small">
-              {{ getStatusName(row.status) }}
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="100" sortable>
+          <template slot-scope="scope">
+            <el-tag :type="getStatusTagType(scope.row.status)" size="small">
+              {{ getStatusName(scope.row.status) }}
             </el-tag>
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="method" title="方式" width="120">
-          <template slot-scope="{ row }">
-            {{ getMethodName(row.method) }}
+        </el-table-column>
+        <el-table-column prop="method" label="方式" width="120">
+          <template slot-scope="scope">
+            {{ getMethodName(scope.row.method) }}
           </template>
-        </vxe-table-column>
-        <vxe-table-column field="remark" title="备注" width="200"></vxe-table-column>
-        <vxe-table-column field="created_at" title="交易时间" width="180" sortable>
-          <template slot-scope="{ row }">
-            {{ row.created_at }}
+        </el-table-column>
+        <el-table-column prop="remark" label="备注" width="200"></el-table-column>
+        <el-table-column prop="created_at" label="交易时间" width="180" sortable>
+          <template slot-scope="scope">
+            {{ scope.row.created_at }}
           </template>
-        </vxe-table-column>
-      </vxe-table>
+        </el-table-column>
+      </el-table>
     </div>
   </div>
 </template>
@@ -307,23 +304,99 @@ export default {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+// @yutiansut @quantaxis - 资金流水管理页面深色主题
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+$success-color: #52c41a;
+$danger-color: #f5222d;
+$warning-color: #faad14;
+
 .transactions-container {
   padding: 20px;
+  min-height: 100%;
+  background: $dark-bg-primary;
 }
 
 .page-header {
   margin-bottom: 20px;
-}
 
-.page-header h2 {
-  margin: 0 0 20px 0;
-  font-size: 24px;
-  font-weight: 500;
+  h2 {
+    margin: 0 0 20px 0;
+    font-size: 24px;
+    font-weight: 600;
+    color: $dark-text-primary;
+  }
 }
 
 .filter-container {
   margin-bottom: 20px;
+  padding: 16px;
+  background: $dark-bg-secondary;
+  border-radius: 8px;
+  border: 1px solid $dark-border;
+
+  ::v-deep .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+
+    &::placeholder {
+      color: $dark-text-muted;
+    }
+  }
+
+  ::v-deep .el-select .el-input__inner {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+    color: $dark-text-primary !important;
+  }
+
+  ::v-deep .el-date-editor {
+    background: $dark-bg-tertiary !important;
+    border-color: $dark-border !important;
+
+    .el-range-input {
+      background: transparent !important;
+      color: $dark-text-primary !important;
+
+      &::placeholder {
+        color: $dark-text-muted;
+      }
+    }
+
+    .el-range-separator {
+      color: $dark-text-secondary;
+    }
+
+    .el-range__icon,
+    .el-range__close-icon {
+      color: $dark-text-secondary;
+    }
+  }
+
+  ::v-deep .el-button--primary {
+    background: $primary-color;
+    border-color: $primary-color;
+  }
+
+  ::v-deep .el-button--default {
+    background: $dark-bg-tertiary;
+    border-color: $dark-border;
+    color: $dark-text-secondary;
+
+    &:hover {
+      border-color: $primary-color;
+      color: $primary-color;
+    }
+  }
 }
 
 .stats-container {
@@ -334,6 +407,16 @@ export default {
 
 .stat-card {
   flex: 1;
+
+  ::v-deep.el-card {
+    background: $dark-bg-card !important;
+    border: 1px solid $dark-border !important;
+    border-radius: 10px;
+
+    .el-card__body {
+      padding: 20px;
+    }
+  }
 }
 
 .stat-item {
@@ -341,28 +424,157 @@ export default {
 }
 
 .stat-label {
-  font-size: 14px;
-  color: #909399;
-  margin-bottom: 8px;
+  font-size: 13px;
+  color: $dark-text-secondary;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .stat-value {
-  font-size: 24px;
-  font-weight: 500;
-  color: #303133;
+  font-size: 26px;
+  font-weight: 700;
+  color: $dark-text-primary;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .table-container {
-  background: white;
+  background: $dark-bg-card;
   padding: 20px;
-  border-radius: 4px;
+  border-radius: 8px;
+  border: 1px solid $dark-border;
+
+  ::v-deep .el-table {
+    background: transparent !important;
+
+    &::before {
+      display: none;
+    }
+
+    th.el-table__cell {
+      background: $dark-bg-secondary !important;
+      border-bottom: 1px solid $dark-border !important;
+      color: $dark-text-secondary !important;
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    td.el-table__cell {
+      background: $dark-bg-card !important;
+      border-bottom: 1px solid $dark-border !important;
+      color: $dark-text-primary !important;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+    }
+
+    tr {
+      background: $dark-bg-card !important;
+    }
+
+    .el-table__row--striped td.el-table__cell {
+      background: $dark-bg-secondary !important;
+    }
+
+    .el-table__row:hover > td.el-table__cell {
+      background: $dark-bg-tertiary !important;
+    }
+
+    .cell {
+      color: $dark-text-primary !important;
+    }
+
+    .el-table__empty-block {
+      background: $dark-bg-card;
+    }
+
+    .el-table__empty-text {
+      color: $dark-text-muted;
+    }
+
+    // 滚动条
+    .el-table__body-wrapper {
+      &::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      &::-webkit-scrollbar-track {
+        background: $dark-bg-secondary;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: $dark-border;
+        border-radius: 4px;
+
+        &:hover {
+          background: #484f58;
+        }
+      }
+    }
+  }
 }
 
 .positive {
-  color: #67C23A;
+  color: $success-color !important;
+  font-weight: 600;
+  text-shadow: 0 0 10px rgba($success-color, 0.3);
 }
 
 .negative {
-  color: #F56C6C;
+  color: $danger-color !important;
+  font-weight: 600;
+  text-shadow: 0 0 10px rgba($danger-color, 0.3);
+}
+
+// 标签样式
+::v-deep .el-tag {
+  border: none;
+  font-weight: 600;
+
+  &--success {
+    background: rgba($success-color, 0.15);
+    color: $success-color;
+  }
+
+  &--warning {
+    background: rgba($warning-color, 0.15);
+    color: $warning-color;
+  }
+
+  &--info {
+    background: rgba($dark-text-secondary, 0.15);
+    color: $dark-text-secondary;
+  }
+
+  &--danger {
+    background: rgba($danger-color, 0.15);
+    color: $danger-color;
+  }
+
+  &--primary {
+    background: rgba($primary-color, 0.15);
+    color: $primary-color;
+  }
+}
+
+// 下拉菜单
+::v-deep .el-select-dropdown {
+  background: $dark-bg-card !important;
+  border: 1px solid $dark-border !important;
+
+  .el-select-dropdown__item {
+    color: $dark-text-primary;
+
+    &:hover {
+      background: $dark-bg-tertiary;
+    }
+
+    &.selected {
+      color: $primary-color;
+      font-weight: 600;
+    }
+  }
 }
 </style>

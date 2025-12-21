@@ -326,7 +326,18 @@ export default {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+// @yutiansut @quantaxis - 批量下单表单暗色主题
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+
 .batch-order-form {
   max-width: 800px;
   margin: 0 auto;
@@ -335,15 +346,15 @@ export default {
 
 .batch-order-form h3 {
   margin: 0 0 20px 0;
-  color: #333;
+  color: $dark-text-primary !important;
   font-size: 20px;
 }
 
 .form {
-  background: white;
+  background: $dark-bg-card !important;
   padding: 20px;
   border-radius: 4px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid $dark-border !important;
 }
 
 /* 订单列表区域 */
@@ -360,13 +371,13 @@ export default {
 
 .section-header h4 {
   margin: 0;
-  color: #333;
+  color: $dark-text-primary !important;
   font-size: 16px;
 }
 
 .btn-add {
   padding: 8px 16px;
-  background: #409EFF;
+  background: $primary-color;
   color: white;
   border: none;
   border-radius: 4px;
@@ -375,7 +386,7 @@ export default {
 }
 
 .btn-add:hover {
-  background: #66b1ff;
+  background: #40a9ff;
 }
 
 .orders-list {
@@ -385,10 +396,10 @@ export default {
 }
 
 .order-item {
-  background: #f9f9f9;
+  background: $dark-bg-tertiary !important;
   padding: 15px;
   border-radius: 4px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid $dark-border !important;
 }
 
 .order-header {
@@ -400,7 +411,7 @@ export default {
 
 .order-number {
   font-weight: 500;
-  color: #409EFF;
+  color: $primary-color !important;
 }
 
 .btn-remove {
@@ -418,7 +429,8 @@ export default {
 }
 
 .btn-remove:disabled {
-  background: #c0c4cc;
+  background: $dark-bg-tertiary !important;
+  color: $dark-text-muted !important;
   cursor: not-allowed;
 }
 
@@ -441,38 +453,50 @@ export default {
 
 .form-group label {
   margin-bottom: 5px;
-  color: #666;
+  color: $dark-text-secondary !important;
   font-size: 13px;
 }
 
 .form-group input,
 .form-group select {
   padding: 8px;
-  border: 1px solid #ddd;
+  border: 1px solid $dark-border !important;
   border-radius: 4px;
   font-size: 13px;
+  background: $dark-bg-secondary !important;
+  color: $dark-text-primary !important;
+}
+
+.form-group input::placeholder {
+  color: $dark-text-muted !important;
+}
+
+.form-group select option {
+  background: $dark-bg-card !important;
+  color: $dark-text-primary !important;
 }
 
 .form-group input:focus,
 .form-group select:focus {
   outline: none;
-  border-color: #409EFF;
+  border-color: $primary-color !important;
 }
 
 .form-group input:disabled {
-  background: #f5f7fa;
+  background: $dark-bg-primary !important;
+  color: $dark-text-muted !important;
   cursor: not-allowed;
 }
 
 /* 提交区域 */
 .submit-section {
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid $dark-border !important;
   padding-top: 15px;
 }
 
 .summary {
   margin-bottom: 15px;
-  color: #666;
+  color: $dark-text-secondary !important;
   font-size: 14px;
 }
 
@@ -484,21 +508,22 @@ export default {
 
 .btn-clear {
   padding: 12px 24px;
-  background: white;
-  color: #666;
-  border: 1px solid #ddd;
+  background: $dark-bg-tertiary !important;
+  color: $dark-text-secondary !important;
+  border: 1px solid $dark-border !important;
   border-radius: 4px;
   font-size: 14px;
   cursor: pointer;
 }
 
 .btn-clear:hover:not(:disabled) {
-  background: #f5f7fa;
+  background: $dark-bg-secondary !important;
+  color: $dark-text-primary !important;
 }
 
 .btn-submit {
   padding: 12px 32px;
-  background: #409EFF;
+  background: $primary-color;
   color: white;
   border: none;
   border-radius: 4px;
@@ -508,46 +533,47 @@ export default {
 }
 
 .btn-submit:hover:not(:disabled) {
-  background: #66b1ff;
+  background: #40a9ff;
 }
 
 .btn-disabled {
-  background: #c0c4cc !important;
+  background: $dark-bg-tertiary !important;
+  color: $dark-text-muted !important;
   cursor: not-allowed;
 }
 
 .error-message {
   margin-top: 15px;
   padding: 12px;
-  background: #fef0f0;
-  border: 1px solid #fde2e2;
+  background: rgba(245, 108, 108, 0.1) !important;
+  border: 1px solid rgba(245, 108, 108, 0.3) !important;
   border-radius: 4px;
-  color: #f56c6c;
+  color: #f56c6c !important;
   font-size: 14px;
 }
 
 .success-message {
   margin-top: 15px;
   padding: 12px;
-  background: #f0f9eb;
-  border: 1px solid #e1f3d8;
+  background: rgba(103, 194, 58, 0.1) !important;
+  border: 1px solid rgba(103, 194, 58, 0.3) !important;
   border-radius: 4px;
-  color: #67c23a;
+  color: #67c23a !important;
   font-size: 14px;
 }
 
 /* 提交结果 */
 .submit-result {
   margin-top: 20px;
-  background: white;
+  background: $dark-bg-card !important;
   padding: 20px;
   border-radius: 4px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid $dark-border !important;
 }
 
 .submit-result h4 {
   margin: 0 0 15px 0;
-  color: #333;
+  color: $dark-text-primary !important;
   font-size: 16px;
 }
 
@@ -559,15 +585,15 @@ export default {
 }
 
 .result-total {
-  color: #666;
+  color: $dark-text-secondary !important;
 }
 
 .result-success {
-  color: #67c23a;
+  color: #67c23a !important;
 }
 
 .result-failed {
-  color: #f56c6c;
+  color: #f56c6c !important;
 }
 
 .result-table {
@@ -579,21 +605,22 @@ export default {
 .result-table td {
   padding: 10px;
   text-align: left;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid $dark-border !important;
   font-size: 13px;
+  color: $dark-text-primary !important;
 }
 
 .result-table th {
-  background: #f5f7fa;
-  color: #666;
+  background: $dark-bg-secondary !important;
+  color: $dark-text-secondary !important;
   font-weight: 500;
 }
 
 .status-success {
-  color: #67c23a;
+  color: #67c23a !important;
 }
 
 .status-failed {
-  color: #f56c6c;
+  color: #f56c6c !important;
 }
 </style>

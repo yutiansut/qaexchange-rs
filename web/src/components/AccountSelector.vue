@@ -157,12 +157,24 @@ export default {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+// @yutiansut @quantaxis - 账户选择器暗色主题
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-card: #1c2128;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
+$primary-color: #1890ff;
+
 .account-selector {
   padding: 15px;
-  background: #f5f5f5;
+  background: $dark-bg-secondary !important;
   border-radius: 4px;
   margin-bottom: 20px;
+  border: 1px solid $dark-border !important;
 }
 
 .account-dropdown {
@@ -175,45 +187,52 @@ export default {
   font-weight: bold;
   margin-right: 10px;
   white-space: nowrap;
+  color: $dark-text-primary !important;
 }
 
 .account-select {
   flex: 1;
   padding: 8px 12px;
-  border: 1px solid #ddd;
+  border: 1px solid $dark-border !important;
   border-radius: 4px;
   font-size: 14px;
-  background: white;
+  background: $dark-bg-tertiary !important;
+  color: $dark-text-primary !important;
   cursor: pointer;
 }
 
+.account-select option {
+  background: $dark-bg-card !important;
+  color: $dark-text-primary !important;
+}
+
 .account-select:hover {
-  border-color: #409EFF;
+  border-color: $primary-color !important;
 }
 
 .account-select:focus {
   outline: none;
-  border-color: #409EFF;
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
+  border-color: $primary-color !important;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
 }
 
 .no-accounts-warning {
   text-align: center;
   padding: 20px;
-  background: #fff3cd;
-  border: 1px solid #ffeaa7;
+  background: rgba(230, 162, 60, 0.15) !important;
+  border: 1px solid rgba(230, 162, 60, 0.3) !important;
   border-radius: 4px;
 }
 
 .no-accounts-warning p {
   margin: 0 0 15px 0;
-  color: #856404;
+  color: #e6a23c !important;
   font-size: 14px;
 }
 
 .btn-open-account {
   padding: 10px 24px;
-  background: #409EFF;
+  background: $primary-color;
   color: white;
   border: none;
   border-radius: 4px;
@@ -223,7 +242,7 @@ export default {
 }
 
 .btn-open-account:hover {
-  background: #66b1ff;
+  background: #40a9ff;
 }
 
 .account-details {
@@ -231,9 +250,9 @@ export default {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px;
   padding: 15px;
-  background: white;
+  background: $dark-bg-card !important;
   border-radius: 4px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid $dark-border !important;
 }
 
 .detail-item {
@@ -243,26 +262,27 @@ export default {
 }
 
 .detail-item .label {
-  color: #666;
+  color: $dark-text-secondary !important;
   font-size: 13px;
 }
 
 .detail-item .value {
-  color: #333;
+  color: $dark-text-primary !important;
   font-weight: 500;
   font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .risk-normal {
-  color: #67C23A;
+  color: #67C23A !important;
 }
 
 .risk-medium {
-  color: #E6A23C;
+  color: #E6A23C !important;
 }
 
 .risk-high {
-  color: #F56C6C;
+  color: #F56C6C !important;
   font-weight: bold;
 }
 </style>
