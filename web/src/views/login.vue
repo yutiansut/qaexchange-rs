@@ -217,11 +217,16 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-// @yutiansut @quantaxis - 专业量化交易系统登录样式
+// @yutiansut @quantaxis - 专业量化交易系统登录样式（深色主题）
 $primary-color: #1890ff;
 $primary-dark: #096dd9;
 $dark-bg: #0d1117;
 $dark-bg-secondary: #161b22;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+$dark-text-muted: #6e7681;
 
 .login-container {
   min-height: 100vh;
@@ -312,15 +317,16 @@ $dark-bg-secondary: #161b22;
   }
 }
 
-// 登录包装
+// ✨ 登录包装 - 深色主题 @yutiansut @quantaxis
 .login-wrapper {
   display: flex;
   z-index: 1;
   max-width: 900px;
   width: 90%;
-  background: white;
+  background: $dark-bg-secondary;
+  border: 1px solid $dark-border;
   border-radius: 16px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
 
@@ -332,6 +338,7 @@ $dark-bg-secondary: #161b22;
   flex-direction: column;
 }
 
+// ✨ Logo 区域 - 深色主题 @yutiansut @quantaxis
 .logo-section {
   text-align: center;
   margin-bottom: 36px;
@@ -350,18 +357,18 @@ $dark-bg-secondary: #161b22;
   .title {
     font-size: 28px;
     font-weight: 700;
-    color: #303133;
+    color: $dark-text-primary;
     margin: 0 0 8px;
   }
 
   .subtitle {
     font-size: 14px;
-    color: #909399;
+    color: $dark-text-secondary;
     margin: 0;
   }
 }
 
-// 表单样式
+// ✨ 表单样式 - 深色主题 @yutiansut @quantaxis
 .login-form {
   flex: 1;
 
@@ -373,9 +380,15 @@ $dark-bg-secondary: #161b22;
     height: 48px;
     line-height: 48px;
     border-radius: 8px;
-    border: 1px solid #dcdfe6;
+    border: 1px solid $dark-border;
+    background-color: $dark-bg-tertiary;
+    color: $dark-text-primary;
     font-size: 15px;
     transition: all 0.2s ease;
+
+    &::placeholder {
+      color: $dark-text-muted;
+    }
 
     &:hover {
       border-color: $primary-color;
@@ -383,14 +396,14 @@ $dark-bg-secondary: #161b22;
 
     &:focus {
       border-color: $primary-color;
-      box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+      box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
     }
   }
 
   ::v-deep .el-input__prefix {
     left: 12px;
     font-size: 18px;
-    color: #909399;
+    color: $dark-text-secondary;
   }
 
   ::v-deep .el-input--prefix .el-input__inner {

@@ -10,6 +10,7 @@
   box-sizing: border-box;
 }
 
+// ✨ 深色主题全局样式 @yutiansut @quantaxis
 html, body {
   height: 100%;
   font-family: $font-family;
@@ -17,28 +18,31 @@ html, body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: $dark-bg-primary;
+  color: $dark-text-primary;
 }
 
 #app {
   height: 100%;
+  background-color: $dark-bg-primary;
 }
 
-// ============= 滚动条美化 =============
+// ============= 滚动条美化 - 深色主题 @yutiansut @quantaxis =============
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: $dark-bg-secondary;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(144, 147, 153, 0.3);
+  background: rgba(139, 148, 158, 0.4);
   border-radius: 4px;
 
   &:hover {
-    background: rgba(144, 147, 153, 0.5);
+    background: rgba(139, 148, 158, 0.6);
   }
 }
 
@@ -65,35 +69,36 @@ html, body {
   border-color: $error-color;
 }
 
-// 输入框 - 柔和边框 @yutiansut @quantaxis
+// ✨ 输入框 - 深色主题 @yutiansut @quantaxis
 .el-input__inner {
   border-radius: $radius-sm;
-  border-color: $light-border;
-  background-color: #ffffff;
-  color: $light-text-primary;
+  border-color: $dark-border;
+  background-color: $dark-bg-tertiary;
+  color: $dark-text-primary;
   transition: all $transition-fast;
 
   &::placeholder {
-    color: $light-text-placeholder;
+    color: $dark-text-muted;
   }
 
   &:hover {
-    border-color: darken($light-border, 10%);
+    border-color: lighten($dark-border, 10%);
   }
 
   &:focus {
     border-color: $primary-color;
-    box-shadow: 0 0 0 2px rgba($primary-color, 0.1);
+    box-shadow: 0 0 0 2px rgba($primary-color, 0.2);
   }
 }
 
-// 文本域
+// ✨ 文本域 - 深色主题 @yutiansut @quantaxis
 .el-textarea__inner {
-  border-color: $light-border;
-  color: $light-text-primary;
+  border-color: $dark-border;
+  background-color: $dark-bg-tertiary;
+  color: $dark-text-primary;
 
   &::placeholder {
-    color: $light-text-placeholder;
+    color: $dark-text-muted;
   }
 
   &:focus {
@@ -101,109 +106,281 @@ html, body {
   }
 }
 
-// 卡片 - 柔和阴影 @yutiansut @quantaxis
+// ✨ 卡片 - 深色主题 @yutiansut @quantaxis
 .el-card {
   border-radius: $radius-md;
-  border: 1px solid $light-border-light;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-  background-color: #ffffff;
+  border: 1px solid $dark-border;
+  box-shadow: none;
+  background-color: $dark-bg-secondary;
 
   .el-card__header {
-    background-color: $light-bg-secondary;
-    border-bottom: 1px solid $light-border-light;
-    color: $light-text-primary;
+    background-color: $dark-bg-tertiary;
+    border-bottom: 1px solid $dark-border;
+    color: $dark-text-primary;
     font-weight: 500;
   }
 
   .el-card__body {
-    color: $light-text-primary;
+    color: $dark-text-primary;
   }
 
   &:hover {
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-    border-color: $light-border;
+    border-color: lighten($dark-border, 8%);
   }
 }
 
-// 表格 - 柔和灰色主题 @yutiansut @quantaxis
+// ✨ 表格 - 深色主题 @yutiansut @quantaxis
 .el-table {
   font-size: 13px;
-  color: $light-text-primary;
+  color: $dark-text-primary;
   background-color: transparent;
 
-  // 表头 - 柔和灰色背景
+  // 表头 - 深色背景
   th.el-table__cell {
-    background-color: $light-bg-table-header !important;
+    background-color: $dark-bg-tertiary !important;
     font-weight: 600;
-    color: $light-text-secondary !important;
-    border-bottom: 1px solid $light-border !important;
+    color: $dark-text-secondary !important;
+    border-bottom: 1px solid $dark-border !important;
   }
 
   // 单元格
   td.el-table__cell {
-    color: $light-text-primary;
-    border-bottom: 1px solid $light-border-light !important;
+    color: $dark-text-primary;
+    background-color: $dark-bg-secondary !important;
+    border-bottom: 1px solid $dark-border !important;
   }
 
-  // 斑马纹 - 使用柔和灰色
+  // 斑马纹 - 深色交替
   .el-table__row--striped td.el-table__cell {
-    background-color: $light-bg-table-stripe !important;
+    background-color: rgba(255, 255, 255, 0.02) !important;
   }
 
-  // hover 行 - 柔和蓝灰色
+  // hover 行 - 深色高亮
   .el-table__row:hover > td.el-table__cell {
-    background-color: #f0f7ff !important;
+    background-color: $dark-bg-tertiary !important;
   }
 
   // 当前选中行
   .current-row > td.el-table__cell {
-    background-color: #e6f4ff !important;
+    background-color: rgba($primary-color, 0.15) !important;
   }
 
   // 表格边框
   &.el-table--border {
-    border: 1px solid $light-border;
+    border: 1px solid $dark-border;
     border-radius: 4px;
     overflow: hidden;
 
     &::after, &::before {
-      background-color: $light-border;
+      background-color: $dark-border;
     }
 
     .el-table__cell {
-      border-right: 1px solid $light-border-light;
+      border-right: 1px solid $dark-border;
     }
   }
 
   // 空数据提示
   .el-table__empty-text {
-    color: $light-text-muted;
+    color: $dark-text-muted;
+  }
+
+  // 表格内部背景
+  &::before {
+    background-color: $dark-border;
+  }
+
+  tr {
+    background-color: $dark-bg-secondary;
   }
 }
 
-// 消息提示
+// ✨ 消息提示 - 深色主题 @yutiansut @quantaxis
 .el-message {
   border-radius: $radius-md;
   box-shadow: $shadow-lg;
+  background-color: $dark-bg-secondary;
+  border-color: $dark-border;
+
+  .el-message__content {
+    color: $dark-text-primary;
+  }
 }
 
-// 对话框
+// ✨ 确认框/消息框 - 深色主题 @yutiansut @quantaxis
+.el-message-box {
+  background-color: $dark-bg-secondary;
+  border: 1px solid $dark-border;
+
+  .el-message-box__header {
+    background-color: $dark-bg-tertiary;
+  }
+
+  .el-message-box__title {
+    color: $dark-text-primary;
+  }
+
+  .el-message-box__content {
+    color: $dark-text-primary;
+  }
+
+  .el-message-box__message {
+    color: $dark-text-primary;
+  }
+
+  .el-message-box__input {
+    .el-input__inner {
+      background-color: $dark-bg-tertiary;
+      border-color: $dark-border;
+      color: $dark-text-primary;
+    }
+  }
+}
+
+// ✨ 表单 - 深色主题 @yutiansut @quantaxis
+.el-form-item__label {
+  color: $dark-text-secondary;
+}
+
+.el-form-item__error {
+  color: $error-color;
+}
+
+// ✨ Radio/Checkbox - 深色主题 @yutiansut @quantaxis
+.el-radio__label,
+.el-checkbox__label {
+  color: $dark-text-primary;
+}
+
+.el-radio__inner {
+  background-color: $dark-bg-tertiary;
+  border-color: $dark-border;
+}
+
+.el-checkbox__inner {
+  background-color: $dark-bg-tertiary;
+  border-color: $dark-border;
+}
+
+// ✨ Popover/Tooltip - 深色主题 @yutiansut @quantaxis
+.el-popover {
+  background-color: $dark-bg-secondary;
+  border: 1px solid $dark-border;
+  color: $dark-text-primary;
+
+  &.el-popper[x-placement^=top] .popper__arrow::after {
+    border-top-color: $dark-bg-secondary;
+  }
+  &.el-popper[x-placement^=bottom] .popper__arrow::after {
+    border-bottom-color: $dark-bg-secondary;
+  }
+}
+
+.el-tooltip__popper {
+  background-color: $dark-bg-tertiary !important;
+  border: 1px solid $dark-border;
+  color: $dark-text-primary;
+}
+
+// ✨ Switch 开关 - 深色主题 @yutiansut @quantaxis
+.el-switch__core {
+  border-color: $dark-border;
+  background-color: $dark-bg-tertiary;
+}
+
+// ✨ Slider 滑块 - 深色主题 @yutiansut @quantaxis
+.el-slider__runway {
+  background-color: $dark-bg-tertiary;
+}
+
+// ✨ DatePicker/TimePicker - 深色主题 @yutiansut @quantaxis
+.el-picker-panel {
+  background-color: $dark-bg-secondary;
+  border: 1px solid $dark-border;
+  color: $dark-text-primary;
+
+  .el-picker-panel__body {
+    background-color: $dark-bg-secondary;
+  }
+
+  .el-picker-panel__footer {
+    background-color: $dark-bg-tertiary;
+    border-top-color: $dark-border;
+  }
+
+  .el-date-table th {
+    color: $dark-text-secondary;
+  }
+
+  .el-date-table td.available {
+    color: $dark-text-primary;
+  }
+
+  .el-date-table td.disabled {
+    color: $dark-text-muted;
+  }
+}
+
+// ✨ Notification 通知 - 深色主题 @yutiansut @quantaxis
+.el-notification {
+  background-color: $dark-bg-secondary;
+  border: 1px solid $dark-border;
+
+  .el-notification__title {
+    color: $dark-text-primary;
+  }
+
+  .el-notification__content {
+    color: $dark-text-secondary;
+  }
+}
+
+// ✨ Loading 加载 - 深色主题 @yutiansut @quantaxis
+.el-loading-mask {
+  background-color: rgba($dark-bg-primary, 0.9);
+}
+
+.el-loading-text {
+  color: $dark-text-primary;
+}
+
+// ✨ 对话框 - 深色主题 @yutiansut @quantaxis
 .el-dialog {
   border-radius: $radius-lg;
+  background-color: $dark-bg-secondary;
 
   .el-dialog__header {
-    border-bottom: 1px solid $light-border;
+    border-bottom: 1px solid $dark-border;
     padding: $spacing-md $spacing-lg;
+    background-color: $dark-bg-tertiary;
+  }
+
+  .el-dialog__title {
+    color: $dark-text-primary;
   }
 
   .el-dialog__body {
     padding: $spacing-lg;
+    color: $dark-text-primary;
+  }
+
+  .el-dialog__headerbtn .el-dialog__close {
+    color: $dark-text-secondary;
+
+    &:hover {
+      color: $dark-text-primary;
+    }
   }
 }
 
-// 标签页
+// ✨ 标签页 - 深色主题 @yutiansut @quantaxis
 .el-tabs__item {
   font-size: 14px;
+  color: $dark-text-secondary;
+
+  &:hover {
+    color: $dark-text-primary;
+  }
 
   &.is-active {
     color: $primary-color;
@@ -215,25 +392,43 @@ html, body {
   background-color: $primary-color;
 }
 
-// ============= Element UI 额外修复 @yutiansut @quantaxis =============
+.el-tabs__nav-wrap::after {
+  background-color: $dark-border;
+}
 
-// 下拉菜单 hover 修复
+// ============= Element UI 额外修复 - 深色主题 @yutiansut @quantaxis =============
+
+// 下拉菜单 - 深色主题
+.el-dropdown-menu {
+  background-color: $dark-bg-secondary !important;
+  border: 1px solid $dark-border !important;
+}
+
 .el-dropdown-menu__item {
-  color: $light-text-primary !important;
+  color: $dark-text-primary !important;
 
   &:hover, &:focus {
-    background-color: rgba($primary-color, 0.08) !important;
+    background-color: $dark-bg-tertiary !important;
     color: $primary-color !important;
+  }
+
+  &--divided {
+    border-top-color: $dark-border !important;
   }
 }
 
-// Select 下拉选项 hover 修复
+// Select 下拉面板 - 深色主题
+.el-select-dropdown {
+  background-color: $dark-bg-secondary !important;
+  border: 1px solid $dark-border !important;
+}
+
 .el-select-dropdown__item {
-  color: $light-text-primary !important;
+  color: $dark-text-primary !important;
 
   &.hover, &:hover {
-    background-color: rgba($primary-color, 0.08) !important;
-    color: $light-text-primary !important;
+    background-color: $dark-bg-tertiary !important;
+    color: $dark-text-primary !important;
   }
 
   &.selected {
@@ -242,12 +437,24 @@ html, body {
   }
 }
 
-// Autocomplete 下拉选项
-.el-autocomplete-suggestion li {
-  color: $light-text-primary !important;
+// Select 组件本身
+.el-select .el-input__inner {
+  background-color: $dark-bg-tertiary;
+  border-color: $dark-border;
+  color: $dark-text-primary;
+}
 
-  &:hover, &.highlighted {
-    background-color: rgba($primary-color, 0.08) !important;
+// Autocomplete 下拉选项
+.el-autocomplete-suggestion {
+  background-color: $dark-bg-secondary !important;
+  border: 1px solid $dark-border !important;
+
+  li {
+    color: $dark-text-primary !important;
+
+    &:hover, &.highlighted {
+      background-color: $dark-bg-tertiary !important;
+    }
   }
 }
 
@@ -256,11 +463,11 @@ html, body {
   border-color: transparent !important;
 
   &.ascending {
-    border-bottom-color: $light-text-secondary !important;
+    border-bottom-color: $dark-text-secondary !important;
   }
 
   &.descending {
-    border-top-color: $light-text-secondary !important;
+    border-top-color: $dark-text-secondary !important;
   }
 }
 
@@ -270,48 +477,77 @@ html, body {
   border-top-color: $primary-color !important;
 }
 
-// Tag 标签对比度
+// Tag 标签 - 深色主题
 .el-tag--info {
-  background-color: rgba(144, 147, 153, 0.1);
-  border-color: rgba(144, 147, 153, 0.2);
-  color: $light-text-secondary;
+  background-color: rgba(139, 148, 158, 0.2);
+  border-color: rgba(139, 148, 158, 0.3);
+  color: $dark-text-secondary;
 }
 
 // 输入框 placeholder
 .el-input__inner::placeholder,
 .el-textarea__inner::placeholder {
-  color: $light-text-muted;
+  color: $dark-text-muted;
 }
 
-// Descriptions 描述列表
+// Descriptions 描述列表 - 深色主题
+.el-descriptions {
+  background-color: transparent;
+}
+
 .el-descriptions-item__label {
-  color: $light-text-secondary !important;
+  color: $dark-text-secondary !important;
+  background-color: $dark-bg-tertiary !important;
 }
 
 .el-descriptions-item__content {
-  color: $light-text-primary !important;
+  color: $dark-text-primary !important;
+  background-color: $dark-bg-secondary !important;
 }
 
-// 分页器
+.el-descriptions__body {
+  background-color: transparent;
+}
+
+.el-descriptions--bordered .el-descriptions-item__cell {
+  border-color: $dark-border !important;
+}
+
+// 分页器 - 深色主题
 .el-pagination {
   .el-pager li {
-    color: $light-text-primary;
+    color: $dark-text-primary;
+    background-color: $dark-bg-tertiary;
 
     &:hover {
       color: $primary-color;
     }
 
     &.active {
-      color: $primary-color;
+      color: white;
+      background-color: $primary-color;
     }
   }
 
   button {
-    color: $light-text-primary;
+    color: $dark-text-primary;
+    background-color: $dark-bg-tertiary;
 
     &:disabled {
-      color: $light-text-muted;
+      color: $dark-text-muted;
+      background-color: $dark-bg-secondary;
     }
+  }
+
+  .el-pagination__total,
+  .el-pagination__jump {
+    color: $dark-text-secondary;
+  }
+
+  .el-input__inner {
+    background-color: $dark-bg-tertiary;
+    border-color: $dark-border;
+    color: $dark-text-primary;
   }
 }
 
@@ -346,7 +582,7 @@ html, body {
 .text-success { color: $success-color; }
 .text-warning { color: $warning-color; }
 .text-danger { color: $error-color; }
-.text-muted { color: $light-text-muted; }
+.text-muted { color: $dark-text-muted; }
 
 .font-bold { font-weight: 600; }
 .font-medium { font-weight: 500; }
@@ -386,144 +622,80 @@ html, body {
 .gap-sm { gap: $spacing-sm; }
 .gap-md { gap: $spacing-md; }
 
-// ============= 深色主题类 =============
+// ✨ 深色主题类（已设为默认，保留向后兼容）@yutiansut @quantaxis
+// 注意：深色主题已设为全局默认，此类仅为向后兼容
 .dark-theme {
   background-color: $dark-bg-primary;
   color: $dark-text-primary;
-
-  .el-card {
-    background-color: $dark-bg-card;
-    border: 1px solid $dark-border;
-
-    .el-card__header {
-      border-bottom-color: $dark-border;
-    }
-  }
-
-  .el-table {
-    background-color: transparent;
-    color: $dark-text-primary;
-
-    th {
-      background-color: $dark-bg-secondary !important;
-      color: $dark-text-secondary;
-    }
-
-    tr {
-      background-color: transparent;
-    }
-
-    .el-table__row:hover > td {
-      background-color: $dark-bg-tertiary !important;
-    }
-
-    td, th.is-leaf {
-      border-bottom-color: $dark-border;
-    }
-
-    &::before {
-      background-color: $dark-border;
-    }
-  }
-
-  .el-input__inner {
-    background-color: $dark-bg-tertiary;
-    border-color: $dark-border;
-    color: $dark-text-primary;
-
-    &::placeholder {
-      color: $dark-text-muted;
-    }
-  }
-
-  .el-select-dropdown {
-    background-color: $dark-bg-secondary;
-    border-color: $dark-border;
-
-    .el-select-dropdown__item {
-      color: $dark-text-primary;
-
-      &:hover {
-        background-color: $dark-bg-tertiary;
-      }
-    }
-  }
-
-  .el-tabs__item {
-    color: $dark-text-secondary;
-
-    &.is-active {
-      color: $primary-color;
-    }
-  }
-
-  .el-tabs__nav-wrap::after {
-    background-color: $dark-border;
-  }
 }
 
-// ============= VXE-Table 样式修复 @yutiansut @quantaxis =============
+// ============= VXE-Table 样式修复 - 深色主题 @yutiansut @quantaxis =============
 .vxe-table {
   // 基础样式
   font-size: 13px;
-  color: $light-text-primary;
+  color: $dark-text-primary;
+  background-color: $dark-bg-secondary;
 
   // 表头
   .vxe-header--column {
-    background-color: $light-bg-primary !important;
-    color: $light-text-primary !important;
+    background-color: $dark-bg-tertiary !important;
+    color: $dark-text-secondary !important;
     font-weight: 600;
   }
 
   // 单元格
   .vxe-body--column {
-    color: $light-text-primary !important;
+    color: $dark-text-primary !important;
+    background-color: $dark-bg-secondary !important;
   }
 
-  // hover 行 - 修复白底白字问题
+  // hover 行
   .vxe-body--row.row--hover {
-    background-color: rgba($primary-color, 0.08) !important;
+    background-color: $dark-bg-tertiary !important;
 
     .vxe-body--column {
-      color: $light-text-primary !important;
+      color: $dark-text-primary !important;
+      background-color: $dark-bg-tertiary !important;
     }
 
     .vxe-cell {
-      color: $light-text-primary !important;
+      color: $dark-text-primary !important;
     }
   }
 
   // 选中行
   .vxe-body--row.row--current {
-    background-color: rgba($primary-color, 0.12) !important;
+    background-color: rgba($primary-color, 0.15) !important;
   }
 
   // 斑马纹
   .vxe-body--row.row--stripe {
-    background-color: rgba(0, 0, 0, 0.02);
+    background-color: rgba(255, 255, 255, 0.02);
   }
 
   // 边框
   .vxe-table--border-line {
-    border-color: $light-border;
+    border-color: $dark-border;
   }
 
   // 修复 tooltip 溢出显示
   .vxe-cell--tooltip {
-    color: $light-text-primary;
+    color: $dark-text-primary;
   }
 }
 
 // VXE-Table 分页器
 .vxe-pager {
-  color: $light-text-primary;
+  color: $dark-text-primary;
+  background-color: $dark-bg-secondary;
 
   .vxe-pager--btn-wrapper {
     .vxe-pager--num-btn {
-      color: $light-text-primary;
+      color: $dark-text-primary;
+      background-color: $dark-bg-tertiary;
 
       &:hover {
-        background-color: rgba($primary-color, 0.1);
+        background-color: rgba($primary-color, 0.2);
         color: $primary-color;
       }
 

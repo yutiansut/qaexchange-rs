@@ -221,6 +221,14 @@ export default {
 </script>
 
 <style scoped lang="scss">
+// ✨ 深色主题配色变量 @yutiansut @quantaxis
+$dark-bg-primary: #0d1117;
+$dark-bg-secondary: #161b22;
+$dark-bg-tertiary: #21262d;
+$dark-border: #30363d;
+$dark-text-primary: #f0f6fc;
+$dark-text-secondary: #8b949e;
+
 .chart-page {
   padding: 20px;
   height: calc(100vh - 100px);
@@ -229,10 +237,12 @@ export default {
 
   .header-card {
     margin-bottom: 20px;
+    background-color: $dark-bg-secondary;
+    border-color: $dark-border;
 
     h2 {
       margin: 0;
-      color: #303133;
+      color: $dark-text-primary;
     }
 
     .controls {
@@ -242,7 +252,7 @@ export default {
 
       .info-text {
         font-size: 14px;
-        color: #606266;
+        color: $dark-text-secondary;
       }
     }
   }
@@ -252,10 +262,13 @@ export default {
     height: calc(100vh - 220px); // 页面高度 - padding - header
     display: flex;
     flex-direction: column;
+    background-color: $dark-bg-secondary;
+    border-color: $dark-border;
 
     .chart-container {
       flex: 1;
       min-height: 500px;
+      background-color: $dark-bg-primary;
     }
   }
 }
