@@ -231,26 +231,49 @@ npm run build
 
 ### 配置代理
 
-在 `vue.config.js` 中配置开发代理：
+#### 默认配置
 
-```javascript
-module.exports = {
-  devServer: {
-    port: 8096,
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8094',
-        changeOrigin: true
-      }
-    }
-  }
-}
+默认情况下，前端会连接本地后端服务：
+- HTTP API: `http://127.0.0.1:8094`
+- WebSocket: `http://127.0.0.1:8095`
+
+#### 连接远程后端 @yutiansut @quantaxis
+
+如果后端运行在不同的机器上，可以通过环境变量配置代理目标：
+
+```bash
+# 方式1: 设置后端 IP 地址
+VUE_APP_API_HOST=192.168.2.27 npm run serve
+
+# 方式2: 分别设置 HTTP 和 WebSocket 地址
+VUE_APP_API_HOST=192.168.2.27 VUE_APP_API_PORT=8094 npm run serve
+
+# 方式3: 在 .env.local 文件中配置
+echo "VUE_APP_API_HOST=192.168.2.27" > .env.local
+npm run serve
 ```
+
+**可用环境变量：**
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VUE_APP_API_HOST` | `127.0.0.1` | HTTP API 服务器地址 |
+| `VUE_APP_API_PORT` | `8094` | HTTP API 端口 |
+| `VUE_APP_WS_HOST` | 同 `VUE_APP_API_HOST` | WebSocket 服务器地址 |
+| `VUE_APP_WS_PORT` | `8095` | WebSocket 端口 |
 
 ## 常见问题
 
-### 1. 后端连接失败
-确保后端服务已启动在 `http://127.0.0.1:8094`
+### 1. 后端连接失败 / ECONNRESET 错误
+确保后端服务已启动，并且代理配置正确：
+
+```bash
+# 检查后端是否运行
+curl http://127.0.0.1:8094/health
+
+# 如果后端在远程机器上，设置正确的 IP
+VUE_APP_API_HOST=<后端IP> npm run serve
+```
 
 ### 2. OpenSSL 错误
 项目配置了 `NODE_OPTIONS=--openssl-legacy-provider` 解决 Node 17+ 的兼容问题。
