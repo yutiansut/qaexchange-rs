@@ -281,10 +281,11 @@ export default {
           params.user_id = this.filters.userId.trim()
         }
 
-        const { data } = await listAllAccounts(params)
+        // axios 拦截器已处理响应，直接返回 data 内容 @yutiansut @quantaxis
+        const data = await listAllAccounts(params)
 
         // 如果有本地用户ID筛选，进行前端过滤（备用方案）
-        let accounts = data.accounts || []
+        let accounts = (data && data.accounts) || []
         if (this.filters.userId && this.filters.userId.trim()) {
           const userIdFilter = this.filters.userId.trim().toLowerCase()
           accounts = accounts.filter(acc =>
@@ -293,7 +294,7 @@ export default {
         }
 
         this.accounts = accounts
-        this.pagination.total = data.total || 0
+        this.pagination.total = (data && data.total) || 0
       } catch (error) {
         this.$message.error('获取账户列表失败: ' + error.message)
       } finally {

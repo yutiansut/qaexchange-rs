@@ -166,11 +166,16 @@ impl AccountSystemCore {
 
                 // 发送账户更新通知
                 if let Some(ref sender) = self.update_sender {
+                    // ✨ 保证金 = 持仓保证金 + 冻结保证金（待成交订单）@yutiansut @quantaxis
+                    let position_margin = acc.get_margin();
+                    let frozen_margin = acc.get_frozen_margin();
+                    let margin = position_margin + frozen_margin;
+
                     let notify = AccountUpdateNotify {
                         user_id: user_id.clone(),
                         balance: acc.money,
                         available: acc.money,
-                        margin: acc.get_margin(),
+                        margin,
                         timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
                     };
                     let _ = sender.send(notify);

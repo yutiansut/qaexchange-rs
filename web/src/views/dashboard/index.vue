@@ -227,6 +227,7 @@
 <script>
 // @yutiansut @quantaxis - 系统监控仪表盘
 import { mapGetters, mapActions } from 'vuex'
+import { getSystemStatus } from '@/api'
 
 export default {
   name: 'Dashboard',
@@ -235,7 +236,8 @@ export default {
       balanceChartType: 'pie',
       uptime: '0d 0h 0m',
       wsConnections: 0,
-      charts: {}
+      charts: {},
+      statusLoading: false
     }
   },
   computed: {
@@ -279,15 +281,18 @@ export default {
       return num || 0
     },
 
-    updateUptime() {
-      const startTime = new Date('2025-12-07T00:00:00')
-      const now = new Date()
-      const diff = now - startTime
-      const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-      this.uptime = `${days}d ${hours}h ${minutes}m`
-      this.wsConnections = Math.floor(Math.random() * 50) + 10
+    async updateUptime() {
+      // 从后端 API 获取真实的系统运行状态 @yutiansut @quantaxis
+      try {
+        const data = await getSystemStatus()
+        if (data) {
+          this.uptime = data.uptime_display || '0d 0h 0m'
+          this.wsConnections = data.ws_connections || 0
+        }
+      } catch (error) {
+        console.error('获取系统状态失败:', error)
+        // 失败时保持上一次的值
+      }
     },
 
     initCharts() {

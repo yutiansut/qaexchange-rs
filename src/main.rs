@@ -654,6 +654,10 @@ impl ExchangeServer {
             // Phase 14: 数据查询存储组件 @yutiansut @quantaxis
             market_data_storage: Some(self.market_data_storage.clone()),
             kline_wal_manager: Some(self.kline_wal_manager.clone()),
+            // 服务器启动时间 @yutiansut @quantaxis
+            server_start_time: chrono::Utc::now(),
+            // WebSocket 连接计数器 @yutiansut @quantaxis
+            ws_connection_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         });
 
         // 创建市场数据服务（解耦：业务逻辑与网络层分离）

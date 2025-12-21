@@ -1165,12 +1165,18 @@ pub async fn get_risk_statistics(
     let mut risk_distribution: Vec<serde_json::Value> = Vec::new();
 
     for account in accounts {
-        let account_read = account.read();
+        // ✨ 使用 write() 获取可变引用以调用 get_margin() 和 get_frozen_margin() @yutiansut @quantaxis
+        let mut acc = account.write();
         total_accounts += 1;
-        total_margin += account_read.accounts.margin;
-        total_balance += account_read.accounts.balance;
 
-        let risk = account_read.accounts.risk_ratio;
+        // 保证金 = 持仓保证金 + 冻结保证金（待成交订单）
+        let position_margin = acc.get_margin();
+        let frozen_margin = acc.get_frozen_margin();
+        let margin = position_margin + frozen_margin;
+        total_margin += margin;
+        total_balance += acc.get_balance();
+
+        let risk = acc.get_riskratio();
         let risk_level;
         if risk >= 0.8 {
             high_risk_count += 1;
@@ -1186,11 +1192,11 @@ pub async fn get_risk_statistics(
         // 高风险账户详情
         if risk >= 0.7 {
             risk_distribution.push(serde_json::json!({
-                "account_id": account_read.accounts.user_id,
+                "account_id": acc.accounts.user_id,
                 "risk_ratio": risk,
                 "risk_level": risk_level,
-                "margin": account_read.accounts.margin,
-                "balance": account_read.accounts.balance
+                "margin": margin,
+                "balance": acc.get_balance()
             }));
         }
     }
@@ -1312,15 +1318,22 @@ pub async fn get_market_overview(
     let mut active_accounts = 0usize;
 
     for account in &accounts {
-        let account_read = account.read();
-        total_balance += account_read.accounts.balance;
-        total_margin += account_read.accounts.margin;
-        total_pnl += account_read.accounts.close_profit + account_read.accounts.position_profit;
-        total_orders += account_read.dailyorders.len();
-        total_trades += account_read.dailytrades.len();
-        total_positions += account_read.hold.len();
+        // ✨ 使用 write() 获取可变引用以调用 get_margin() 和 get_frozen_margin() @yutiansut @quantaxis
+        let mut acc = account.write();
 
-        if !account_read.hold.is_empty() || !account_read.dailyorders.is_empty() {
+        // 保证金 = 持仓保证金 + 冻结保证金（待成交订单）
+        let position_margin = acc.get_margin();
+        let frozen_margin = acc.get_frozen_margin();
+        let margin = position_margin + frozen_margin;
+
+        total_balance += acc.get_balance();
+        total_margin += margin;
+        total_pnl += acc.accounts.close_profit + acc.get_positionprofit();
+        total_orders += acc.dailyorders.len();
+        total_trades += acc.dailytrades.len();
+        total_positions += acc.hold.len();
+
+        if !acc.hold.is_empty() || !acc.dailyorders.is_empty() {
             active_accounts += 1;
         }
     }

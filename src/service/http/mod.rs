@@ -17,6 +17,7 @@ pub mod transfer;  // 银期转账 @yutiansut @quantaxis
 
 use actix_web::{middleware, web, App, HttpServer as ActixHttpServer};
 use std::io;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use crate::exchange::{AccountManager, OrderRouter, SettlementEngine};
@@ -60,6 +61,10 @@ impl HttpServer {
             // 数据查询存储组件（在HttpServer::new中初始化为None，由main.rs完整初始化）@yutiansut @quantaxis
             market_data_storage: None,
             kline_wal_manager: None,
+            // 服务器启动时间 @yutiansut @quantaxis
+            server_start_time: chrono::Utc::now(),
+            // WebSocket 连接计数器 @yutiansut @quantaxis
+            ws_connection_count: Arc::new(AtomicUsize::new(0)),
         });
 
         let market_service = Arc::new(MarketDataService::new(matching_engine));

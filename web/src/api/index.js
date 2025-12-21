@@ -283,6 +283,16 @@ export function healthCheck() {
   })
 }
 
+/**
+ * 获取系统运行状态（运行时间、WebSocket连接数等）@yutiansut @quantaxis
+ */
+export function getSystemStatus() {
+  return request({
+    url: '/monitoring/status',
+    method: 'get'
+  })
+}
+
 // ============= 市场数据 API =============
 
 /**

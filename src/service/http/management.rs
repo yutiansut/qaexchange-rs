@@ -75,13 +75,18 @@ pub async fn list_all_accounts(
                 .account_mgr
                 .get_account_metadata(&acc.account_cookie)?;
 
+            // ✨ 保证金 = 持仓保证金 + 冻结保证金（待成交订单）@yutiansut @quantaxis
+            let position_margin = acc.get_margin();
+            let frozen_margin = acc.get_frozen_margin();
+            let total_margin = position_margin + frozen_margin;
+
             Some(AccountListItem {
                 user_id: acc.account_cookie.clone(),
                 user_name: account_name,
                 account_type: format!("{:?}", account_type),
                 balance: acc.get_balance(),
                 available: acc.money,
-                margin_used: acc.get_margin(),
+                margin_used: total_margin,
                 risk_ratio: acc.get_riskratio(),
                 created_at,
             })

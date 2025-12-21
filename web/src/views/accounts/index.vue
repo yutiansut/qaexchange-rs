@@ -280,8 +280,9 @@ export default {
       // 如果是管理员，加载用户列表
       if (this.isAdmin) {
         try {
-          const { data } = await listUsers()
-          this.userList = data.users || []
+          // axios 拦截器已处理响应 @yutiansut @quantaxis
+          const data = await listUsers()
+          this.userList = (data && data.users) || []
         } catch (error) {
           this.$message.error('加载用户列表失败: ' + (error.message || '未知错误'))
         }

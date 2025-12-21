@@ -1,9 +1,10 @@
 //! HTTP API 请求处理器
 
 use actix_web::{web, HttpResponse, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use log;
 use serde::Serialize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use super::models::{
@@ -38,6 +39,10 @@ pub struct AppState {
     pub market_data_storage: Option<Arc<crate::storage::hybrid::OltpHybridStorage>>,
     /// K线WAL管理器 用于历史K线查询 @yutiansut @quantaxis
     pub kline_wal_manager: Option<Arc<crate::storage::wal::WalManager>>,
+    /// 服务器启动时间 用于计算运行时间 @yutiansut @quantaxis
+    pub server_start_time: DateTime<Utc>,
+    /// WebSocket 连接数计数器 @yutiansut @quantaxis
+    pub ws_connection_count: Arc<AtomicUsize>,
 }
 
 /// 健康检查
@@ -372,12 +377,16 @@ pub async fn get_equity_curve(
         // ✨ 获取账户真实数据 @yutiansut @quantaxis
         let (account_id, account_name, balance, available, margin) = {
             let mut acc = account.write();  // 需要 write() 因为 get_margin() 需要可变引用
+            // ✨ 保证金 = 持仓保证金 + 冻结保证金（待成交订单）@yutiansut @quantaxis
+            let position_margin = acc.get_margin();
+            let frozen_margin = acc.get_frozen_margin();
+            let total_margin = position_margin + frozen_margin;
             (
                 acc.account_cookie.clone(),
                 acc.user_cookie.clone(),
                 acc.accounts.balance,
                 acc.accounts.available,
-                acc.get_margin(),  // 动态计算保证金
+                total_margin,
             )
         };
 

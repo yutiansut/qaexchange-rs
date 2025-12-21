@@ -124,6 +124,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(
             web::scope("/api/monitoring")
                 .route("/system", web::get().to(monitoring::get_system_monitoring))
+                .route("/status", web::get().to(monitoring::get_system_status))  // 系统运行状态 @yutiansut @quantaxis
                 .route(
                     "/accounts",
                     web::get().to(monitoring::get_accounts_monitoring),

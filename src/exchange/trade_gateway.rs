@@ -1237,8 +1237,10 @@ impl TradeGateway {
         // ✨ 使用 write() 以便调用 get_margin() 动态计算 @yutiansut @quantaxis
         let mut acc = account.write();
 
-        // ✨ 动态计算 margin：从所有持仓累加，确保成交后数据准确 @yutiansut @quantaxis
-        let margin = acc.get_margin();
+        // ✨ 保证金 = 持仓保证金 + 冻结保证金（待成交订单）@yutiansut @quantaxis
+        let position_margin = acc.get_margin();
+        let frozen_margin = acc.get_frozen_margin();
+        let margin = position_margin + frozen_margin;
 
         let notification = AccountUpdateNotification {
             user_id: account_id.to_string(), // ✨ 使用 account_id @yutiansut @quantaxis

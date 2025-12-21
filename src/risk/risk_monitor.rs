@@ -516,7 +516,10 @@ impl RiskMonitor {
                 // 获取账户实时指标
                 let balance = acc.get_balance();
                 let available = acc.money;
-                let margin_used = acc.get_margin();
+                // ✨ 保证金 = 持仓保证金 + 冻结保证金（待成交订单）@yutiansut @quantaxis
+                let position_margin = acc.get_margin();
+                let frozen_margin = acc.get_frozen_margin();
+                let margin_used = position_margin + frozen_margin;
                 let unrealized_pnl = acc.get_positionprofit();
                 let risk_ratio = acc.get_riskratio();
                 let position_count = acc.hold.len();

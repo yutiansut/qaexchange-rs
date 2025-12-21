@@ -196,7 +196,8 @@ export default {
           params.end_date = this.formatDate(this.dateRange[1])
         }
 
-        const { data } = await getTransactions(this.filters.userId, params)
+        // axios 拦截器已处理响应 @yutiansut @quantaxis
+        const data = await getTransactions(this.filters.userId, params)
         this.transactions = data || []
       } catch (error) {
         this.$message.error('获取资金流水失败: ' + error.message)

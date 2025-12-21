@@ -275,7 +275,10 @@ impl WsMessageHandler {
                     // ✨ 使用 write() 以便调用 get_margin() 动态计算 @yutiansut @quantaxis
                     let mut acc = account.write();
                     let frozen = acc.accounts.balance - acc.money;
-                    let margin = acc.get_margin();  // ✨ 修复: 使用动态计算的 margin
+                    // ✨ 保证金 = 持仓保证金 + 冻结保证金（待成交订单）@yutiansut @quantaxis
+                    let position_margin = acc.get_margin();
+                    let frozen_margin = acc.get_frozen_margin();
+                    let margin = position_margin + frozen_margin;
                     let data = serde_json::json!({
                         "account": {
                             "user_id": acc.account_cookie,

@@ -197,9 +197,10 @@ export default {
     async loadMonitoringData() {
       this.loading = true
       try {
-        const response = await getSystemMonitoring()
-        if (response.data) {
-          this.monitoringData = response.data
+        // axios 拦截器已处理响应，直接返回数据 @yutiansut @quantaxis
+        const data = await getSystemMonitoring()
+        if (data && data.accounts) {
+          this.monitoringData = data
         }
       } catch (error) {
         console.error('加载监控数据失败:', error)
