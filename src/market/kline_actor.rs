@@ -257,6 +257,107 @@ impl Actor for KLineActor {
         // 从WAL恢复历史数据
         self.recover_from_wal();
 
+        // ✨ 定时器驱动的K线生成（每秒检查一次）
+        // @yutiansut @quantaxis
+        // 即使没有交易，也要按时间周期生成K线
+        let timer_aggregators = self.aggregators.clone();
+        let timer_broadcaster = self.broadcaster.clone();
+        let timer_wal_manager = self.wal_manager.clone();
+        let timer_factor_engines = self.factor_engines.clone();
+        let timer_enabled_factors = self.enabled_factors.clone();
+        let timer_enable_factor_compute = self.enable_factor_compute;
+
+        ctx.run_interval(std::time::Duration::from_secs(1), move |_act, _ctx| {
+            let current_timestamp_ms = chrono::Utc::now().timestamp_millis();
+            let mut all_finished_klines = Vec::new();
+
+            // 遍历所有聚合器，检查是否有K线需要完成
+            {
+                let mut agg_map = timer_aggregators.write();
+                for (instrument_id, aggregator) in agg_map.iter_mut() {
+                    let finished_klines = aggregator.on_timer(current_timestamp_ms);
+                    for (period, kline) in finished_klines {
+                        all_finished_klines.push((instrument_id.clone(), period, kline));
+                    }
+                }
+            }
+
+            // 广播完成的K线
+            for (instrument_id, period, kline) in all_finished_klines {
+                log::debug!(
+                    "📊 [KLineActor Timer] Finished {} {:?} K-line: O={:.2} H={:.2} L={:.2} C={:.2} V={}",
+                    instrument_id, period, kline.open, kline.high, kline.low, kline.close, kline.volume
+                );
+
+                // 广播K线完成事件
+                timer_broadcaster.broadcast(MarketDataEvent::KLineFinished {
+                    instrument_id: instrument_id.clone(),
+                    period: period.to_int(),
+                    kline: kline.clone(),
+                    timestamp: current_timestamp_ms,
+                });
+
+                // ✨ 方案A: K线完成时计算因子并广播
+                if timer_enable_factor_compute {
+                    let mut engines = timer_factor_engines.write();
+                    if !engines.contains_key(&instrument_id) {
+                        let registry = FactorRegistry::with_standard_factors();
+                        let mut engine = StreamFactorEngine::new(registry);
+                        for factor_id in &timer_enabled_factors {
+                            if let Err(e) = engine.init_factor(factor_id) {
+                                log::warn!(
+                                    "📈 [KLineActor Timer] Failed to init factor {}: {}",
+                                    factor_id, e
+                                );
+                            }
+                        }
+                        engines.insert(instrument_id.clone(), engine);
+                    }
+
+                    if let Some(engine) = engines.get_mut(&instrument_id) {
+                        let factor_ids: Vec<&str> = timer_enabled_factors.iter().map(|s| s.as_str()).collect();
+                        let factor_values = engine.update_all(kline.close, &factor_ids);
+
+                        if !factor_values.is_empty() {
+                            timer_broadcaster.broadcast(MarketDataEvent::FactorUpdate {
+                                instrument_id: instrument_id.clone(),
+                                factors: factor_values,
+                                period: period.to_int(),
+                                timestamp: current_timestamp_ms,
+                            });
+                        }
+                    }
+                }
+
+                // 持久化K线到WAL
+                let wal_record = WalRecord::KLineFinished {
+                    instrument_id: WalRecord::to_fixed_array_16(&instrument_id),
+                    period: period.to_int(),
+                    kline_timestamp: kline.timestamp,
+                    open: kline.open,
+                    high: kline.high,
+                    low: kline.low,
+                    close: kline.close,
+                    volume: kline.volume,
+                    amount: kline.amount,
+                    open_oi: kline.open_oi,
+                    close_oi: kline.close_oi,
+                    timestamp: chrono::Utc::now()
+                        .timestamp_nanos_opt()
+                        .unwrap_or(0),
+                };
+
+                if let Err(e) = timer_wal_manager.append(wal_record) {
+                    log::error!(
+                        "📊 [KLineActor Timer] Failed to persist K-line to WAL: {}",
+                        e
+                    );
+                }
+            }
+        });
+
+        log::info!("📊 [KLineActor] Timer-based K-line generation enabled (1s interval)");
+
         // 订阅市场数据的tick频道
         let subscriber_id = uuid::Uuid::new_v4().to_string();
         let receiver = self.broadcaster.subscribe(

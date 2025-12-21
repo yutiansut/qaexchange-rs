@@ -187,6 +187,7 @@ impl KLinePeriod {
 }
 
 /// K线聚合器（单个合约）
+/// @yutiansut @quantaxis
 pub struct KLineAggregator {
     /// 合约代码
     instrument_id: String,
@@ -199,6 +200,13 @@ pub struct KLineAggregator {
 
     /// 最大历史K线数量
     pub(crate) max_history: usize,
+
+    /// 最新价格（用于定时器驱动的K线生成，无成交时使用）
+    /// @yutiansut @quantaxis
+    pub(crate) last_price: Option<f64>,
+
+    /// 各周期最后一次处理的时间戳（用于检测跨周期）
+    last_period_timestamps: HashMap<KLinePeriod, i64>,
 }
 
 impl KLineAggregator {
@@ -209,10 +217,13 @@ impl KLineAggregator {
             current_klines: HashMap::new(),
             history_klines: HashMap::new(),
             max_history: 1000,
+            last_price: None,
+            last_period_timestamps: HashMap::new(),
         }
     }
 
     /// 处理新的Tick数据
+    /// @yutiansut @quantaxis
     pub fn on_tick(
         &mut self,
         price: f64,
@@ -220,6 +231,9 @@ impl KLineAggregator {
         timestamp_ms: i64,
     ) -> Vec<(KLinePeriod, KLine)> {
         let mut finished_klines = Vec::new();
+
+        // 更新最新价格
+        self.last_price = Some(price);
 
         // 所有周期（分级采样：3s → 1min → 5min → 15min → 30min → 60min → Day）
         let periods = vec![
@@ -234,6 +248,9 @@ impl KLineAggregator {
 
         for period in periods {
             let period_start = period.align_timestamp(timestamp_ms);
+
+            // 更新最后处理的周期时间戳
+            self.last_period_timestamps.insert(period, period_start);
 
             // 检查是否需要开始新K线
             let need_new_kline = if let Some(current) = self.current_klines.get(&period) {
@@ -267,6 +284,111 @@ impl KLineAggregator {
             if let Some(kline) = self.current_klines.get_mut(&period) {
                 kline.update(price, volume);
             }
+        }
+
+        finished_klines
+    }
+
+    /// 定时器驱动的K线完成检查
+    /// @yutiansut @quantaxis
+    ///
+    /// 在没有交易发生时，仍然按时间周期生成K线
+    /// OHLC = 上一根K线的收盘价（或最新价格）
+    ///
+    /// # Arguments
+    /// * `current_timestamp_ms` - 当前时间戳（毫秒）
+    ///
+    /// # Returns
+    /// 完成的K线列表 (period, kline)
+    pub fn on_timer(&mut self, current_timestamp_ms: i64) -> Vec<(KLinePeriod, KLine)> {
+        let mut finished_klines = Vec::new();
+
+        // 如果没有最新价格，无法生成K线
+        let last_price = match self.last_price {
+            Some(price) => price,
+            None => return finished_klines,
+        };
+
+        // 所有周期
+        let periods = vec![
+            KLinePeriod::Sec3,
+            KLinePeriod::Min1,
+            KLinePeriod::Min5,
+            KLinePeriod::Min15,
+            KLinePeriod::Min30,
+            KLinePeriod::Min60,
+            KLinePeriod::Day,
+        ];
+
+        for period in periods {
+            let current_period_start = period.align_timestamp(current_timestamp_ms);
+            let period_ms = period.seconds() * 1000;
+
+            // 获取上次处理的时间戳
+            let last_period_ts = self.last_period_timestamps.get(&period).copied();
+
+            // 检查当前K线是否已过期（时间戳不是当前周期）
+            if let Some(current_kline) = self.current_klines.get(&period) {
+                if current_kline.timestamp != current_period_start {
+                    let old_ts = current_kline.timestamp;
+
+                    // 当前K线已过期，需要完成它
+                    if let Some(mut old_kline) = self.current_klines.remove(&period) {
+                        old_kline.finish();
+                        finished_klines.push((period, old_kline.clone()));
+
+                        // 加入历史
+                        let history = self.history_klines.entry(period).or_default();
+                        history.push(old_kline);
+
+                        // 限制历史数量
+                        if history.len() > self.max_history {
+                            history.remove(0);
+                        }
+                    }
+
+                    // 填补中间跳过的周期（多个周期无交易的情况）
+                    // @yutiansut @quantaxis
+                    let mut gap_ts = old_ts + period_ms;
+                    let mut gap_count = 0;
+                    while gap_ts < current_period_start && gap_count < 100 {
+                        // 创建空K线（OHLC = last_price, volume = 0）
+                        let mut gap_kline = KLine::new(gap_ts, last_price);
+                        gap_kline.finish();
+                        finished_klines.push((period, gap_kline.clone()));
+
+                        // 加入历史
+                        let history = self.history_klines.entry(period).or_default();
+                        history.push(gap_kline);
+
+                        // 限制历史数量
+                        if history.len() > self.max_history {
+                            history.remove(0);
+                        }
+
+                        gap_ts += period_ms;
+                        gap_count += 1;
+                    }
+
+                    if gap_count > 0 {
+                        log::debug!(
+                            "📊 [KLineAggregator] Filled {} gap K-lines for {} {:?}",
+                            gap_count, self.instrument_id, period
+                        );
+                    }
+
+                    // 创建新K线（无交易时使用最新价格）
+                    self.current_klines
+                        .insert(period, KLine::new(current_period_start, last_price));
+                }
+            } else {
+                // 没有当前K线，创建一个新的
+                self.current_klines
+                    .insert(period, KLine::new(current_period_start, last_price));
+            }
+
+            // 更新最后处理的周期时间戳
+            self.last_period_timestamps.insert(period, current_period_start);
         }
 
         finished_klines
@@ -538,5 +660,102 @@ mod tests {
             "History should be limited to max_history (1000), got {}",
             history.len()
         );
+    }
+
+    /// 测试定时器驱动的K线生成
+    /// @yutiansut @quantaxis
+    /// 即使没有交易，也要按时间周期生成K线
+    #[test]
+    fn test_timer_driven_kline_generation() {
+        let mut agg = KLineAggregator::new("IF2501".to_string());
+
+        // 对齐到分钟边界
+        let base_time = (chrono::Utc::now().timestamp_millis() / 60000) * 60000;
+
+        // 第一个tick，初始化last_price
+        agg.on_tick(3800.0, 10, base_time + 1000);
+
+        // 检查last_price已设置
+        assert_eq!(agg.last_price, Some(3800.0));
+
+        // 第二个tick，更新价格
+        agg.on_tick(3850.0, 5, base_time + 30000);
+        assert_eq!(agg.last_price, Some(3850.0));
+
+        // 模拟时间流逝到下一分钟，但没有新的tick
+        // 调用on_timer应该完成当前K线并创建新的
+        let next_minute = base_time + 60000 + 1000;
+        let finished = agg.on_timer(next_minute);
+
+        // 应该完成至少1分钟K线
+        let min1_finished = finished
+            .iter()
+            .find(|(p, _)| *p == KLinePeriod::Min1);
+        assert!(min1_finished.is_some(), "Should finish 1-minute K-line via timer");
+
+        let (_, kline) = min1_finished.unwrap();
+        assert_eq!(kline.open, 3800.0);
+        assert_eq!(kline.close, 3850.0);
+        assert_eq!(kline.high, 3850.0);
+        assert_eq!(kline.low, 3800.0);
+        assert_eq!(kline.volume, 15);
+        assert!(kline.is_finished);
+
+        // 检查新的当前K线已创建（使用last_price）
+        let current = agg.get_current_kline(KLinePeriod::Min1);
+        assert!(current.is_some());
+        let current_kline = current.unwrap();
+        // 新K线的OHLC应该是last_price
+        assert_eq!(current_kline.open, 3850.0);
+        assert_eq!(current_kline.volume, 0); // 无交易
+        assert!(!current_kline.is_finished);
+    }
+
+    /// 测试定时器填补多个跳过的周期
+    /// @yutiansut @quantaxis
+    #[test]
+    fn test_timer_fills_gap_periods() {
+        let mut agg = KLineAggregator::new("IF2501".to_string());
+
+        // 对齐到分钟边界
+        let base_time = (chrono::Utc::now().timestamp_millis() / 60000) * 60000;
+
+        // 第一个tick
+        agg.on_tick(3800.0, 10, base_time + 1000);
+
+        // 模拟跳过3分钟（没有任何tick）
+        let skip_time = base_time + 4 * 60000 + 1000; // 跳过3分钟
+        let finished = agg.on_timer(skip_time);
+
+        // 应该填补了多个K线
+        let min1_count = finished
+            .iter()
+            .filter(|(p, _)| *p == KLinePeriod::Min1)
+            .count();
+
+        // 应该有多个分钟K线被填补
+        assert!(
+            min1_count >= 3,
+            "Should fill at least 3 gap K-lines, got {}",
+            min1_count
+        );
+
+        // 验证历史K线
+        let history = agg.get_history_klines(KLinePeriod::Min1, 10);
+        assert!(
+            history.len() >= 3,
+            "History should have at least 3 K-lines, got {}",
+            history.len()
+        );
+
+        // 验证填补的K线OHLC都是last_price
+        for kline in &history[1..] {
+            // 跳过第一个有交易的K线
+            assert_eq!(kline.open, 3800.0);
+            assert_eq!(kline.high, 3800.0);
+            assert_eq!(kline.low, 3800.0);
+            assert_eq!(kline.close, 3800.0);
+            assert_eq!(kline.volume, 0);
+        }
     }
 }

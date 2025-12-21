@@ -1882,7 +1882,9 @@ mod tests {
                 price,
                 Some(2i64),
                 Some("counter_party"),
-                &qa_order_id, // 使用真实的 qa_order_id
+                &qa_order_id,       // 使用真实的 qa_order_id
+                Some("O_counter"),  // opposite_order_id_str
+                true,               // is_taker
             )
             .unwrap();
 
@@ -1911,7 +1913,9 @@ mod tests {
                 50100.0,
                 Some(3i64),
                 Some("counter_party"),
-                &qa_order_id_2, // 使用新的 qa_order_id
+                &qa_order_id_2,     // 使用新的 qa_order_id
+                Some("O_counter2"), // opposite_order_id_str
+                true,               // is_taker
             )
             .unwrap();
 
@@ -2017,7 +2021,9 @@ mod tests {
                 50000.0,
                 Some(exchange_order_id + 1),
                 Some("counter_party"),
-                &qa_order_id, // 使用真实的 qa_order_id
+                &qa_order_id,       // 使用真实的 qa_order_id
+                Some("O_counter"),  // opposite_order_id_str
+                true,               // is_taker
             )
             .unwrap();
         assert_eq!(trade_id, 2);
