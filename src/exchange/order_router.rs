@@ -1164,10 +1164,17 @@ impl OrderRouter {
                     .get(&opposite_order_id)
                     .map(|v| v.value().clone());
 
+                // ✨ O(1) 查找对手方的真实订单ID @yutiansut @quantaxis
+                let opposite_order_id_str: Option<String> = self
+                    .engine_id_to_order
+                    .get(&opposite_order_id)
+                    .map(|v| v.value().clone());
+
                 log::debug!(
-                    "⚡ Trade opposite lookup (O(1)): engine_id={} -> user_id={:?}",
+                    "⚡ Trade opposite lookup (O(1)): engine_id={} -> user_id={:?}, order_id={:?}",
                     opposite_order_id,
-                    opposite_user_id
+                    opposite_user_id,
+                    opposite_order_id_str
                 );
 
                 // Phase 6: 使用新的 handle_trade_new (交易所只推送TRADE回报，不判断FILLED/PARTIAL)
@@ -1187,6 +1194,7 @@ impl OrderRouter {
                     Some(opposite_order_id as i64),
                     opposite_user_id.as_deref(), // ✨ 传递对手方user_id
                     &qa_order_id, // ✨ 传递qars订单ID
+                    opposite_order_id_str.as_deref(), // ✨ 传递对手方真实订单ID
                 )?;
 
                 log::debug!(
@@ -1268,10 +1276,17 @@ impl OrderRouter {
                     .get(&opposite_order_id)
                     .map(|v| v.value().clone());
 
+                // ✨ O(1) 查找对手方的真实订单ID @yutiansut @quantaxis
+                let opposite_order_id_str: Option<String> = self
+                    .engine_id_to_order
+                    .get(&opposite_order_id)
+                    .map(|v| v.value().clone());
+
                 log::debug!(
-                    "⚡ Trade opposite lookup (O(1), partial): engine_id={} -> user_id={:?}",
+                    "⚡ Trade opposite lookup (O(1), partial): engine_id={} -> user_id={:?}, order_id={:?}",
                     opposite_order_id,
-                    opposite_user_id
+                    opposite_user_id,
+                    opposite_order_id_str
                 );
 
                 // Phase 6: 使用新的 handle_trade_new (交易所不区分FILLED/PARTIAL，只推送TRADE)
@@ -1289,6 +1304,7 @@ impl OrderRouter {
                     Some(opposite_order_id as i64),
                     opposite_user_id.as_deref(), // ✨ 传递对手方user_id
                     &qa_order_id, // ✨ 传递qars订单ID
+                    opposite_order_id_str.as_deref(), // ✨ 传递对手方真实订单ID
                 )?;
 
                 log::debug!(

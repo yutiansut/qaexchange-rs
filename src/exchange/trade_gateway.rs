@@ -734,6 +734,7 @@ impl TradeGateway {
         opposite_order_id: Option<i64>, // 对手方订单号（如果可用）
         opposite_user_id: Option<&str>, // ✨ 对手方user_id，用于成交记录正确区分买卖方 @yutiansut @quantaxis
         qa_order_id: &str, // ✨ qars内部订单ID，用于调用receive_deal_sim @yutiansut @quantaxis
+        opposite_order_id_str: Option<&str>, // ✨ 对手方订单ID字符串，用于成交记录 @yutiansut @quantaxis
     ) -> Result<i64, ExchangeError> {
         // 生成成交ID（统一事件序列）
         let trade_id = self.id_generator.next_sequence(instrument_id);
@@ -810,12 +811,23 @@ impl TradeGateway {
                 _ => (user_id.to_string(), user_id.to_string()), // fallback
             };
 
+            // ✨ 根据 direction 确定 buy_order_id 和 sell_order_id @yutiansut @quantaxis
+            let opposite_id = opposite_order_id_str
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("opposite_{}", opposite_order_id.unwrap_or(0)));
+
+            let (buy_order_id, sell_order_id) = match direction {
+                "BUY" => (order_id.to_string(), opposite_id),
+                "SELL" => (opposite_id, order_id.to_string()),
+                _ => (order_id.to_string(), "unknown".to_string()),
+            };
+
             recorder.record_trade(
                 instrument_id.to_string(),
-                buy_user_id,  // ✨ 正确的买方user_id
-                sell_user_id, // ✨ 正确的卖方user_id
-                order_id.to_string(),
-                format!("opposite_{}", opposite_order_id.unwrap_or(0)),
+                buy_user_id,   // ✨ 正确的买方user_id
+                sell_user_id,  // ✨ 正确的卖方user_id
+                buy_order_id,  // ✨ 正确的买方order_id
+                sell_order_id, // ✨ 正确的卖方order_id
                 price,
                 volume,
                 trading_day,
