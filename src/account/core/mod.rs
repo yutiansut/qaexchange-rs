@@ -152,7 +152,7 @@ impl AccountSystemCore {
                 .trim_end_matches('\0')
                 .to_string();
 
-            grouped.entry(user_id).or_insert_with(Vec::new).push(trade);
+            grouped.entry(user_id).or_default().push(trade);
         }
 
         // 2. 并行更新不同账户（减少锁竞争）

@@ -15,6 +15,7 @@ pub struct ExchangeConfig {
 
 /// 性能优化配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct PerformanceConfig {
     #[serde(default)]
     pub batch_write: BatchWriteConfig,
@@ -28,17 +29,6 @@ pub struct PerformanceConfig {
     pub iceoryx: IceoryxConfig,
 }
 
-impl Default for PerformanceConfig {
-    fn default() -> Self {
-        Self {
-            batch_write: BatchWriteConfig::default(),
-            websocket: WebSocketPerfConfig::default(),
-            priority_queue: PriorityQueueConfig::default(),
-            memtable: MemTableConfig::default(),
-            iceoryx: IceoryxConfig::default(),
-        }
-    }
-}
 
 impl PerformanceConfig {
     /// 从文件加载性能配置

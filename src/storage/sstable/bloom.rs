@@ -48,7 +48,7 @@ impl BloomFilter {
         let k = Self::optimal_k(expected_items, m);
 
         // 位数组按 u64 分组（每组 64 bits）
-        let num_words = ((m + 63) / 64) as usize;
+        let num_words = m.div_ceil(64) as usize;
 
         Self {
             bits: vec![0u64; num_words],
@@ -110,8 +110,8 @@ impl BloomFilter {
     /// 获取第 i 个哈希函数对应的位索引
     /// 使用双重哈希: h_i(x) = h1(x) + i * h2(x)
     fn get_bit_index(&self, hash: u64, i: u32) -> u64 {
-        let h1 = (hash >> 32) as u64;
-        let h2 = (hash & 0xFFFFFFFF) as u64;
+        let h1 = hash >> 32;
+        let h2 = hash & 0xFFFFFFFF;
 
         // 双重哈希公式
         let combined = h1.wrapping_add(i as u64 * h2);

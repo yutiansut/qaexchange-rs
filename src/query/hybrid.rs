@@ -107,7 +107,7 @@ impl StreamBuffer {
     /// 添加记录
     pub fn push(&self, record: Record) {
         let key = record.key.clone();
-        self.buffer.entry(key.clone()).or_insert_with(Vec::new).push(record);
+        self.buffer.entry(key.clone()).or_default().push(record);
 
         // 限制大小
         if let Some(mut entry) = self.buffer.get_mut(&key) {
@@ -441,7 +441,7 @@ impl HybridQueryEngine {
         // 将发送端添加到订阅者列表
         self.subscribers
             .entry(key)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(tx);
 
         rx

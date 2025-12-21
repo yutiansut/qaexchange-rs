@@ -12,10 +12,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// 心跳间隔
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-/// 客户端超时时间
-const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+/// 获取心跳间隔（可通过环境变量配置）
+fn get_heartbeat_interval() -> Duration {
+    let secs = std::env::var("QAEXCHANGE_WS_HEARTBEAT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5);
+    Duration::from_secs(secs)
+}
+
+/// 获取客户端超时时间（可通过环境变量配置）
+fn get_client_timeout() -> Duration {
+    let secs = std::env::var("QAEXCHANGE_WS_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+    Duration::from_secs(secs)
+}
 
 /// WebSocket 会话状态
 #[derive(Debug, Clone, PartialEq)]
@@ -110,9 +123,9 @@ impl WsSession {
 
     /// 启动心跳检查
     fn start_heartbeat(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
+        ctx.run_interval(get_heartbeat_interval(), |act, ctx| {
             // 检查客户端是否超时
-            if Instant::now().duration_since(act.heartbeat) > CLIENT_TIMEOUT {
+            if Instant::now().duration_since(act.heartbeat) > get_client_timeout() {
                 log::warn!("WebSocket session {} timed out, disconnecting", act.id);
                 ctx.stop();
                 return;

@@ -43,7 +43,7 @@ impl TypeData {
     fn add(&mut self, timestamp: i64, offset: u64) {
         self.entries
             .entry(timestamp)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(offset);
 
         self.offset_set.insert(offset);

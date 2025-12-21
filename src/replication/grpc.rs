@@ -394,7 +394,7 @@ impl ReplicationService for ReplicationServiceImpl {
         let entries: Vec<InternalLogEntry> = req
             .entries
             .into_iter()
-            .map(|e| proto_to_internal_log_entry(e))
+            .map(proto_to_internal_log_entry)
             .collect();
 
         let match_sequence = if entries.is_empty() {
@@ -618,7 +618,7 @@ impl ReplicationService for ReplicationServiceImpl {
                             let entries: Vec<InternalLogEntry> = req
                                 .entries
                                 .into_iter()
-                                .map(|e| proto_to_internal_log_entry(e))
+                                .map(proto_to_internal_log_entry)
                                 .collect();
 
                             let match_sequence = ctx.append_entries(entries);
@@ -997,7 +997,7 @@ fn proto_to_internal_log_entry(proto: LogEntry) -> InternalLogEntry {
     } else {
         match rkyv::check_archived_root::<WalRecord>(&proto.record_data) {
             Ok(archived) => {
-                RkyvDeserialize::deserialize(archived, &mut rkyv::Infallible).unwrap_or_else(|_| {
+                RkyvDeserialize::deserialize(archived, &mut rkyv::Infallible).unwrap_or({
                     WalRecord::Checkpoint {
                         sequence: proto.sequence,
                         timestamp: proto.timestamp,

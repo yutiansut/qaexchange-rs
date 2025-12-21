@@ -93,7 +93,7 @@ impl TimeSeriesIndex {
     pub fn add(&mut self, timestamp: i64, offset: u64) {
         self.entries
             .entry(timestamp)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(offset);
 
         self.entry_count += 1;
@@ -145,8 +145,7 @@ impl TimeSeriesIndex {
     /// 点查询（精确时间戳）
     pub fn query_exact(&self, timestamp: i64) -> Vec<u64> {
         self.entries
-            .get(&timestamp)
-            .map(|v| v.clone())
+            .get(&timestamp).cloned()
             .unwrap_or_default()
     }
 

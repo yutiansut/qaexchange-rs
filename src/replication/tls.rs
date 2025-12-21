@@ -418,7 +418,7 @@ impl CertificateGenerator {
     pub fn generate_signed_certificate(
         common_name: &str,
         validity_days: u32,
-        ca_cert_path: &Path,
+        _ca_cert_path: &Path, // 由于 rcgen 0.13 限制暂未使用，保留接口兼容性
         ca_key_path: &Path,
         cert_path: &Path,
         key_path: &Path,

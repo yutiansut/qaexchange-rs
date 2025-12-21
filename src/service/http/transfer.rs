@@ -38,7 +38,7 @@ impl TransferStore {
     pub fn add_bank(&self, account_id: &str, bank: BankInfo) {
         self.banks
             .entry(account_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(bank);
     }
 
@@ -54,7 +54,7 @@ impl TransferStore {
     pub fn add_record(&self, account_id: &str, record: TransferRecord) {
         self.records
             .entry(account_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(record);
     }
 

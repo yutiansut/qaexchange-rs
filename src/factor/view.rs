@@ -427,7 +427,7 @@ impl FactorSubscriptionManager {
     pub fn subscribe(&self, instrument_id: &str, callback: FactorCallback) {
         self.subscriptions
             .entry(instrument_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(Arc::new(callback));
     }
 

@@ -114,7 +114,7 @@ impl NotificationGateway {
         // 添加到用户索引
         self.user_sessions
             .entry(user_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(session_id.clone());
 
         self.stats
@@ -312,7 +312,7 @@ impl NotificationGateway {
         for notif in notifications {
             grouped
                 .entry(notif.user_id.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(notif);
         }
 

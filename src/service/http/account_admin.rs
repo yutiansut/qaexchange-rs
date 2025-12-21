@@ -41,11 +41,14 @@ lazy_static::lazy_static! {
     static ref ANNOUNCEMENTS: DashMap<String, Announcement> = DashMap::new();
 }
 
-// 管理员令牌验证（简化版，生产环境应使用JWT等）
-const ADMIN_TOKEN: &str = "qaexchange_admin_2024";
+// 管理员令牌验证（从环境变量读取，生产环境应使用JWT等）
+fn get_admin_token() -> String {
+    std::env::var("QAEXCHANGE_ADMIN_TOKEN")
+        .unwrap_or_else(|_| "qaexchange_admin_2024".to_string())
+}
 
 fn verify_admin_token(token: &str) -> bool {
-    token == ADMIN_TOKEN
+    token == get_admin_token()
 }
 
 fn current_timestamp() -> i64 {

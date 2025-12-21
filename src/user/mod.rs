@@ -16,10 +16,12 @@ use uuid::Uuid;
 
 /// 用户角色
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum UserRole {
     /// 系统管理员 - 最高权限
     Admin,
     /// 交易员 - 可以交易和查看
+    #[default]
     Trader,
     /// 分析师 - 只读权限 + 数据分析
     Analyst,
@@ -31,11 +33,6 @@ pub enum UserRole {
     Settlement,
 }
 
-impl Default for UserRole {
-    fn default() -> Self {
-        UserRole::Trader
-    }
-}
 
 impl UserRole {
     /// 角色显示名称

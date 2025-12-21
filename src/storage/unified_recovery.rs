@@ -667,7 +667,7 @@ impl UnifiedRecoveryManager {
             } if self.config.recover_klines => {
                 let key = format!("{}_{}", instrument_id, period);
 
-                let klines = result.klines.entry(key).or_insert_with(Vec::new);
+                let klines = result.klines.entry(key).or_default();
 
                 klines.push(RecoveredKLine {
                     instrument_id: instrument_id.to_string(),
@@ -838,7 +838,7 @@ pub fn populate_market_cache(
     let mut populated = 0;
 
     // 从 K 线数据中提取最新价格作为 Tick
-    for (_key, klines) in &result.klines {
+    for klines in result.klines.values() {
         if klines.is_empty() {
             continue;
         }
@@ -883,7 +883,7 @@ pub fn prepare_factor_snapshot(
     let mut instruments_map: StdHashMap<String, InstrumentStateSnapshot> = StdHashMap::new();
 
     // 按合约分组因子数据
-    for (_key, factor) in &result.factors {
+    for factor in result.factors.values() {
         let instrument_snapshot = instruments_map
             .entry(factor.instrument_id.clone())
             .or_insert_with(|| InstrumentStateSnapshot {

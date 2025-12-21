@@ -160,7 +160,7 @@ impl FactorWalPersister {
         let count = self.update_count.fetch_add(1, Ordering::Relaxed);
 
         // 检查是否需要触发快照
-        if count > 0 && count % self.config.snapshot_interval == 0 {
+        if count > 0 && count.is_multiple_of(self.config.snapshot_interval) {
             log::debug!("Factor update count {} reached snapshot interval", count);
         }
 

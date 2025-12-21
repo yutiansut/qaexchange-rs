@@ -111,7 +111,7 @@ impl NotificationBroker {
 
         self.user_gateways
             .entry(user_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(gateway_id.clone());
 
         log::debug!("User {} subscribed to gateway {}", user_id, gateway_id);
@@ -167,7 +167,7 @@ impl NotificationBroker {
 
         // 2. 按优先级入队
         let priority = notification.priority.min(3) as usize;
-        if let Err(_) = self.priority_queues[priority].push(notification.clone()) {
+        if self.priority_queues[priority].push(notification.clone()).is_err() {
             // 队列满，丢弃消息
             self.stats
                 .messages_dropped

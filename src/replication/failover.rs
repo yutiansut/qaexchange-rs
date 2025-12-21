@@ -207,7 +207,7 @@ impl FailoverCoordinator {
             let mut votes = self.votes_received.write();
             votes
                 .entry(current_term)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(voter_id.clone());
 
             log::info!(

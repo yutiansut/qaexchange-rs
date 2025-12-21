@@ -1077,7 +1077,7 @@ impl SettlementEngine {
             self.liquidation_history.insert(liquidation_id.clone(), result.clone());
             self.account_liquidations
                 .entry(account_id.to_string())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(liquidation_id);
 
             return Ok(result);
@@ -1145,9 +1145,9 @@ impl SettlementEngine {
             .account_mgr
             .get_account(account_id)
             .ok()
-            .and_then(|acc| {
+            .map(|acc| {
                 let mut acc = acc.write();
-                Some(acc.get_balance())
+                acc.get_balance()
             })
             .unwrap_or(balance_before);
 
@@ -1179,7 +1179,7 @@ impl SettlementEngine {
         // 更新账户强平索引
         self.account_liquidations
             .entry(account_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(liquidation_id.clone());
 
         // 记录到风控监控器
@@ -1286,13 +1286,13 @@ impl SettlementEngine {
             .filter(|price| *price > 0.0)
             .unwrap_or(fallback);
 
-        let adjusted = match direction {
+        
+
+        match direction {
             "SELL" => (market_price * 0.995).max(0.01),
             "BUY" => (market_price * 1.005).max(0.01),
             _ => market_price,
-        };
-
-        adjusted
+        }
     }
 }
 

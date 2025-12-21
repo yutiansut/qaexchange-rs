@@ -175,7 +175,7 @@ impl ParquetSSTableWriter {
             if let Some(&first_ts) = timestamp_array.iter().next().and_then(|v| v) {
                 self.min_timestamp = Some(self.min_timestamp.unwrap_or(first_ts).min(first_ts));
             }
-            if let Some(&last_ts) = timestamp_array.iter().last().and_then(|v| v) {
+            if let Some(&last_ts) = timestamp_array.iter().next_back().and_then(|v| v) {
                 self.max_timestamp = Some(self.max_timestamp.unwrap_or(last_ts).max(last_ts));
             }
         }
@@ -279,7 +279,7 @@ impl ParquetSSTable {
         let mut row_group_ranges = Vec::with_capacity(parquet_metadata.row_groups.len());
 
         for (index, row_group) in parquet_metadata.row_groups.iter().enumerate() {
-            let row_count = row_group.num_rows() as usize;
+            let row_count = row_group.num_rows();
             entry_count += row_count as u64;
 
             // 提取时间戳列（第一列）的统计信息

@@ -249,7 +249,7 @@ impl KLineAggregator {
                     finished_klines.push((period, old_kline.clone()));
 
                     // 加入历史
-                    let history = self.history_klines.entry(period).or_insert_with(Vec::new);
+                    let history = self.history_klines.entry(period).or_default();
                     history.push(old_kline);
 
                     // 限制历史数量

@@ -148,7 +148,7 @@ impl CapitalManager {
         // 保存交易记录
         self.transactions
             .entry(account_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(transaction.clone());
 
         log::info!(
@@ -234,7 +234,7 @@ impl CapitalManager {
         // 保存交易记录
         self.transactions
             .entry(account_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(transaction.clone());
 
         log::info!(

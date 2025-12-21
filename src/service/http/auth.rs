@@ -234,7 +234,7 @@ pub async fn add_user_role(
         }
     };
 
-    match state.user_mgr.add_user_role(&req.user_id, role.clone()) {
+    match state.user_mgr.add_user_role(&req.user_id, role) {
         Ok(_) => {
             log::info!("Role {:?} added to user {}", role, req.user_id);
             Ok(HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({

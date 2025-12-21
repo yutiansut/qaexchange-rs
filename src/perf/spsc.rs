@@ -291,6 +291,11 @@ impl<T> SpscSender<T> {
     pub fn len(&self) -> usize {
         self.queue.len()
     }
+
+    /// 检查队列是否为空
+    pub fn is_empty(&self) -> bool {
+        self.queue.len() == 0
+    }
 }
 
 impl<T> Clone for SpscSender<T> {

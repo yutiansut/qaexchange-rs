@@ -102,7 +102,7 @@ impl AstBuilder {
 
     /// 解析单个表达式
     pub fn parse_expression(input: &str) -> ParseResult<Expression> {
-        let pairs = FactorParser::parse(Rule::expression, input).map_err(|e| {
+        let mut pairs = FactorParser::parse(Rule::expression, input).map_err(|e| {
             let (line, column) = match e.line_col {
                 pest::error::LineColLocation::Pos((l, c)) => (l, c),
                 pest::error::LineColLocation::Span((l, c), _) => (l, c),
@@ -114,7 +114,7 @@ impl AstBuilder {
             }
         })?;
 
-        for pair in pairs {
+        if let Some(pair) = pairs.next() {
             return Self::build_expression(pair);
         }
 

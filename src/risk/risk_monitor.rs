@@ -619,7 +619,7 @@ impl RiskMonitor {
         // 保存记录
         self.liquidation_records
             .entry(user_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(record.clone());
 
         log::warn!(

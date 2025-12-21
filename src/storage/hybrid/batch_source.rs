@@ -303,7 +303,7 @@ impl OltpBatchAdapter {
                 if *factor_type == 1 && *value_count > 0 {
                     for i in 0..(*value_count as usize).min(8) {
                         result = result.with_value(
-                            &format!("value_{}", i),
+                            format!("value_{}", i),
                             RecordValue::Float(values[i]),
                         );
                     }
@@ -331,7 +331,7 @@ impl OltpBatchAdapter {
                     let factor_name = WalRecord::from_fixed_array(&factor_ids[i]);
                     if !factor_name.is_empty() {
                         result = result.with_value(
-                            &format!("factor_{}", factor_name),
+                            format!("factor_{}", factor_name),
                             RecordValue::Float(values[i]),
                         );
                     }
@@ -362,7 +362,7 @@ impl OltpBatchAdapter {
         let results = self
             .storage
             .range_query(start_ts, end_ts)
-            .map_err(|e| BatchQueryError::IoError(e))?;
+            .map_err(BatchQueryError::IoError)?;
 
         Ok(results
             .into_iter()
@@ -385,7 +385,7 @@ impl OltpBatchAdapter {
             // 使用谓词下推的范围查询
             let chunks = parquet
                 .range_query(start_ts, end_ts)
-                .map_err(|e| BatchQueryError::IoError(e))?;
+                .map_err(BatchQueryError::IoError)?;
 
             for chunk in chunks {
                 if chunk.is_empty() {
@@ -502,7 +502,7 @@ impl OltpBatchAdapter {
         let results = self
             .storage
             .range_query(start_ts, end_ts)
-            .map_err(|e| BatchQueryError::IoError(e))?;
+            .map_err(BatchQueryError::IoError)?;
 
         // 使用过滤器进行高效过滤
         Ok(results
@@ -527,7 +527,7 @@ impl OltpBatchAdapter {
         for parquet in &self.olap_files {
             let chunks = parquet
                 .range_query(start_ts, end_ts)
-                .map_err(|e| BatchQueryError::IoError(e))?;
+                .map_err(BatchQueryError::IoError)?;
 
             for chunk in chunks {
                 if chunk.is_empty() {

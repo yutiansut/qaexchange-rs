@@ -75,10 +75,6 @@ impl SSTableInfo {
     /// 检查 key range 是否重叠
     pub fn overlaps(&self, other: &SSTableInfo) -> bool {
         // 如果 self.max_key < other.min_key 或 self.min_key > other.max_key，则不重叠
-        if self.max_key < other.min_key || self.min_key > other.max_key {
-            false
-        } else {
-            true
-        }
+        !(self.max_key < other.min_key || self.min_key > other.max_key)
     }
 }

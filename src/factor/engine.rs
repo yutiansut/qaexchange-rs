@@ -401,7 +401,7 @@ impl StreamFactorEngine {
                 slow_period: *slow,
                 signal_period: *signal,
             }),
-            _ => return Err(format!("Factor type not supported in stream mode")),
+            _ => return Err("Factor type not supported in stream mode".to_string()),
         };
 
         self.operators.insert(factor_id.to_string(), operator);
@@ -473,12 +473,12 @@ impl BatchFactorEngine {
             FactorDef::Rolling { source, window, func } => {
                 // 使用简化的表达式，实际计算在 DataFrame 层面
                 // Polars 0.51 的 rolling 函数签名有变化
-                Ok(col(source).alias(&format!("rolling_{}_{}", func_name(*func), window)))
+                Ok(col(source).alias(format!("rolling_{}_{}", func_name(*func), window)))
             }
 
             FactorDef::EMA { source, span } => {
                 // 简化实现：返回列引用，实际 EWM 计算在 DataFrame 层面
-                Ok(col(source).alias(&format!("ema_{}", span)))
+                Ok(col(source).alias(format!("ema_{}", span)))
             }
 
             FactorDef::BinaryOp { left, right, op } => {
@@ -503,16 +503,16 @@ impl BatchFactorEngine {
 
             FactorDef::RSI { source, period } => {
                 // RSI 简化实现
-                Ok(col(source).alias(&format!("rsi_{}", period)))
+                Ok(col(source).alias(format!("rsi_{}", period)))
             }
 
             FactorDef::MACD { source, fast, slow, .. } => {
                 // MACD 简化实现
-                Ok(col(source).alias(&format!("macd_{}_{}", fast, slow)))
+                Ok(col(source).alias(format!("macd_{}_{}", fast, slow)))
             }
 
             FactorDef::Bollinger { source, window, num_std } => {
-                Ok(col(source).alias(&format!("boll_{}_{}", window, num_std)))
+                Ok(col(source).alias(format!("boll_{}_{}", window, num_std)))
             }
 
             FactorDef::PolarsExpr { expr_str } => {
@@ -729,7 +729,7 @@ impl ParallelDagExecutor {
                 // 源数据不需要算子
                 return Ok(());
             }
-            _ => return Err(format!("Factor type not supported in parallel mode")),
+            _ => return Err("Factor type not supported in parallel mode".to_string()),
         };
 
         self.operators

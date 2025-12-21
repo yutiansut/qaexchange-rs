@@ -13,20 +13,17 @@ use std::sync::Arc;
 
 /// 订单优先级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum OrderPriority {
     /// 低优先级（批量回测）
     Low = 0,
     /// 普通优先级
+    #[default]
     Normal = 1,
     /// 高优先级（VIP用户/大额订单）
     Critical = 2,
 }
 
-impl Default for OrderPriority {
-    fn default() -> Self {
-        OrderPriority::Normal
-    }
-}
 
 /// 优先级订单请求（扩展SubmitOrderRequest）
 #[derive(Debug, Clone, Serialize, Deserialize)]

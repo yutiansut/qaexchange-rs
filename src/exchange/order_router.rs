@@ -22,12 +22,14 @@ use std::time::{Duration, Instant};
 /// @yutiansut @quantaxis
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
+#[derive(Default)]
 pub enum TimeCondition {
     /// Immediate or Cancel - 立即成交剩余撤销
     IOC,
     /// Good for Session - 本节有效
     GFS,
     /// Good for Day - 当日有效 (默认)
+    #[default]
     GFD,
     /// Good Till Date - 指定日期前有效
     GTD,
@@ -37,11 +39,6 @@ pub enum TimeCondition {
     GFA,
 }
 
-impl Default for TimeCondition {
-    fn default() -> Self {
-        TimeCondition::GFD
-    }
-}
 
 impl std::fmt::Display for TimeCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -75,8 +72,10 @@ impl TimeCondition {
 /// @yutiansut @quantaxis
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
+#[derive(Default)]
 pub enum VolumeCondition {
     /// Any - 任何数量 (默认)
+    #[default]
     ANY,
     /// Min - 最小数量
     MIN,
@@ -84,11 +83,6 @@ pub enum VolumeCondition {
     ALL,
 }
 
-impl Default for VolumeCondition {
-    fn default() -> Self {
-        VolumeCondition::ANY
-    }
-}
 
 impl std::fmt::Display for VolumeCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -150,16 +144,12 @@ pub struct SubmitOrderResponse {
 
 /// 提交行为控制选项
 #[derive(Clone, Copy, Debug)]
+#[derive(Default)]
 struct OrderSubmitOptions {
     /// 是否为强制（风险绕过）订单
     force: bool,
 }
 
-impl Default for OrderSubmitOptions {
-    fn default() -> Self {
-        Self { force: false }
-    }
-}
 
 /// 订单状态枚举
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

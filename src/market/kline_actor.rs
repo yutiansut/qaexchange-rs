@@ -210,7 +210,7 @@ impl KLineActor {
                     let history = aggregator
                         .history_klines
                         .entry(kline_period)
-                        .or_insert_with(Vec::new);
+                        .or_default();
 
                     history.push(kline);
 

@@ -37,7 +37,7 @@ impl CompactionScheduler {
     /// 注册一个新的 SSTable（当 MemTable flush 时调用）
     pub fn register_sstable(&self, info: SSTableInfo) {
         let mut levels = self.level_sstables.write();
-        levels.entry(info.level).or_insert_with(Vec::new).push(info);
+        levels.entry(info.level).or_default().push(info);
     }
 
     /// 获取所有层级的 SSTable
@@ -112,7 +112,7 @@ impl CompactionScheduler {
                             // 添加新的 SSTable
                             levels
                                 .entry(result.new_sstable.level)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(result.new_sstable);
 
                             log::info!(
@@ -162,7 +162,7 @@ impl CompactionScheduler {
             // 添加新的 SSTable
             levels
                 .entry(result.new_sstable.level)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(result.new_sstable);
 
             Ok(())

@@ -147,7 +147,7 @@ impl AccountManager {
         // 更新用户账户索引
         self.user_accounts
             .entry(req.user_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(account_id.clone());
 
         log::info!(
@@ -629,7 +629,7 @@ impl AccountManager {
         // 更新用户账户索引
         self.user_accounts
             .entry(user_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(account_id.clone());
 
         // 绑定账户到用户（如果设置了UserManager）

@@ -149,12 +149,12 @@ impl ConditionalOrderEngine {
         // 添加到索引
         self.by_account
             .entry(req.account_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(order_id.clone());
 
         self.by_instrument
             .entry(req.instrument_id)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(order_id.clone());
 
         let info = order.to_info();

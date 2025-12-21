@@ -161,7 +161,7 @@ impl QueryEngine {
 
         // 选择列
         if !select.is_empty() && select[0] != "*" {
-            let cols: Vec<Expr> = select.iter().map(|s| col(s)).collect();
+            let cols: Vec<Expr> = select.iter().map(col).collect();
             df = df.select(&cols);
         }
 
@@ -251,11 +251,11 @@ impl QueryEngine {
         // 构建聚合表达式
         let mut agg_exprs = vec![];
         for metric in metrics {
-            agg_exprs.push(col(metric).sum().alias(&format!("{}_sum", metric)));
-            agg_exprs.push(col(metric).mean().alias(&format!("{}_avg", metric)));
-            agg_exprs.push(col(metric).min().alias(&format!("{}_min", metric)));
-            agg_exprs.push(col(metric).max().alias(&format!("{}_max", metric)));
-            agg_exprs.push(col(metric).count().alias(&format!("{}_count", metric)));
+            agg_exprs.push(col(metric).sum().alias(format!("{}_sum", metric)));
+            agg_exprs.push(col(metric).mean().alias(format!("{}_avg", metric)));
+            agg_exprs.push(col(metric).min().alias(format!("{}_min", metric)));
+            agg_exprs.push(col(metric).max().alias(format!("{}_max", metric)));
+            agg_exprs.push(col(metric).count().alias(format!("{}_count", metric)));
         }
 
         // 执行分组聚合
@@ -325,7 +325,7 @@ impl QueryEngine {
                 if let Some(alias) = &agg.alias {
                     expr.alias(alias)
                 } else {
-                    expr.alias(&format!("{}_{:?}", agg.column, agg.agg_type))
+                    expr.alias(format!("{}_{:?}", agg.column, agg.agg_type))
                 }
             })
             .collect();

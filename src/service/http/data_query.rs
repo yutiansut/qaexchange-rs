@@ -363,8 +363,8 @@ pub async fn query_history_ticks(
                 let inst_str = extract_string(&inst_id);
 
                 // 过滤合约
-                if inst_str == *instrument_id || instrument_id == "*" {
-                    if ticks.len() < limit {
+                if (inst_str == *instrument_id || instrument_id == "*")
+                    && ticks.len() < limit {
                         ticks.push(TickDataItem {
                             instrument_id: inst_str,
                             datetime: timestamp_to_datetime(timestamp),
@@ -375,7 +375,6 @@ pub async fn query_history_ticks(
                             timestamp,
                         });
                     }
-                }
             }
             Ok(())
         });
@@ -1338,7 +1337,7 @@ pub async fn get_market_overview(
             "total_orders": total_orders,
             "total_trades": total_trades,
             "total_positions": total_positions,
-            "avg_balance": if accounts.len() > 0 { total_balance / accounts.len() as f64 } else { 0.0 },
+            "avg_balance": if !accounts.is_empty() { total_balance / accounts.len() as f64 } else { 0.0 },
             "market_status": "Trading",
             "trading_day": chrono::Local::now().format("%Y-%m-%d").to_string(),
             "update_time": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()

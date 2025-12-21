@@ -281,34 +281,22 @@ pub fn export_prometheus(metrics: &SystemMetrics) -> String {
     let mut output = String::new();
 
     // Matching metrics
-    output.push_str(&format!(
-        "# HELP qaexchange_matching_orders_total Total orders processed\n"
-    ));
-    output.push_str(&format!(
-        "# TYPE qaexchange_matching_orders_total counter\n"
-    ));
+    output.push_str("# HELP qaexchange_matching_orders_total Total orders processed\n");
+    output.push_str("# TYPE qaexchange_matching_orders_total counter\n");
     output.push_str(&format!(
         "qaexchange_matching_orders_total {}\n",
         metrics.matching.total_orders
     ));
 
-    output.push_str(&format!(
-        "# HELP qaexchange_matching_trades_total Total trades executed\n"
-    ));
-    output.push_str(&format!(
-        "# TYPE qaexchange_matching_trades_total counter\n"
-    ));
+    output.push_str("# HELP qaexchange_matching_trades_total Total trades executed\n");
+    output.push_str("# TYPE qaexchange_matching_trades_total counter\n");
     output.push_str(&format!(
         "qaexchange_matching_trades_total {}\n",
         metrics.matching.total_trades
     ));
 
-    output.push_str(&format!(
-        "# HELP qaexchange_matching_latency_us Matching latency in microseconds\n"
-    ));
-    output.push_str(&format!(
-        "# TYPE qaexchange_matching_latency_us gauge\n"
-    ));
+    output.push_str("# HELP qaexchange_matching_latency_us Matching latency in microseconds\n");
+    output.push_str("# TYPE qaexchange_matching_latency_us gauge\n");
     output.push_str(&format!(
         "qaexchange_matching_latency_us{{quantile=\"0.50\"}} {}\n",
         metrics.matching.latency_p50_us
@@ -319,12 +307,8 @@ pub fn export_prometheus(metrics: &SystemMetrics) -> String {
     ));
 
     // Order router metrics
-    output.push_str(&format!(
-        "# HELP qaexchange_router_orders_total Order router statistics\n"
-    ));
-    output.push_str(&format!(
-        "# TYPE qaexchange_router_orders_total counter\n"
-    ));
+    output.push_str("# HELP qaexchange_router_orders_total Order router statistics\n");
+    output.push_str("# TYPE qaexchange_router_orders_total counter\n");
     output.push_str(&format!(
         "qaexchange_router_orders_total{{status=\"received\"}} {}\n",
         metrics.order_router.orders_received
@@ -343,23 +327,15 @@ pub fn export_prometheus(metrics: &SystemMetrics) -> String {
     ));
 
     // Market data metrics
-    output.push_str(&format!(
-        "# HELP qaexchange_market_subscribers Active market data subscribers\n"
-    ));
-    output.push_str(&format!(
-        "# TYPE qaexchange_market_subscribers gauge\n"
-    ));
+    output.push_str("# HELP qaexchange_market_subscribers Active market data subscribers\n");
+    output.push_str("# TYPE qaexchange_market_subscribers gauge\n");
     output.push_str(&format!(
         "qaexchange_market_subscribers {}\n",
         metrics.market_data.subscriber_count
     ));
 
-    output.push_str(&format!(
-        "# HELP qaexchange_market_broadcasts_total Market data broadcasts\n"
-    ));
-    output.push_str(&format!(
-        "# TYPE qaexchange_market_broadcasts_total counter\n"
-    ));
+    output.push_str("# HELP qaexchange_market_broadcasts_total Market data broadcasts\n");
+    output.push_str("# TYPE qaexchange_market_broadcasts_total counter\n");
     output.push_str(&format!(
         "qaexchange_market_broadcasts_total{{status=\"sent\"}} {}\n",
         metrics.market_data.total_sent
@@ -369,54 +345,38 @@ pub fn export_prometheus(metrics: &SystemMetrics) -> String {
         metrics.market_data.total_dropped
     ));
 
-    output.push_str(&format!(
-        "# HELP qaexchange_market_drop_rate Market data drop rate\n"
-    ));
-    output.push_str(&format!("# TYPE qaexchange_market_drop_rate gauge\n"));
+    output.push_str("# HELP qaexchange_market_drop_rate Market data drop rate\n");
+    output.push_str("# TYPE qaexchange_market_drop_rate gauge\n");
     output.push_str(&format!(
         "qaexchange_market_drop_rate {}\n",
         metrics.market_data.drop_rate
     ));
 
     // WAL metrics
-    output.push_str(&format!(
-        "# HELP qaexchange_wal_writes_total WAL write operations\n"
-    ));
-    output.push_str(&format!(
-        "# TYPE qaexchange_wal_writes_total counter\n"
-    ));
+    output.push_str("# HELP qaexchange_wal_writes_total WAL write operations\n");
+    output.push_str("# TYPE qaexchange_wal_writes_total counter\n");
     output.push_str(&format!(
         "qaexchange_wal_writes_total {}\n",
         metrics.wal.write_count
     ));
 
-    output.push_str(&format!(
-        "# HELP qaexchange_wal_bytes_total WAL bytes written\n"
-    ));
-    output.push_str(&format!(
-        "# TYPE qaexchange_wal_bytes_total counter\n"
-    ));
+    output.push_str("# HELP qaexchange_wal_bytes_total WAL bytes written\n");
+    output.push_str("# TYPE qaexchange_wal_bytes_total counter\n");
     output.push_str(&format!(
         "qaexchange_wal_bytes_total {}\n",
         metrics.wal.write_bytes
     ));
 
-    output.push_str(&format!(
-        "# HELP qaexchange_wal_latency_us WAL write latency in microseconds\n"
-    ));
-    output.push_str(&format!("# TYPE qaexchange_wal_latency_us gauge\n"));
+    output.push_str("# HELP qaexchange_wal_latency_us WAL write latency in microseconds\n");
+    output.push_str("# TYPE qaexchange_wal_latency_us gauge\n");
     output.push_str(&format!(
         "qaexchange_wal_latency_us {}\n",
         metrics.wal.avg_write_latency_us
     ));
 
     // Settlement metrics
-    output.push_str(&format!(
-        "# HELP qaexchange_settlement_accounts_total Settlement statistics\n"
-    ));
-    output.push_str(&format!(
-        "# TYPE qaexchange_settlement_accounts_total counter\n"
-    ));
+    output.push_str("# HELP qaexchange_settlement_accounts_total Settlement statistics\n");
+    output.push_str("# TYPE qaexchange_settlement_accounts_total counter\n");
     output.push_str(&format!(
         "qaexchange_settlement_accounts_total{{status=\"settled\"}} {}\n",
         metrics.settlement.settled_accounts
@@ -427,10 +387,8 @@ pub fn export_prometheus(metrics: &SystemMetrics) -> String {
     ));
 
     // System metrics
-    output.push_str(&format!(
-        "# HELP qaexchange_uptime_seconds System uptime in seconds\n"
-    ));
-    output.push_str(&format!("# TYPE qaexchange_uptime_seconds gauge\n"));
+    output.push_str("# HELP qaexchange_uptime_seconds System uptime in seconds\n");
+    output.push_str("# TYPE qaexchange_uptime_seconds gauge\n");
     output.push_str(&format!(
         "qaexchange_uptime_seconds {}\n",
         metrics.system.uptime_seconds

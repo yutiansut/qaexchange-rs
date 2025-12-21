@@ -306,13 +306,13 @@ impl FactorDag {
         // 构建图
         for node in self.nodes.iter() {
             in_degree.entry(node.id.clone()).or_insert(0);
-            graph.entry(node.id.clone()).or_insert_with(Vec::new);
+            graph.entry(node.id.clone()).or_default();
 
             for dep in &node.dependencies {
                 *in_degree.entry(node.id.clone()).or_insert(0) += 1;
                 graph
                     .entry(dep.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(node.id.clone());
             }
         }
@@ -388,7 +388,7 @@ impl FactorDag {
 
         for id in topo {
             if let Some(node) = self.nodes.get(&id) {
-                levels.entry(node.depth).or_insert_with(Vec::new).push(id);
+                levels.entry(node.depth).or_default().push(id);
             }
         }
 

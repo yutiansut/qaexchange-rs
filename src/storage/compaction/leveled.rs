@@ -194,11 +194,11 @@ impl LeveledCompaction {
                         // 更新为更新的值
                         entries
                             .retain(|e: &(MemTableKey, MemTableValue)| e.0.to_bytes() != key_bytes);
-                        entries.push((key.clone(), value.clone()));
+                        entries.push((key, value.clone()));
                         seen_keys.insert(key_bytes.clone(), timestamp);
                     }
                 } else {
-                    entries.push((key.clone(), value.clone()));
+                    entries.push((key, value.clone()));
                     seen_keys.insert(key_bytes, timestamp);
                 }
             }
@@ -216,7 +216,7 @@ impl LeveledCompaction {
 
         for (key, value) in &entries {
             writer
-                .append(key.clone(), value.clone())
+                .append(*key, value.clone())
                 .map_err(|e| format!("Failed to append entry: {}", e))?;
         }
 

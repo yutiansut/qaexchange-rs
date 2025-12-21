@@ -422,7 +422,7 @@ impl MarketSnapshotGenerator {
         };
 
         // 填充买五档
-        if let Some(level) = bids.get(0) {
+        if let Some(level) = bids.first() {
             snapshot.bid_price1 = level.price;
             snapshot.bid_volume1 = level.volume;
         }
@@ -444,7 +444,7 @@ impl MarketSnapshotGenerator {
         }
 
         // 填充卖五档
-        if let Some(level) = asks.get(0) {
+        if let Some(level) = asks.first() {
             snapshot.ask_price1 = level.price;
             snapshot.ask_volume1 = level.volume;
         }

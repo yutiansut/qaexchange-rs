@@ -84,11 +84,11 @@ impl OltpMemTable {
         self.data.insert(entry.key, entry.value);
 
         // 更新内存使用（近似估算）
-        let prev_size = self
-            .size_bytes
-            .fetch_add(self.config.estimated_entry_size, Ordering::Relaxed);
+        
 
-        prev_size
+        self
+            .size_bytes
+            .fetch_add(self.config.estimated_entry_size, Ordering::Relaxed)
     }
 
     /// 批量插入（更高效）

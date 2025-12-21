@@ -381,7 +381,7 @@ impl BlockIndexBuilder {
     }
 
     /// 完成构建
-    pub fn build(mut self) -> BlockIndex {
+    pub fn build(self) -> BlockIndex {
         // 确保最后一个块被记录
         if self.current_block_entries > 0 && self.entries_since_last_index > 0 {
             // 需要外部调用 finish_block

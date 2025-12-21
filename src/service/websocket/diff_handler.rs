@@ -1163,10 +1163,10 @@ impl DiffHandler {
                         instrument_id: {
                             "instrument_id": instrument_id,
                             "datetime": timestamp,
-                            "bid_price1": bids.get(0).map(|b| b.price),
-                            "bid_volume1": bids.get(0).map(|b| b.volume),
-                            "ask_price1": asks.get(0).map(|a| a.price),
-                            "ask_volume1": asks.get(0).map(|a| a.volume),
+                            "bid_price1": bids.first().map(|b| b.price),
+                            "bid_volume1": bids.first().map(|b| b.volume),
+                            "ask_price1": asks.first().map(|a| a.price),
+                            "ask_volume1": asks.first().map(|a| a.volume),
                         }
                     }
                 }))
@@ -1360,11 +1360,19 @@ impl DiffWebsocketSession {
 
     /// 启动心跳检查
     fn start_heartbeat(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-        const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
+        let heartbeat_interval = std::env::var("QAEXCHANGE_WS_HEARTBEAT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(Duration::from_secs(5));
+        let client_timeout = std::env::var("QAEXCHANGE_WS_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(Duration::from_secs(30));
 
-        ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
-            if std::time::Instant::now().duration_since(act.heartbeat) > CLIENT_TIMEOUT {
+        ctx.run_interval(heartbeat_interval, move |act, ctx| {
+            if std::time::Instant::now().duration_since(act.heartbeat) > client_timeout {
                 log::warn!("DIFF session {} timed out", act.session_id);
                 ctx.stop();
                 return;
