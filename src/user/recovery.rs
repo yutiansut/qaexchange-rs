@@ -68,6 +68,7 @@ impl UserRecovery {
                     phone,
                     email,
                     created_at,
+                    roles_bitmask,
                 } => {
                     stats.user_register_records += 1;
 
@@ -82,6 +83,9 @@ impl UserRecovery {
                     user.user_id = user_id_str.clone();
                     user.created_at = created_at;
                     user.updated_at = created_at;
+
+                    // 恢复用户角色 @yutiansut @quantaxis
+                    user.roles = crate::user::UserRole::from_bitmask(roles_bitmask);
 
                     // 只有非空字符串才设置
                     if !phone_str.is_empty() {
@@ -113,6 +117,23 @@ impl UserRecovery {
                     let account_id_str = WalRecord::from_fixed_array(&account_id);
 
                     bindings.push((user_id_str, account_id_str));
+                }
+
+                // 处理角色更新 @yutiansut @quantaxis
+                WalRecord::UserRoleUpdate {
+                    user_id,
+                    roles_bitmask,
+                    timestamp,
+                } => {
+                    let user_id_str = WalRecord::from_fixed_array(&user_id);
+                    // 应用最新的角色更新到用户
+                    if let Some(user) = users_map.get_mut(&user_id_str) {
+                        // 只有更新时间戳更新的情况下才更新角色
+                        if timestamp >= user.updated_at {
+                            user.roles = crate::user::UserRole::from_bitmask(roles_bitmask);
+                            user.updated_at = timestamp;
+                        }
+                    }
                 }
 
                 _ => {

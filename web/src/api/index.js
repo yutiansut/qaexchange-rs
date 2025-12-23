@@ -438,6 +438,19 @@ export function getTransactions(userId, params) {
   })
 }
 
+/**
+ * 获取所有资金流水（管理端，默认加载全部）
+ * @yutiansut @quantaxis
+ * @param {Object} params - { transaction_type, page, page_size }
+ */
+export function getAllTransactions(params) {
+  return request({
+    url: '/management/transactions',
+    method: 'get',
+    params
+  })
+}
+
 // ============= 管理端 - 风控监控 API =============
 
 /**
@@ -984,10 +997,12 @@ export function createAnnouncement(data) {
 /**
  * 删除公告（管理员）
  * @param {string} announcementId - 公告ID
+ * @param {string} adminToken - 管理员令牌（可选，默认使用系统令牌）
  */
-export function deleteAnnouncement(announcementId) {
+export function deleteAnnouncement(announcementId, adminToken = 'qaexchange_admin_2024') {
   return request({
     url: `/announcements/${announcementId}`,
-    method: 'delete'
+    method: 'delete',
+    params: { admin_token: adminToken }
   })
 }

@@ -112,19 +112,19 @@
         </el-form-item>
         <el-form-item label="公告类型" prop="announcement_type">
           <el-select v-model="createForm.announcement_type" placeholder="请选择公告类型" style="width: 100%">
-            <el-option label="系统公告" value="System"></el-option>
-            <el-option label="维护通知" value="Maintenance"></el-option>
-            <el-option label="交易提醒" value="Trading"></el-option>
-            <el-option label="风险提示" value="Risk"></el-option>
-            <el-option label="活动推广" value="Promotion"></el-option>
+            <el-option label="系统公告" value="SYSTEM"></el-option>
+            <el-option label="维护通知" value="MAINTENANCE"></el-option>
+            <el-option label="交易提醒" value="TRADING"></el-option>
+            <el-option label="风险提示" value="RISK"></el-option>
+            <el-option label="活动推广" value="PROMOTION"></el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="优先级" prop="priority">
           <el-select v-model="createForm.priority" placeholder="请选择优先级" style="width: 100%">
-            <el-option label="低" value="Low"></el-option>
-            <el-option label="普通" value="Normal"></el-option>
-            <el-option label="高" value="High"></el-option>
-            <el-option label="紧急" value="Urgent"></el-option>
+            <el-option label="低" value="LOW"></el-option>
+            <el-option label="普通" value="NORMAL"></el-option>
+            <el-option label="高" value="HIGH"></el-option>
+            <el-option label="紧急" value="URGENT"></el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="有效期">
@@ -201,8 +201,8 @@ export default {
       createForm: {
         title: '',
         content: '',
-        announcement_type: 'System',
-        priority: 'Normal',
+        announcement_type: 'SYSTEM',
+        priority: 'NORMAL',
         dateRange: []
       },
       createRules: {
@@ -211,18 +211,19 @@ export default {
         announcement_type: [{ required: true, message: '请选择公告类型', trigger: 'change' }],
         priority: [{ required: true, message: '请选择优先级', trigger: 'change' }]
       },
+      // 后端使用 SCREAMING_SNAKE_CASE @yutiansut @quantaxis
       typeMap: {
-        System: '系统公告',
-        Maintenance: '维护通知',
-        Trading: '交易提醒',
-        Risk: '风险提示',
-        Promotion: '活动推广'
+        SYSTEM: '系统公告',
+        MAINTENANCE: '维护通知',
+        TRADING: '交易提醒',
+        RISK: '风险提示',
+        PROMOTION: '活动推广'
       },
       priorityMap: {
-        Low: '低',
-        Normal: '普通',
-        High: '高',
-        Urgent: '紧急'
+        LOW: '低',
+        NORMAL: '普通',
+        HIGH: '高',
+        URGENT: '紧急'
       }
     }
   },
@@ -243,14 +244,13 @@ export default {
         if (this.searchForm.announcement_type) {
           params.announcement_type = this.searchForm.announcement_type
         }
-        const res = await queryAnnouncements(params)
-        if (res.success) {
-          this.announcements = res.data.announcements || []
-          this.pagination.total = res.data.total || 0
-        }
+        // axios拦截器已提取data @yutiansut @quantaxis
+        const data = await queryAnnouncements(params)
+        this.announcements = (data && data.announcements) || []
+        this.pagination.total = (data && data.total) || 0
       } catch (err) {
         console.error('加载公告失败:', err)
-        this.$message.error('加载公告失败')
+        this.$message.error(err.message || '加载公告失败')
       } finally {
         this.loading = false
       }
@@ -260,8 +260,8 @@ export default {
       this.createForm = {
         title: '',
         content: '',
-        announcement_type: 'System',
-        priority: 'Normal',
+        announcement_type: 'SYSTEM',
+        priority: 'NORMAL',
         dateRange: []
       }
       this.createDialogVisible = true
@@ -274,7 +274,7 @@ export default {
         this.submitting = true
         try {
           const data = {
-            admin_token: 'demo_admin_token', // 实际应从登录状态获取
+            admin_token: 'qaexchange_admin_2024', // 管理员令牌 @yutiansut @quantaxis
             title: this.createForm.title,
             content: this.createForm.content,
             announcement_type: this.createForm.announcement_type,
@@ -284,17 +284,14 @@ export default {
             data.effective_from = this.createForm.dateRange[0]
             data.effective_until = this.createForm.dateRange[1]
           }
-          const res = await createAnnouncement(data)
-          if (res.success) {
-            this.$message.success('公告发布成功')
-            this.createDialogVisible = false
-            this.loadAnnouncements()
-          } else {
-            this.$message.error(res.error || '发布失败')
-          }
+          // axios拦截器已处理响应 @yutiansut @quantaxis
+          await createAnnouncement(data)
+          this.$message.success('公告发布成功')
+          this.createDialogVisible = false
+          this.loadAnnouncements()
         } catch (err) {
           console.error('发布公告失败:', err)
-          this.$message.error('发布公告失败')
+          this.$message.error(err.message || '发布公告失败')
         } finally {
           this.submitting = false
         }
@@ -303,14 +300,13 @@ export default {
 
     async viewDetail(row) {
       try {
-        const res = await getAnnouncement(row.id)
-        if (res.success) {
-          this.currentAnnouncement = res.data
-          this.detailDialogVisible = true
-        }
+        // axios拦截器已提取data @yutiansut @quantaxis
+        const data = await getAnnouncement(row.id)
+        this.currentAnnouncement = data
+        this.detailDialogVisible = true
       } catch (err) {
         console.error('获取公告详情失败:', err)
-        this.$message.error('获取公告详情失败')
+        this.$message.error(err.message || '获取公告详情失败')
       }
     },
 
@@ -321,16 +317,13 @@ export default {
         type: 'warning'
       }).then(async () => {
         try {
-          const res = await deleteAnnouncement(row.id)
-          if (res.success) {
-            this.$message.success('删除成功')
-            this.loadAnnouncements()
-          } else {
-            this.$message.error(res.error || '删除失败')
-          }
+          // axios拦截器已处理响应 @yutiansut @quantaxis
+          await deleteAnnouncement(row.id)
+          this.$message.success('删除成功')
+          this.loadAnnouncements()
         } catch (err) {
           console.error('删除公告失败:', err)
-          this.$message.error('删除公告失败')
+          this.$message.error(err.message || '删除公告失败')
         }
       }).catch(() => {})
     },

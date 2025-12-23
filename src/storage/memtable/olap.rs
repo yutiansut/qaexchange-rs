@@ -670,6 +670,33 @@ fn build_chunk(records: &[(MemTableKey, WalRecord)]) -> Chunk<Box<dyn Array>> {
                 // K线字段为 null
                 push_null_kline_fields!();
             }
+
+            // Phase 14: 订单状态更新、持仓快照、账户快照
+            // 这些记录类型用于恢复，OLAP存储暂不需要详细列式解析
+            WalRecord::OrderStatusUpdate { .. }
+            | WalRecord::PositionSnapshot { .. }
+            | WalRecord::AccountSnapshot { .. }
+            | WalRecord::UserRoleUpdate { .. } => {
+                record_type_builder.push(Some(15)); // Recovery record type ID
+
+                // 所有字段为 null（恢复数据有独立处理路径）
+                order_id_builder.push(None);
+                user_id_builder.push(None::<&[u8]>);
+                instrument_id_builder.push(None::<&[u8]>);
+                direction_builder.push(None);
+                offset_builder.push(None);
+                price_builder.push(None);
+                volume_builder.push(None);
+                trade_id_builder.push(None);
+                exchange_order_id_builder.push(None);
+                balance_builder.push(None);
+                available_builder.push(None);
+                frozen_builder.push(None);
+                margin_builder.push(None);
+
+                // K线字段为 null
+                push_null_kline_fields!();
+            }
         }
     }
 

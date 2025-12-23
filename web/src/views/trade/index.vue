@@ -185,6 +185,7 @@
 
             <el-tab-pane label="平仓" name="close">
               <close-form
+                ref="closeForm"
                 :instrument-id="selectedInstrument"
                 :current-price="tickData.last_price"
                 @submit="handleOrderSubmit"
@@ -517,6 +518,11 @@ export default {
 
         this.$message.success('订单提交成功')
         this.loadPendingOrders()
+
+        // ✨ 平仓下单后刷新持仓数据，更新可平量显示 @yutiansut @quantaxis
+        if (orderData.offset === 'CLOSE' && this.$refs.closeForm) {
+          this.$refs.closeForm.refresh()
+        }
       } catch (error) {
         this.$message.error('订单提交失败: ' + ((error.response && error.response.data && error.response.data.error) || error.message))
       }

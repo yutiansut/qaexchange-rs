@@ -124,7 +124,7 @@ pub async fn get_current_user(
 pub async fn list_users(state: web::Data<Arc<AppState>>) -> Result<HttpResponse> {
     let users = state.user_mgr.list_users();
 
-    // 过滤掉敏感信息（密码哈希）
+    // 过滤掉敏感信息（密码哈希），但包含角色信息
     let user_list: Vec<serde_json::Value> = users
         .iter()
         .map(|user| {
@@ -135,6 +135,7 @@ pub async fn list_users(state: web::Data<Arc<AppState>>) -> Result<HttpResponse>
                 "email": user.email,
                 "real_name": user.real_name,
                 "account_ids": user.account_ids,
+                "roles": user.roles.iter().map(|r| format!("{:?}", r)).collect::<Vec<_>>(),
                 "created_at": user.created_at,
                 "status": user.status,
             })

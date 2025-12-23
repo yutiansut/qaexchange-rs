@@ -47,6 +47,53 @@ impl UserRole {
         }
     }
 
+    /// 角色对应的位掩码值 @yutiansut @quantaxis
+    /// bit 0: Trader, bit 1: Analyst, bit 2: ReadOnly,
+    /// bit 3: RiskManager, bit 4: Settlement, bit 7: Admin
+    pub fn to_bitmask(&self) -> u8 {
+        match self {
+            UserRole::Trader => 0b0000_0001,
+            UserRole::Analyst => 0b0000_0010,
+            UserRole::ReadOnly => 0b0000_0100,
+            UserRole::RiskManager => 0b0000_1000,
+            UserRole::Settlement => 0b0001_0000,
+            UserRole::Admin => 0b1000_0000,
+        }
+    }
+
+    /// 从位掩码解析角色列表 @yutiansut @quantaxis
+    pub fn from_bitmask(bitmask: u8) -> Vec<UserRole> {
+        let mut roles = Vec::new();
+        if bitmask & 0b1000_0000 != 0 {
+            roles.push(UserRole::Admin);
+        }
+        if bitmask & 0b0001_0000 != 0 {
+            roles.push(UserRole::Settlement);
+        }
+        if bitmask & 0b0000_1000 != 0 {
+            roles.push(UserRole::RiskManager);
+        }
+        if bitmask & 0b0000_0100 != 0 {
+            roles.push(UserRole::ReadOnly);
+        }
+        if bitmask & 0b0000_0010 != 0 {
+            roles.push(UserRole::Analyst);
+        }
+        if bitmask & 0b0000_0001 != 0 {
+            roles.push(UserRole::Trader);
+        }
+        // 如果没有角色，默认Trader
+        if roles.is_empty() {
+            roles.push(UserRole::Trader);
+        }
+        roles
+    }
+
+    /// 将角色列表转换为位掩码 @yutiansut @quantaxis
+    pub fn roles_to_bitmask(roles: &[UserRole]) -> u8 {
+        roles.iter().fold(0u8, |acc, role| acc | role.to_bitmask())
+    }
+
     /// 角色优先级 (用于权限比较)
     pub fn priority(&self) -> u8 {
         match self {

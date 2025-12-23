@@ -73,11 +73,11 @@
     <div class="table-container">
       <el-table
         ref="transactionTable"
-        :data="filteredTransactions"
+        :data="transactions"
         border
         stripe
         v-loading="loading"
-        height="500"
+        height="450"
       >
         <el-table-column prop="transaction_id" label="交易ID" width="180" sortable></el-table-column>
         <el-table-column prop="user_id" label="用户ID" width="150" sortable></el-table-column>
@@ -124,13 +124,26 @@
           </template>
         </el-table-column>
       </el-table>
+      <!-- 分页控件 @yutiansut @quantaxis -->
+      <div class="pagination-container">
+        <el-pagination
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :total="pagination.total"
+          :page-size="pagination.pageSize"
+          :current-page="pagination.page"
+          :page-sizes="[20, 50, 100, 200]"
+          @current-change="handlePageChange"
+          @size-change="handleSizeChange"
+        />
+      </div>
     </div>
   </div>
 </template>
 
 <script>
 import dayjs from 'dayjs'
-import { getTransactions } from '@/api'
+import { getTransactions, getAllTransactions } from '@/api'
 
 export default {
   name: 'TransactionManagement',
@@ -142,7 +155,12 @@ export default {
         userId: '',
         transactionType: ''
       },
-      dateRange: null
+      dateRange: null,
+      pagination: {
+        page: 1,
+        pageSize: 50,
+        total: 0
+      }
     }
   },
   computed: {
@@ -183,27 +201,47 @@ export default {
   },
   methods: {
     async fetchTransactions() {
-      if (!this.filters.userId) {
-        this.$message.warning('请输入用户ID')
-        return
-      }
-
       this.loading = true
       try {
-        const params = {}
-        if (this.dateRange && this.dateRange.length === 2) {
-          params.start_date = this.formatDate(this.dateRange[0])
-          params.end_date = this.formatDate(this.dateRange[1])
+        // 构建查询参数 @yutiansut @quantaxis
+        const params = {
+          page: this.pagination.page,
+          page_size: this.pagination.pageSize
         }
 
-        // axios 拦截器已处理响应 @yutiansut @quantaxis
-        const data = await getTransactions(this.filters.userId, params)
-        this.transactions = data || []
+        // 类型筛选
+        if (this.filters.transactionType) {
+          params.transaction_type = this.filters.transactionType
+        }
+
+        let result
+        if (this.filters.userId) {
+          // 如果指定了用户ID，使用用户专用API
+          result = await getTransactions(this.filters.userId, params)
+          // 旧接口返回数组
+          this.transactions = Array.isArray(result) ? result : ((result && result.records) || [])
+          this.pagination.total = this.transactions.length
+        } else {
+          // 默认加载全部流水
+          result = await getAllTransactions(params)
+          // 新接口返回 { records, total, page, page_size }
+          this.transactions = (result && result.records) || []
+          this.pagination.total = (result && result.total) || 0
+        }
       } catch (error) {
         this.$message.error('获取资金流水失败: ' + error.message)
       } finally {
         this.loading = false
       }
+    },
+    handlePageChange(page) {
+      this.pagination.page = page
+      this.fetchTransactions()
+    },
+    handleSizeChange(size) {
+      this.pagination.pageSize = size
+      this.pagination.page = 1
+      this.fetchTransactions()
     },
     resetFilters() {
       this.filters = {
@@ -444,6 +482,61 @@ $warning-color: #faad14;
   padding: 20px;
   border-radius: 8px;
   border: 1px solid $dark-border;
+
+  .pagination-container {
+    margin-top: 20px;
+    display: flex;
+    justify-content: flex-end;
+
+    ::v-deep .el-pagination {
+      button {
+        background: $dark-bg-tertiary !important;
+        color: $dark-text-primary !important;
+        border: 1px solid $dark-border !important;
+
+        &:disabled {
+          color: $dark-text-muted !important;
+        }
+
+        &:hover:not(:disabled) {
+          color: $primary-color !important;
+          border-color: $primary-color !important;
+        }
+      }
+
+      .el-pager li {
+        background: $dark-bg-tertiary !important;
+        color: $dark-text-primary !important;
+        border: 1px solid $dark-border !important;
+
+        &.active {
+          background: $primary-color !important;
+          border-color: $primary-color !important;
+        }
+
+        &:hover {
+          color: $primary-color !important;
+        }
+      }
+
+      .el-pagination__total,
+      .el-pagination__jump {
+        color: $dark-text-secondary !important;
+      }
+
+      .el-pagination__editor.el-input .el-input__inner {
+        background: $dark-bg-tertiary !important;
+        border-color: $dark-border !important;
+        color: $dark-text-primary !important;
+      }
+
+      .el-select .el-input .el-input__inner {
+        background: $dark-bg-tertiary !important;
+        border-color: $dark-border !important;
+        color: $dark-text-primary !important;
+      }
+    }
+  }
 
   ::v-deep .el-table {
     background: transparent !important;

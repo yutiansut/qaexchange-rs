@@ -89,6 +89,12 @@ impl MemTableValue {
             WalRecord::KLineFinished { timestamp, .. } => *timestamp,
             WalRecord::FactorUpdate { timestamp, .. } => *timestamp,
             WalRecord::FactorSnapshot { timestamp, .. } => *timestamp,
+            // Phase 14: 订单生命周期恢复
+            WalRecord::OrderStatusUpdate { timestamp, .. } => *timestamp,
+            WalRecord::PositionSnapshot { timestamp, .. } => *timestamp,
+            WalRecord::AccountSnapshot { timestamp, .. } => *timestamp,
+            // 用户角色更新 @yutiansut @quantaxis
+            WalRecord::UserRoleUpdate { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -122,6 +128,12 @@ impl MemTableEntry {
             WalRecord::KLineFinished { timestamp, .. } => *timestamp,
             WalRecord::FactorUpdate { timestamp, .. } => *timestamp,
             WalRecord::FactorSnapshot { timestamp, .. } => *timestamp,
+            // Phase 14: 订单生命周期恢复
+            WalRecord::OrderStatusUpdate { timestamp, .. } => *timestamp,
+            WalRecord::PositionSnapshot { timestamp, .. } => *timestamp,
+            WalRecord::AccountSnapshot { timestamp, .. } => *timestamp,
+            // 用户角色更新 @yutiansut @quantaxis
+            WalRecord::UserRoleUpdate { timestamp, .. } => *timestamp,
         };
 
         Self {

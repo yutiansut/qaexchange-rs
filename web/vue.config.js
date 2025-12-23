@@ -17,6 +17,14 @@ module.exports = {
     port: 8096,
     host: '0.0.0.0',  // 允许外部访问
     open: true,
+    // @yutiansut @quantaxis 允许通过域名访问
+    allowedHosts: [
+      'localhost',
+      '127.0.0.1',
+      '192.168.2.115',
+      'quantax.is',
+      '.quantax.is'  // 允许所有子域名
+    ],
     proxy: {
       '/api': {
         target: `http://${API_HOST}:${API_PORT}`,

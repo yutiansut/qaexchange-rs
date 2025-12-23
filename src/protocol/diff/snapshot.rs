@@ -388,6 +388,57 @@ impl SnapshotManager {
             .map(|entry| entry.key().clone())
             .collect()
     }
+
+    /// 广播 patch 到所有已连接用户
+    ///
+    /// 将 patch 推送到所有已初始化的用户快照。
+    /// 用于推送系统级通知（如公告、维护提醒等）。
+    ///
+    /// # 参数
+    ///
+    /// * `patch` - JSON Merge Patch 对象
+    ///
+    /// # 返回
+    ///
+    /// 成功推送的用户数量
+    ///
+    /// # 示例
+    ///
+    /// ```rust
+    /// # use qaexchange::protocol::diff::snapshot::SnapshotManager;
+    /// # use serde_json::json;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let manager = SnapshotManager::new();
+    /// manager.initialize_user("user1").await;
+    /// manager.initialize_user("user2").await;
+    ///
+    /// // 广播公告通知
+    /// let patch = json!({
+    ///     "notify": {
+    ///         "announcement_123": {
+    ///             "type": "ANNOUNCEMENT",
+    ///             "level": "INFO",
+    ///             "code": 2000,
+    ///             "title": "系统维护通知",
+    ///             "content": "系统将于今晚22:00进行维护"
+    ///         }
+    ///     }
+    /// });
+    /// let count = manager.broadcast_patch(patch).await;
+    /// println!("已推送到 {} 个用户", count);
+    /// # }
+    /// ```
+    ///
+    /// @yutiansut @quantaxis - 系统公告广播功能
+    pub async fn broadcast_patch(&self, patch: Value) -> usize {
+        let mut count = 0;
+        for entry in self.user_snapshots.iter() {
+            entry.value().push_patch(patch.clone());
+            count += 1;
+        }
+        count
+    }
 }
 
 impl Default for SnapshotManager {

@@ -362,26 +362,26 @@ pub async fn get_margin_summary(
 
     match account_mgr.get_account(&account_id) {
         Ok(account) => {
-            let account_read = account.read();
+            // @yutiansut @quantaxis: 使用写锁以调用 qars 的 volume_long()/volume_short()
+            let mut account_write = account.write();
 
-            // 先收集所有需要的数据 (不可变借用)
-            let balance = account_read.accounts.balance;
-            let frozen_margin = account_read.accounts.frozen_margin;
-            let risk_ratio = account_read.accounts.risk_ratio;
-            let available = account_read.money;
+            let balance = account_write.accounts.balance;
+            let frozen_margin = account_write.accounts.frozen_margin;
+            let risk_ratio = account_write.accounts.risk_ratio;
+            let available = account_write.money;
 
             // 收集持仓数据
             let mut position_details = Vec::new();
             let mut total_margin = 0.0;
 
-            for (instrument_id, pos) in account_read.hold.iter() {
+            for (instrument_id, pos) in account_write.hold.iter_mut() {
                 let product_id = extract_product_id(instrument_id);
                 let margin_rate = MARGIN_RATES.get(&product_id)
                     .map(|r| r.long_margin_ratio_by_money)
                     .unwrap_or(0.1);
 
-                let volume_long = pos.volume_long_today + pos.volume_long_his;
-                let volume_short = pos.volume_short_today + pos.volume_short_his;
+                let volume_long = pos.volume_long();
+                let volume_short = pos.volume_short();
 
                 total_margin += pos.margin_long + pos.margin_short;
 
@@ -429,6 +429,13 @@ pub async fn freeze_account(
     let account_id = &req.account_id;
     let now = current_timestamp();
 
+    // 计算 can_trade 和 can_withdraw @yutiansut @quantaxis
+    let (can_trade_val, can_withdraw_val) = match &req.freeze_type {
+        FreezeType::TradingOnly => (false, true),
+        FreezeType::WithdrawOnly => (true, false),
+        FreezeType::Full => (false, false),
+    };
+
     let status_info = AccountStatusInfo {
         account_id: account_id.clone(),
         status: AccountStatus::Frozen,
@@ -436,6 +443,8 @@ pub async fn freeze_account(
         freeze_reason: Some(req.reason.clone()),
         frozen_at: Some(now),
         frozen_by: Some("admin".to_string()),
+        can_trade: can_trade_val,
+        can_withdraw: can_withdraw_val,
     };
 
     ACCOUNT_STATUS.insert(account_id.clone(), status_info.clone());
@@ -471,6 +480,8 @@ pub async fn unfreeze_account(
         freeze_reason: None,
         frozen_at: None,
         frozen_by: None,
+        can_trade: true,     // Active状态可以交易
+        can_withdraw: true,  // Active状态可以出金
     };
 
     ACCOUNT_STATUS.insert(account_id.clone(), status_info.clone());
@@ -504,6 +515,8 @@ pub async fn get_account_status(
             freeze_reason: None,
             frozen_at: None,
             frozen_by: None,
+            can_trade: true,     // 默认Active状态可交易
+            can_withdraw: true,  // 默认Active状态可出金
         });
 
     HttpResponse::Ok().json(ApiResponse::success(status_info))

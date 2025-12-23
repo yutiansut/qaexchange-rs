@@ -55,6 +55,12 @@ pub struct RecoveryStats {
     pub exchange_records: u64,
     /// 检查点记录
     pub checkpoint_records: u64,
+    /// 订单状态更新记录 (Phase 14)
+    pub order_status_records: u64,
+    /// 持仓快照记录 (Phase 14)
+    pub position_snapshot_records: u64,
+    /// 账户快照记录 (Phase 14)
+    pub account_snapshot_records: u64,
     /// 恢复耗时（毫秒）
     pub recovery_time_ms: u128,
     /// 错误数量
@@ -74,7 +80,7 @@ impl RecoveryStats {
             WalRecord::AccountOpen { .. } | WalRecord::AccountUpdate { .. } => {
                 self.account_records += 1;
             }
-            WalRecord::UserRegister { .. } | WalRecord::AccountBind { .. } => {
+            WalRecord::UserRegister { .. } | WalRecord::AccountBind { .. } | WalRecord::UserRoleUpdate { .. } => {
                 self.user_records += 1;
             }
             WalRecord::OrderInsert { .. } => {
@@ -102,6 +108,16 @@ impl RecoveryStats {
             WalRecord::Checkpoint { .. } => {
                 self.checkpoint_records += 1;
             }
+            // Phase 14: 订单生命周期和账户恢复增强
+            WalRecord::OrderStatusUpdate { .. } => {
+                self.order_status_records += 1;
+            }
+            WalRecord::PositionSnapshot { .. } => {
+                self.position_snapshot_records += 1;
+            }
+            WalRecord::AccountSnapshot { .. } => {
+                self.account_snapshot_records += 1;
+            }
         }
     }
 
@@ -121,6 +137,9 @@ impl RecoveryStats {
         log::info!("因子记录:        {}", self.factor_records);
         log::info!("交易所逐笔:      {}", self.exchange_records);
         log::info!("检查点:          {}", self.checkpoint_records);
+        log::info!("订单状态更新:    {}", self.order_status_records);
+        log::info!("持仓快照:        {}", self.position_snapshot_records);
+        log::info!("账户快照:        {}", self.account_snapshot_records);
         log::info!("───────────────────────────────────────────────────────────");
         log::info!("恢复耗时:        {} ms", self.recovery_time_ms);
         log::info!("错误数量:        {}", self.error_count);
@@ -191,6 +210,66 @@ pub struct RecoveredFactor {
     pub timestamp: i64,
 }
 
+/// 订单状态（恢复用）Phase 14
+/// @yutiansut @quantaxis
+#[derive(Debug, Clone)]
+pub struct RecoveredOrder {
+    pub order_id: String,
+    pub user_id: String,
+    pub instrument_id: String,
+    pub exchange_id: String,
+    pub direction: u8,        // 0=BUY, 1=SELL
+    pub offset: u8,           // 0=OPEN, 1=CLOSE, 2=CLOSETODAY
+    pub status: u8,           // 0=ALIVE, 1=FINISHED, 2=CANCELLED, 3=REJECTED, 4=PARTIALLY_FILLED
+    pub volume_orign: f64,    // 原始委托量
+    pub volume_left: f64,     // 剩余未成交量
+    pub volume_filled: f64,   // 已成交量
+    pub limit_price: f64,     // 委托价格
+    pub avg_price: f64,       // 成交均价
+    pub frozen_margin: f64,   // 冻结保证金
+    pub frozen_amount: f64,   // 冻结资金
+    pub last_msg: String,     // 最后消息
+    pub timestamp: i64,       // 时间戳
+    pub last_sequence: u64,   // 最后更新的序列号
+}
+
+/// 持仓状态（恢复用）Phase 14
+/// @yutiansut @quantaxis
+#[derive(Debug, Clone)]
+pub struct RecoveredPosition {
+    pub user_id: String,
+    pub instrument_id: String,
+    pub exchange_id: String,
+    // 多头
+    pub volume_long_today: f64,
+    pub volume_long_his: f64,
+    pub volume_long_frozen_today: f64,
+    pub volume_long_frozen_his: f64,
+    pub open_price_long: f64,
+    pub open_cost_long: f64,
+    pub position_price_long: f64,
+    pub position_cost_long: f64,
+    pub margin_long: f64,
+    // 空头
+    pub volume_short_today: f64,
+    pub volume_short_his: f64,
+    pub volume_short_frozen_today: f64,
+    pub volume_short_frozen_his: f64,
+    pub open_price_short: f64,
+    pub open_cost_short: f64,
+    pub position_price_short: f64,
+    pub position_cost_short: f64,
+    pub margin_short: f64,
+    // 盈亏
+    pub float_profit_long: f64,
+    pub float_profit_short: f64,
+    pub position_profit_long: f64,
+    pub position_profit_short: f64,
+    pub last_price: f64,
+    pub timestamp: i64,
+    pub last_sequence: u64,
+}
+
 /// 统一恢复结果
 #[derive(Debug, Clone, Default)]
 pub struct UnifiedRecoveryResult {
@@ -202,6 +281,10 @@ pub struct UnifiedRecoveryResult {
     pub klines: HashMap<String, Vec<RecoveredKLine>>,
     /// 恢复的因子（按合约+因子ID分组）
     pub factors: HashMap<String, RecoveredFactor>,
+    /// 恢复的订单（按账户+订单ID分组）Phase 14
+    pub orders: HashMap<String, RecoveredOrder>,
+    /// 恢复的持仓（按账户+合约分组）Phase 14
+    pub positions: HashMap<String, RecoveredPosition>,
     /// 最后的检查点序列号
     pub last_checkpoint_sequence: u64,
     /// 最后处理的序列号
@@ -590,6 +673,7 @@ impl UnifiedRecoveryManager {
                 phone,
                 email,
                 created_at,
+                roles_bitmask,
             } if self.config.recover_users => {
                 let user_id_str = WalRecord::from_fixed_array(&user_id);
                 let username_str = WalRecord::from_fixed_array(&username);
@@ -632,6 +716,235 @@ impl UnifiedRecoveryManager {
                         user.account_ids.push(account_id_str);
                     }
                 }
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // Phase 14: 订单生命周期恢复
+            // @yutiansut @quantaxis
+            // ═══════════════════════════════════════════════════════════════════
+            WalRecord::OrderStatusUpdate {
+                order_id,
+                user_id,
+                instrument_id,
+                status,
+                volume_orign,
+                volume_left,
+                volume_filled,
+                frozen_margin,
+                frozen_amount,
+                direction,
+                offset,
+                limit_price,
+                avg_price,
+                last_msg,
+                timestamp,
+            } if self.config.recover_orders => {
+                let order_id_str = WalRecord::from_fixed_array(&order_id);
+                let user_id_str = WalRecord::from_fixed_array(&user_id);
+                let instrument_id_str = WalRecord::from_fixed_array(&instrument_id);
+                let last_msg_str = WalRecord::from_fixed_array(&last_msg);
+
+                // 提取 exchange_id 从 instrument_id (格式: EXCHANGE.SYMBOL)
+                let exchange_id = instrument_id_str
+                    .split('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+
+                let key = format!("{}_{}", user_id_str, order_id_str);
+
+                // 只保留最新状态（基于 sequence）
+                let should_update = result
+                    .orders
+                    .get(&key)
+                    .map(|existing| sequence > existing.last_sequence)
+                    .unwrap_or(true);
+
+                if should_update {
+                    result.orders.insert(
+                        key,
+                        RecoveredOrder {
+                            order_id: order_id_str,
+                            user_id: user_id_str,
+                            instrument_id: instrument_id_str,
+                            exchange_id,
+                            direction,
+                            offset,
+                            status,
+                            volume_orign,
+                            volume_left,
+                            volume_filled,
+                            limit_price,
+                            avg_price,
+                            frozen_margin,
+                            frozen_amount,
+                            last_msg: last_msg_str,
+                            timestamp,
+                            last_sequence: sequence,
+                        },
+                    );
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // Phase 14: 持仓快照恢复
+            // @yutiansut @quantaxis
+            // ═══════════════════════════════════════════════════════════════════
+            WalRecord::PositionSnapshot {
+                user_id,
+                instrument_id,
+                exchange_id,
+                volume_long_today,
+                volume_long_his,
+                volume_long_frozen_today,
+                volume_long_frozen_his,
+                open_price_long,
+                open_cost_long,
+                position_price_long,
+                position_cost_long,
+                margin_long,
+                volume_short_today,
+                volume_short_his,
+                volume_short_frozen_today,
+                volume_short_frozen_his,
+                open_price_short,
+                open_cost_short,
+                position_price_short,
+                position_cost_short,
+                margin_short,
+                float_profit_long,
+                float_profit_short,
+                position_profit_long,
+                position_profit_short,
+                last_price,
+                timestamp,
+            } if self.config.recover_orders => {
+                let user_id_str = WalRecord::from_fixed_array(&user_id);
+                let instrument_id_str = WalRecord::from_fixed_array(&instrument_id);
+                let exchange_id_str = WalRecord::from_fixed_array(&exchange_id);
+
+                let key = format!("{}_{}", user_id_str, instrument_id_str);
+
+                // 只保留最新快照（基于 sequence）
+                let should_update = result
+                    .positions
+                    .get(&key)
+                    .map(|existing| sequence > existing.last_sequence)
+                    .unwrap_or(true);
+
+                if should_update {
+                    result.positions.insert(
+                        key,
+                        RecoveredPosition {
+                            user_id: user_id_str,
+                            instrument_id: instrument_id_str,
+                            exchange_id: exchange_id_str,
+                            volume_long_today,
+                            volume_long_his,
+                            volume_long_frozen_today,
+                            volume_long_frozen_his,
+                            open_price_long,
+                            open_cost_long,
+                            position_price_long,
+                            position_cost_long,
+                            margin_long,
+                            volume_short_today,
+                            volume_short_his,
+                            volume_short_frozen_today,
+                            volume_short_frozen_his,
+                            open_price_short,
+                            open_cost_short,
+                            position_price_short,
+                            position_cost_short,
+                            margin_short,
+                            float_profit_long,
+                            float_profit_short,
+                            position_profit_long,
+                            position_profit_short,
+                            last_price,
+                            timestamp,
+                            last_sequence: sequence,
+                        },
+                    );
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // Phase 14: 账户快照恢复（更完整的账户状态）
+            // @yutiansut @quantaxis
+            // ═══════════════════════════════════════════════════════════════════
+            WalRecord::AccountSnapshot {
+                account_id,
+                user_id,
+                balance,
+                available,
+                frozen,
+                margin,
+                frozen_margin,
+                frozen_commission,
+                close_profit,
+                position_profit,
+                float_profit,
+                commission,
+                deposit,
+                withdraw,
+                pre_balance,
+                static_balance,
+                position_count,
+                order_count,
+                trade_count,
+                checkpoint_id,
+                last_sequence: snapshot_seq,
+                timestamp,
+            } if self.config.recover_accounts => {
+                let account_id_str = WalRecord::from_fixed_array(&account_id);
+                let user_id_str = WalRecord::from_fixed_array(&user_id);
+
+                // 只更新已存在的账户，或创建新账户
+                if let Some(account) = result.accounts.get_mut(&account_id_str) {
+                    if sequence > account.last_sequence {
+                        account.balance = balance;
+                        account.available = available;
+                        account.frozen = frozen;
+                        account.margin = margin;
+                        account.deposit = deposit;
+                        account.withdraw = withdraw;
+                        account.last_sequence = sequence;
+                    }
+                } else {
+                    // 从快照创建账户（可能是从 checkpoint 恢复）
+                    result.accounts.insert(
+                        account_id_str.clone(),
+                        RecoveredAccount {
+                            account_id: account_id_str,
+                            user_id: user_id_str,
+                            account_name: String::new(), // 快照不包含名称
+                            init_cash: pre_balance,
+                            account_type: 0, // 快照不包含类型
+                            created_at: timestamp,
+                            balance,
+                            available,
+                            frozen,
+                            deposit,
+                            withdraw,
+                            margin,
+                            last_sequence: sequence,
+                        },
+                    );
+                }
+
+                // 更新检查点序列号
+                if snapshot_seq > result.last_checkpoint_sequence {
+                    result.last_checkpoint_sequence = snapshot_seq;
+                }
+
+                log::debug!(
+                    "Recovered AccountSnapshot: account={}, balance={}, positions={}, orders={}",
+                    WalRecord::from_fixed_array(&account_id),
+                    balance,
+                    position_count,
+                    order_count
+                );
             }
 
             // 其他记录类型跳过
@@ -956,11 +1269,38 @@ pub fn print_recovery_summary(result: &UnifiedRecoveryResult) {
     log::info!("───────────────────────────────────────────────────────────");
     log::info!("📦 账户数据:");
     log::info!("   - Account 记录:  {}", result.stats.account_records);
+    log::info!("   - 账户快照:      {}", result.stats.account_snapshot_records);
     log::info!("   - 恢复账户数:    {}", result.accounts.len());
     log::info!("───────────────────────────────────────────────────────────");
     log::info!("👤 用户数据:");
     log::info!("   - User 记录:     {}", result.stats.user_records);
     log::info!("   - 恢复用户数:    {}", result.users.len());
+    log::info!("───────────────────────────────────────────────────────────");
+    log::info!("📋 订单数据 (Phase 14):");
+    log::info!("   - Order 记录:    {}", result.stats.order_records);
+    log::info!("   - 状态更新:      {}", result.stats.order_status_records);
+    log::info!("   - 恢复订单数:    {}", result.orders.len());
+    // 统计活跃订单
+    let active_orders = result
+        .orders
+        .values()
+        .filter(|o| o.status == 0 || o.status == 4) // ALIVE or PARTIALLY_FILLED
+        .count();
+    log::info!("   - 活跃订单:      {}", active_orders);
+    log::info!("───────────────────────────────────────────────────────────");
+    log::info!("📊 持仓数据 (Phase 14):");
+    log::info!("   - 持仓快照:      {}", result.stats.position_snapshot_records);
+    log::info!("   - 恢复持仓数:    {}", result.positions.len());
+    // 统计有效持仓
+    let active_positions = result
+        .positions
+        .values()
+        .filter(|p| {
+            p.volume_long_today + p.volume_long_his > 0.0
+                || p.volume_short_today + p.volume_short_his > 0.0
+        })
+        .count();
+    log::info!("   - 有效持仓:      {}", active_positions);
     log::info!("───────────────────────────────────────────────────────────");
     log::info!("📈 行情数据:");
     log::info!("   - MarketData:    {}", result.stats.market_data_records);
@@ -972,7 +1312,6 @@ pub fn print_recovery_summary(result: &UnifiedRecoveryResult) {
     log::info!("   - 恢复因子数:    {}", result.factors.len());
     log::info!("───────────────────────────────────────────────────────────");
     log::info!("📋 交易所数据:");
-    log::info!("   - Order:         {}", result.stats.order_records);
     log::info!("   - Trade:         {}", result.stats.trade_records);
     log::info!("   - Exchange:      {}", result.stats.exchange_records);
     log::info!("───────────────────────────────────────────────────────────");

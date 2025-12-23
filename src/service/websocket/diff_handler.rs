@@ -1053,12 +1053,13 @@ impl DiffHandler {
                             let kline_id = (kline.timestamp * 1_000_000) / duration; // 毫秒转纳秒后除以周期
 
                             // DIFF协议要求datetime为UnixNano（纳秒）
+                            // @yutiansut @quantaxis: 使用字符串传输避免JavaScript精度丢失
                             let datetime_ns = kline.timestamp * 1_000_000; // 毫秒转纳秒
 
                             kline_data.insert(
                                 kline_id.to_string(),
                                 serde_json::json!({
-                                    "datetime": datetime_ns,
+                                    "datetime": datetime_ns.to_string(), // 字符串避免精度丢失
                                     "open": kline.open,
                                     "high": kline.high,
                                     "low": kline.low,
@@ -1157,16 +1158,34 @@ impl DiffHandler {
                 asks,
                 timestamp,
             } => {
-                // 转换为 DIFF quotes 格式
+                // 转换为 DIFF quotes 格式 - 发送完整5档盘口 @yutiansut @quantaxis
                 Some(serde_json::json!({
                     "quotes": {
                         instrument_id: {
                             "instrument_id": instrument_id,
                             "datetime": timestamp,
-                            "bid_price1": bids.first().map(|b| b.price),
-                            "bid_volume1": bids.first().map(|b| b.volume),
-                            "ask_price1": asks.first().map(|a| a.price),
-                            "ask_volume1": asks.first().map(|a| a.volume),
+                            // 买盘5档
+                            "bid_price1": bids.get(0).map(|b| b.price),
+                            "bid_volume1": bids.get(0).map(|b| b.volume),
+                            "bid_price2": bids.get(1).map(|b| b.price),
+                            "bid_volume2": bids.get(1).map(|b| b.volume),
+                            "bid_price3": bids.get(2).map(|b| b.price),
+                            "bid_volume3": bids.get(2).map(|b| b.volume),
+                            "bid_price4": bids.get(3).map(|b| b.price),
+                            "bid_volume4": bids.get(3).map(|b| b.volume),
+                            "bid_price5": bids.get(4).map(|b| b.price),
+                            "bid_volume5": bids.get(4).map(|b| b.volume),
+                            // 卖盘5档
+                            "ask_price1": asks.get(0).map(|a| a.price),
+                            "ask_volume1": asks.get(0).map(|a| a.volume),
+                            "ask_price2": asks.get(1).map(|a| a.price),
+                            "ask_volume2": asks.get(1).map(|a| a.volume),
+                            "ask_price3": asks.get(2).map(|a| a.price),
+                            "ask_volume3": asks.get(2).map(|a| a.volume),
+                            "ask_price4": asks.get(3).map(|a| a.price),
+                            "ask_volume4": asks.get(3).map(|a| a.volume),
+                            "ask_price5": asks.get(4).map(|a| a.price),
+                            "ask_volume5": asks.get(4).map(|a| a.volume),
                         }
                     }
                 }))
@@ -1204,36 +1223,16 @@ impl DiffHandler {
             })),
 
             MarketDataEvent::OrderBookUpdate {
-                instrument_id,
-                side,
-                price,
-                volume,
-                timestamp,
+                instrument_id: _,
+                side: _,
+                price: _,
+                volume: _,
+                timestamp: _,
             } => {
-                // 增量更新转换为完整字段更新
-                if side == "bid" {
-                    Some(serde_json::json!({
-                        "quotes": {
-                            instrument_id: {
-                                "instrument_id": instrument_id,
-                                "bid_price1": price,
-                                "bid_volume1": volume,
-                                "datetime": timestamp,
-                            }
-                        }
-                    }))
-                } else {
-                    Some(serde_json::json!({
-                        "quotes": {
-                            instrument_id: {
-                                "instrument_id": instrument_id,
-                                "ask_price1": price,
-                                "ask_volume1": volume,
-                                "datetime": timestamp,
-                            }
-                        }
-                    }))
-                }
+                // @yutiansut @quantaxis: 跳过单独的增量更新
+                // 因为无法确定是哪一档价格变化，发送单档数据会覆盖5档盘口
+                // 依赖 OrderBookSnapshot 定期发送完整5档数据（默认500ms间隔）
+                None
             }
 
             MarketDataEvent::KLineFinished {
@@ -1243,6 +1242,7 @@ impl DiffHandler {
                 timestamp: _,
             } => {
                 // 转换为 DIFF klines 格式（增量推送新K线）
+                // @yutiansut @quantaxis
                 let duration_ns = crate::market::kline::KLinePeriod::from_int(*period)
                     .map(|p| p.to_duration_ns())
                     .unwrap_or(0);
@@ -1251,6 +1251,7 @@ impl DiffHandler {
                 let kline_id = (kline.timestamp * 1_000_000) / duration_ns; // 毫秒转纳秒后除以周期
 
                 // DIFF协议要求datetime为UnixNano（纳秒）
+                // @yutiansut @quantaxis: 使用字符串传输避免JavaScript精度丢失
                 let datetime_ns = kline.timestamp * 1_000_000; // 毫秒转纳秒
 
                 Some(serde_json::json!({
@@ -1259,7 +1260,7 @@ impl DiffHandler {
                             duration_ns.to_string(): {
                                 "data": {
                                     kline_id.to_string(): {
-                                        "datetime": datetime_ns,
+                                        "datetime": datetime_ns.to_string(), // 字符串避免精度丢失
                                         "open": kline.open,
                                         "high": kline.high,
                                         "low": kline.low,

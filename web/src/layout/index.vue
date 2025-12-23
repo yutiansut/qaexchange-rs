@@ -91,6 +91,11 @@
           <i class="el-icon-s-finance"></i>
           <span slot="title">保证金查询</span>
         </el-menu-item>
+        <!-- ✨ 系统公告入口 @yutiansut @quantaxis -->
+        <el-menu-item index="/announcements">
+          <i class="el-icon-bell"></i>
+          <span slot="title">系统公告</span>
+        </el-menu-item>
 
         <!-- 市场监控 -->
         <div class="menu-group-title" v-if="!isCollapsed">市场监控</div>
@@ -155,6 +160,31 @@
 
     <!-- 右侧区域 -->
     <div class="main-container">
+      <!-- ✨ 公告通知栏 @yutiansut @quantaxis -->
+      <transition name="slide-down">
+        <div
+          v-if="showAnnouncementBar && currentAnnouncement"
+          class="announcement-bar"
+          :class="'announcement-' + announcementAlertType"
+        >
+          <div class="announcement-content" @click="goToAnnouncements">
+            <i class="el-icon-bell announcement-icon"></i>
+            <span class="announcement-label">
+              <el-tag size="mini" :type="announcementAlertType === 'error' ? 'danger' : announcementAlertType">
+                {{ currentAnnouncement.announcement_type || '公告' }}
+              </el-tag>
+            </span>
+            <span class="announcement-title">{{ currentAnnouncement.title }}</span>
+            <span v-if="announcements.length > 1" class="announcement-indicator">
+              {{ announcementIndex + 1 }}/{{ announcements.length }}
+            </span>
+          </div>
+          <div class="announcement-close" @click.stop="closeAnnouncementBar">
+            <i class="el-icon-close"></i>
+          </div>
+        </div>
+      </transition>
+
       <!-- 顶部栏 -->
       <div class="top-header">
         <div class="header-left">
@@ -211,13 +241,19 @@
 <script>
 // @yutiansut @quantaxis - 专业量化交易系统布局
 import { mapGetters } from 'vuex'
+import { queryAnnouncements } from '@/api'
 
 export default {
   name: 'Layout',
   data() {
     return {
       isCollapsed: false,
-      isMobile: false
+      isMobile: false,
+      // ✨ 公告系统 @yutiansut @quantaxis
+      announcements: [],
+      showAnnouncementBar: false,
+      announcementIndex: 0,
+      announcementTimer: null
     }
   },
   computed: {
@@ -231,6 +267,22 @@ export default {
     avatarText() {
       const name = this.displayName
       return name ? name.charAt(0).toUpperCase() : 'U'
+    },
+    // ✨ 当前显示的公告 @yutiansut @quantaxis
+    currentAnnouncement() {
+      if (this.announcements.length === 0) return null
+      return this.announcements[this.announcementIndex % this.announcements.length]
+    },
+    // 公告优先级对应的样式类型
+    announcementAlertType() {
+      if (!this.currentAnnouncement) return 'info'
+      const priorityMap = {
+        'Urgent': 'error',
+        'High': 'warning',
+        'Normal': 'info',
+        'Low': 'info'
+      }
+      return priorityMap[this.currentAnnouncement.priority] || 'info'
     },
     pageTitle() {
       const titles = {
@@ -264,7 +316,8 @@ export default {
         // Phase 13: 管理端功能 @yutiansut @quantaxis
         '/admin-account-freeze': '账户状态管理',
         '/admin-audit-logs': '审计日志',
-        '/admin-announcements': '系统公告'
+        '/admin-announcements': '系统公告',
+        '/announcements': '系统公告'  // ✨ 用户端公告页面 @yutiansut @quantaxis
       }
       return titles[this.$route.path] || '量化交易系统'
     }
@@ -272,9 +325,15 @@ export default {
   mounted() {
     this.checkMobile()
     window.addEventListener('resize', this.checkMobile)
+    // ✨ 加载公告 @yutiansut @quantaxis
+    this.loadAnnouncements()
   },
   beforeDestroy() {
     window.removeEventListener('resize', this.checkMobile)
+    // ✨ 清理公告轮播定时器 @yutiansut @quantaxis
+    if (this.announcementTimer) {
+      clearInterval(this.announcementTimer)
+    }
   },
   methods: {
     handleMenuSelect(index) {
@@ -301,6 +360,52 @@ export default {
       if (this.isMobile) {
         this.isCollapsed = true
       }
+    },
+    // ✨ 加载公告列表 @yutiansut @quantaxis
+    async loadAnnouncements() {
+      try {
+        const res = await queryAnnouncements({ active_only: true, page_size: 20 })
+        // 过滤有效期内的公告
+        const now = Date.now()
+        this.announcements = (res.announcements || []).filter(a => {
+          const from = a.effective_from ? a.effective_from * 1000 : 0
+          const until = a.effective_until ? a.effective_until * 1000 : Number.MAX_SAFE_INTEGER
+          return now >= from && now <= until
+        })
+        // 按优先级排序：Urgent > High > Normal > Low
+        const priorityOrder = { 'Urgent': 0, 'High': 1, 'Normal': 2, 'Low': 3 }
+        this.announcements.sort((a, b) =>
+          (priorityOrder[a.priority] || 3) - (priorityOrder[b.priority] || 3)
+        )
+        if (this.announcements.length > 0) {
+          this.showAnnouncementBar = true
+          this.startAnnouncementRotation()
+        }
+      } catch (error) {
+        console.error('加载公告失败', error)
+      }
+    },
+    // ✨ 开始公告轮播 @yutiansut @quantaxis
+    startAnnouncementRotation() {
+      if (this.announcementTimer) {
+        clearInterval(this.announcementTimer)
+      }
+      if (this.announcements.length > 1) {
+        this.announcementTimer = setInterval(() => {
+          this.announcementIndex = (this.announcementIndex + 1) % this.announcements.length
+        }, 8000) // 每8秒切换一条
+      }
+    },
+    // ✨ 关闭公告栏 @yutiansut @quantaxis
+    closeAnnouncementBar() {
+      this.showAnnouncementBar = false
+      if (this.announcementTimer) {
+        clearInterval(this.announcementTimer)
+      }
+    },
+    // ✨ 点击公告查看详情 @yutiansut @quantaxis
+    goToAnnouncements() {
+      this.$router.push('/announcements')
     }
   }
 }
@@ -619,6 +724,103 @@ $dark-text-secondary: #8b949e;
 
 .fade-enter,
 .fade-leave-to {
+  opacity: 0;
+}
+
+// ✨ 公告通知栏样式 @yutiansut @quantaxis
+.announcement-bar {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  background: rgba($primary-color, 0.15);
+  border-bottom: 1px solid rgba($primary-color, 0.3);
+  transition: all 0.3s ease;
+
+  &.announcement-warning {
+    background: rgba(250, 173, 20, 0.15);
+    border-bottom-color: rgba(250, 173, 20, 0.3);
+  }
+
+  &.announcement-error {
+    background: rgba(245, 108, 108, 0.15);
+    border-bottom-color: rgba(245, 108, 108, 0.3);
+  }
+
+  .announcement-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    flex: 1;
+    overflow: hidden;
+
+    &:hover .announcement-title {
+      color: $primary-color;
+    }
+  }
+
+  .announcement-icon {
+    color: $primary-color;
+    font-size: 16px;
+    animation: bell-ring 2s infinite;
+  }
+
+  .announcement-label {
+    flex-shrink: 0;
+  }
+
+  .announcement-title {
+    color: $dark-text-primary;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color 0.2s ease;
+  }
+
+  .announcement-indicator {
+    color: $dark-text-secondary;
+    font-size: 12px;
+    flex-shrink: 0;
+    padding: 2px 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+  }
+
+  .announcement-close {
+    cursor: pointer;
+    padding: 4px;
+    color: $dark-text-secondary;
+    transition: color 0.2s ease;
+    flex-shrink: 0;
+
+    &:hover {
+      color: $dark-text-primary;
+    }
+
+    i {
+      font-size: 16px;
+    }
+  }
+}
+
+@keyframes bell-ring {
+  0%, 50%, 100% { transform: rotate(0); }
+  10%, 30% { transform: rotate(10deg); }
+  20%, 40% { transform: rotate(-10deg); }
+}
+
+// 公告栏滑入动画
+.slide-down-enter-active,
+.slide-down-leave-active {
+  transition: all 0.3s ease;
+}
+
+.slide-down-enter,
+.slide-down-leave-to {
+  transform: translateY(-100%);
   opacity: 0;
 }
 

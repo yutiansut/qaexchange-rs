@@ -309,33 +309,17 @@ impl WsMessageHandler {
             ClientMessage::QueryPosition { instrument_id } => {
                 match self.account_mgr.get_account(user_id) {
                     Ok(account) => {
-                        let acc = account.read();
+                        // @yutiansut @quantaxis: 直接用 qars 的 get_qifi_slice() 获取完整 QIFI
+                        let mut acc = account.write();
+                        let qifi = acc.get_qifi_slice();
+                        // positions 已经是 HashMap<String, Position>，直接序列化
                         let positions: Vec<_> = if let Some(ref inst_id) = instrument_id {
-                            // 查询特定合约的持仓
-                            acc.hold.iter()
-                                .filter(|(code, _)| *code == inst_id)
-                                .map(|(code, pos)| {
-                                    serde_json::json!({
-                                        "instrument_id": code,
-                                        "volume_long": pos.volume_long_today + pos.volume_long_his,
-                                        "volume_short": pos.volume_short_today + pos.volume_short_his,
-                                        "cost_long": pos.open_price_long,
-                                        "cost_short": pos.open_price_short,
-                                    })
-                                })
-                                .collect()
+                            qifi.positions.get(inst_id)
+                                .map(|pos| vec![serde_json::to_value(pos).unwrap()])
+                                .unwrap_or_default()
                         } else {
-                            // 查询所有持仓
-                            acc.hold.iter()
-                                .map(|(code, pos)| {
-                                    serde_json::json!({
-                                        "instrument_id": code,
-                                        "volume_long": pos.volume_long_today + pos.volume_long_his,
-                                        "volume_short": pos.volume_short_today + pos.volume_short_his,
-                                        "cost_long": pos.open_price_long,
-                                        "cost_short": pos.open_price_short,
-                                    })
-                                })
+                            qifi.positions.values()
+                                .map(|pos| serde_json::to_value(pos).unwrap())
                                 .collect()
                         };
 

@@ -655,6 +655,49 @@ impl TradeGateway {
 
         self.emit_order_status(order_status)?;
 
+        // Phase 14: 写入订单状态更新到 WAL @yutiansut @quantaxis
+        // 订单接受，状态=0 (ALIVE)
+        let direction_u8 = match direction {
+            "BUY" => 0,
+            "SELL" => 1,
+            _ => 0,
+        };
+        let offset_u8 = match offset {
+            "OPEN" => 0,
+            "CLOSE" => 1,
+            "CLOSETODAY" => 2,
+            _ => 0,
+        };
+
+        // 获取当前冻结保证金（从账户中读取）
+        let frozen_margin = if let Ok(account) = self.account_mgr.get_account(user_id) {
+            let acc = account.read();
+            acc.frozen.get(order_id)
+                .map(|frozen_order| frozen_order.money)
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+
+        if let Err(e) = self.write_order_status_update(
+            order_id, // qars 内部订单ID
+            user_id,
+            instrument_id,
+            0, // ALIVE
+            volume,    // volume_orign
+            volume,    // volume_left (全部未成交)
+            0.0,       // volume_filled (尚未成交)
+            frozen_margin,
+            0.0,       // frozen_amount
+            direction_u8,
+            offset_u8,
+            price,
+            0.0,       // avg_price (尚未成交)
+            "订单接受",
+        ) {
+            log::error!("Failed to write OrderStatusUpdate WAL for accepted order: {}", e);
+        }
+
         log::info!(
             "Order accepted: exchange_order_id={}, instrument={}, user={}, order_id={}",
             exchange_order_id,
@@ -703,6 +746,39 @@ impl TradeGateway {
         };
 
         self.emit_order_status(order_status)?;
+
+        // Phase 14: 写入订单状态更新到 WAL @yutiansut @quantaxis
+        // 订单拒绝，状态=3 (REJECTED)
+        let direction_u8 = match direction {
+            "BUY" => 0,
+            "SELL" => 1,
+            _ => 0,
+        };
+        let offset_u8 = match offset {
+            "OPEN" => 0,
+            "CLOSE" => 1,
+            "CLOSETODAY" => 2,
+            _ => 0,
+        };
+
+        if let Err(e) = self.write_order_status_update(
+            order_id, // qars 内部订单ID
+            user_id,
+            instrument_id,
+            3, // REJECTED
+            volume,    // volume_orign
+            volume,    // volume_left (全部未成交)
+            0.0,       // volume_filled
+            0.0,       // frozen_margin (未冻结)
+            0.0,       // frozen_amount
+            direction_u8,
+            offset_u8,
+            price,
+            0.0,       // avg_price
+            reason,    // 拒绝原因
+        ) {
+            log::error!("Failed to write OrderStatusUpdate WAL for rejected order: {}", e);
+        }
 
         log::warn!(
             "Order rejected: exchange_order_id={}, instrument={}, user={}, order_id={}, reason={}",
@@ -876,6 +952,54 @@ impl TradeGateway {
         log::info!("✅ Account updated after trade: order_id={}, status={}, volume_left={}",
             order_id, order_status, volume_left);
 
+        // Phase 14: 写入订单状态更新到 WAL @yutiansut @quantaxis
+        // 根据成交后的剩余量判断状态
+        let status_u8 = if volume_left <= 0.0 {
+            1 // FINISHED (全部成交)
+        } else {
+            4 // PARTIALLY_FILLED (部分成交)
+        };
+        let direction_u8 = match direction {
+            "BUY" => 0,
+            "SELL" => 1,
+            _ => 0,
+        };
+        let offset_u8 = match offset {
+            "OPEN" => 0,
+            "CLOSE" => 1,
+            "CLOSETODAY" => 2,
+            _ => 0,
+        };
+
+        // 获取当前冻结保证金（从账户中读取）
+        let frozen_margin = if let Ok(account) = self.account_mgr.get_account(user_id) {
+            let acc = account.read();
+            acc.frozen.get(qa_order_id)
+                .map(|frozen_order| frozen_order.money)
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+
+        if let Err(e) = self.write_order_status_update(
+            qa_order_id, // 使用 qars 内部订单ID
+            user_id,
+            instrument_id,
+            status_u8,
+            volume + volume_left, // volume_orign (近似原始委托量)
+            volume_left,          // volume_left
+            volume,               // volume_filled (本次成交量)
+            frozen_margin,        // frozen_margin
+            0.0,                  // frozen_amount
+            direction_u8,
+            offset_u8,
+            price,
+            price, // avg_price (简化处理，用本次成交价)
+            if status_u8 == 1 { "全部成交" } else { "部分成交" },
+        ) {
+            log::error!("Failed to write OrderStatusUpdate WAL after trade: {}", e);
+        }
+
         let trade_notification = self.create_trade_notification(
             order_id,
             user_id,
@@ -988,6 +1112,39 @@ impl TradeGateway {
         };
 
         self.emit_order_status(order_status)?;
+
+        // Phase 14: 写入订单状态更新到 WAL @yutiansut @quantaxis
+        // 撤单成功，状态=2 (CANCELLED)
+        let direction_u8 = match direction {
+            "BUY" => 0,
+            "SELL" => 1,
+            _ => 0,
+        };
+        let offset_u8 = match offset {
+            "OPEN" => 0,
+            "CLOSE" => 1,
+            "CLOSETODAY" => 2,
+            _ => 0,
+        };
+
+        if let Err(e) = self.write_order_status_update(
+            qa_order_id, // 使用 qars 内部订单ID
+            user_id,
+            instrument_id,
+            2, // CANCELLED
+            remaining_volume, // volume_orign (已撤单量)
+            0.0,              // volume_left (全部撤销)
+            0.0,              // volume_filled (撤单不涉及成交)
+            0.0,              // frozen_margin (已释放)
+            0.0,              // frozen_amount (已释放)
+            direction_u8,
+            offset_u8,
+            price,
+            0.0,              // avg_price (撤单不涉及成交)
+            "用户撤单",       // last_msg
+        ) {
+            log::error!("Failed to write OrderStatusUpdate WAL for cancelled order: {}", e);
+        }
 
         log::info!(
             "Cancel accepted: exchange_order_id={}, instrument={}, user={}, order_id={}, qa_order_id={}",
@@ -1222,6 +1379,174 @@ impl TradeGateway {
         log::debug!("Created account WAL manager for {}: {}", user_id, wal_dir);
 
         Ok(wal_mgr)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 14: 订单状态 WAL 持久化
+    // @yutiansut @quantaxis
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// 写入订单状态更新到 WAL
+    ///
+    /// 用于记录订单生命周期中的状态变化，恢复时重建 dailyorders 和 frozen
+    ///
+    /// # 参数
+    /// - `order_id`: qars 内部订单ID
+    /// - `user_id`: 账户ID
+    /// - `instrument_id`: 合约ID（格式：EXCHANGE.SYMBOL）
+    /// - `status`: 订单状态 (0=ALIVE, 1=FINISHED, 2=CANCELLED, 3=REJECTED, 4=PARTIALLY_FILLED)
+    /// - `volume_orign`: 原始委托量
+    /// - `volume_left`: 剩余未成交量
+    /// - `volume_filled`: 已成交量
+    /// - `frozen_margin`: 当前冻结保证金
+    /// - `frozen_amount`: 当前冻结资金
+    /// - `direction`: 方向 (0=BUY, 1=SELL)
+    /// - `offset`: 开平 (0=OPEN, 1=CLOSE, 2=CLOSETODAY)
+    /// - `limit_price`: 委托价格
+    /// - `avg_price`: 成交均价
+    /// - `last_msg`: 最后消息（撤单原因等）
+    pub fn write_order_status_update(
+        &self,
+        order_id: &str,
+        user_id: &str,
+        instrument_id: &str,
+        status: u8,
+        volume_orign: f64,
+        volume_left: f64,
+        volume_filled: f64,
+        frozen_margin: f64,
+        frozen_amount: f64,
+        direction: u8,
+        offset: u8,
+        limit_price: f64,
+        avg_price: f64,
+        last_msg: &str,
+    ) -> Result<(), ExchangeError> {
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
+
+        let record = WalRecord::OrderStatusUpdate {
+            order_id: WalRecord::to_fixed_array_64(order_id),
+            user_id: WalRecord::to_fixed_array_32(user_id),
+            instrument_id: WalRecord::to_fixed_array_16(instrument_id),
+            status,
+            volume_orign,
+            volume_left,
+            volume_filled,
+            frozen_margin,
+            frozen_amount,
+            direction,
+            offset,
+            limit_price,
+            avg_price,
+            last_msg: WalRecord::to_fixed_array_128(last_msg),
+            timestamp,
+        };
+
+        // 获取或创建 account WAL manager
+        let account_wal_mgr = self.get_or_create_account_wal(user_id)?;
+
+        // 持久化 WAL record
+        account_wal_mgr.append(record).map_err(|e| {
+            ExchangeError::StorageError(format!("Failed to append OrderStatusUpdate: {}", e))
+        })?;
+
+        log::debug!(
+            "📝 OrderStatusUpdate WAL: order={}, status={}, volume_left={}, frozen={}",
+            order_id,
+            status,
+            volume_left,
+            frozen_margin
+        );
+
+        Ok(())
+    }
+
+    /// 写入持仓快照到 WAL
+    ///
+    /// 用于定期保存持仓状态，恢复时重建 hold HashMap
+    ///
+    /// @yutiansut @quantaxis
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_position_snapshot(
+        &self,
+        user_id: &str,
+        instrument_id: &str,
+        exchange_id: &str,
+        volume_long_today: f64,
+        volume_long_his: f64,
+        volume_long_frozen_today: f64,
+        volume_long_frozen_his: f64,
+        open_price_long: f64,
+        open_cost_long: f64,
+        position_price_long: f64,
+        position_cost_long: f64,
+        margin_long: f64,
+        volume_short_today: f64,
+        volume_short_his: f64,
+        volume_short_frozen_today: f64,
+        volume_short_frozen_his: f64,
+        open_price_short: f64,
+        open_cost_short: f64,
+        position_price_short: f64,
+        position_cost_short: f64,
+        margin_short: f64,
+        float_profit_long: f64,
+        float_profit_short: f64,
+        position_profit_long: f64,
+        position_profit_short: f64,
+        last_price: f64,
+    ) -> Result<(), ExchangeError> {
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
+
+        let record = WalRecord::PositionSnapshot {
+            user_id: WalRecord::to_fixed_array_32(user_id),
+            instrument_id: WalRecord::to_fixed_array_16(instrument_id),
+            exchange_id: WalRecord::to_fixed_array_16(exchange_id),
+            volume_long_today,
+            volume_long_his,
+            volume_long_frozen_today,
+            volume_long_frozen_his,
+            open_price_long,
+            open_cost_long,
+            position_price_long,
+            position_cost_long,
+            margin_long,
+            volume_short_today,
+            volume_short_his,
+            volume_short_frozen_today,
+            volume_short_frozen_his,
+            open_price_short,
+            open_cost_short,
+            position_price_short,
+            position_cost_short,
+            margin_short,
+            float_profit_long,
+            float_profit_short,
+            position_profit_long,
+            position_profit_short,
+            last_price,
+            timestamp,
+        };
+
+        // 获取或创建 account WAL manager
+        let account_wal_mgr = self.get_or_create_account_wal(user_id)?;
+
+        // 持久化 WAL record
+        account_wal_mgr.append(record).map_err(|e| {
+            ExchangeError::StorageError(format!("Failed to append PositionSnapshot: {}", e))
+        })?;
+
+        log::debug!(
+            "📝 PositionSnapshot WAL: user={}, instrument={}, long={}/{}, short={}/{}",
+            user_id,
+            instrument_id,
+            volume_long_today,
+            volume_long_his,
+            volume_short_today,
+            volume_short_his
+        );
+
+        Ok(())
     }
 
     /// 创建成交通知

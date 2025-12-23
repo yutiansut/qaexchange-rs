@@ -67,6 +67,15 @@ impl WebSocketServer {
 
         // 创建 DIFF 协议处理器（零拷贝架构）
         let snapshot_mgr = Arc::new(SnapshotManager::new());
+
+        // ✨ 关键修复：将 snapshot_mgr 设置到 trade_gateway，实现成交/订单实时推送 @yutiansut @quantaxis
+        // 这样 TradeGateway 的 handle_filled/handle_cancel 等方法才能通过 SnapshotManager 推送数据
+        unsafe {
+            let trade_gateway_ptr = Arc::as_ptr(&trade_gateway) as *mut TradeGateway;
+            (*trade_gateway_ptr).set_snapshot_manager(snapshot_mgr.clone());
+        }
+        log::info!("✅ SnapshotManager connected to TradeGateway for real-time order/trade push");
+
         let diff_handler = Arc::new(
             DiffHandler::new(snapshot_mgr, account_mgr) // ✨ 传递 account_mgr
                 .with_user_manager(user_manager.clone())

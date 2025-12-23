@@ -129,6 +129,7 @@ impl UserManager {
                     .map(|s| WalRecord::to_fixed_array_32(s))
                     .unwrap_or([0u8; 32]),
                 created_at: user.created_at,
+                roles_bitmask: UserRole::roles_to_bitmask(&user.roles), // 保存角色 @yutiansut @quantaxis
             };
 
             if let Err(e) = storage.write(user_record) {
@@ -361,6 +362,19 @@ impl UserManager {
         let mut user = user_arc.write();
         user.add_role(role);
 
+        // 持久化角色更新到WAL @yutiansut @quantaxis
+        if let Some(ref storage) = self.storage {
+            use crate::storage::wal::record::WalRecord;
+            let record = WalRecord::UserRoleUpdate {
+                user_id: WalRecord::to_fixed_array_40(user_id),
+                roles_bitmask: UserRole::roles_to_bitmask(&user.roles),
+                timestamp: chrono::Utc::now().timestamp(),
+            };
+            if let Err(e) = storage.write(record) {
+                log::warn!("Failed to persist role update to WAL: {}", e);
+            }
+        }
+
         log::info!("Role {:?} added to user {}", role, user_id);
         Ok(())
     }
@@ -375,6 +389,19 @@ impl UserManager {
         let mut user = user_arc.write();
         user.remove_role(role);
 
+        // 持久化角色更新到WAL @yutiansut @quantaxis
+        if let Some(ref storage) = self.storage {
+            use crate::storage::wal::record::WalRecord;
+            let record = WalRecord::UserRoleUpdate {
+                user_id: WalRecord::to_fixed_array_40(user_id),
+                roles_bitmask: UserRole::roles_to_bitmask(&user.roles),
+                timestamp: chrono::Utc::now().timestamp(),
+            };
+            if let Err(e) = storage.write(record) {
+                log::warn!("Failed to persist role update to WAL: {}", e);
+            }
+        }
+
         log::info!("Role {:?} removed from user {}", role, user_id);
         Ok(())
     }
@@ -388,6 +415,19 @@ impl UserManager {
 
         let mut user = user_arc.write();
         user.set_roles(roles.clone());
+
+        // 持久化角色更新到WAL @yutiansut @quantaxis
+        if let Some(ref storage) = self.storage {
+            use crate::storage::wal::record::WalRecord;
+            let record = WalRecord::UserRoleUpdate {
+                user_id: WalRecord::to_fixed_array_40(user_id),
+                roles_bitmask: UserRole::roles_to_bitmask(&roles),
+                timestamp: chrono::Utc::now().timestamp(),
+            };
+            if let Err(e) = storage.write(record) {
+                log::warn!("Failed to persist role update to WAL: {}", e);
+            }
+        }
 
         log::info!("Roles {:?} set for user {}", roles, user_id);
         Ok(())

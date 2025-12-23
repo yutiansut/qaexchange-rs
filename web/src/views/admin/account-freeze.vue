@@ -201,20 +201,31 @@ export default {
       }
       this.loading = true
       try {
-        const res = await getAccountStatus(this.searchForm.account_id)
-        if (res.success) {
-          this.accountStatus = res.data
-        } else {
-          this.accountStatus = null
-          this.$message.error(res.error || '账户不存在')
+        // axios拦截器已提取data，直接使用 @yutiansut @quantaxis
+        const data = await getAccountStatus(this.searchForm.account_id)
+        // 转换状态值为前端格式 (ACTIVE -> Active)
+        if (data && data.status) {
+          data.status = this.normalizeStatus(data.status)
         }
+        this.accountStatus = data
       } catch (err) {
         console.error('查询账户状态失败:', err)
         this.accountStatus = null
-        this.$message.error('查询账户状态失败')
+        this.$message.error(err.message || '查询账户状态失败')
       } finally {
         this.loading = false
       }
+    },
+
+    // 转换后端状态格式 @yutiansut @quantaxis
+    normalizeStatus(status) {
+      const statusMap = {
+        'ACTIVE': 'Active',
+        'FROZEN': 'Frozen',
+        'SUSPENDED': 'Suspended',
+        'CLOSED': 'Closed'
+      }
+      return statusMap[status] || status
     },
 
     showFreezeDialog() {
@@ -239,22 +250,19 @@ export default {
         this.submitting = true
         try {
           const data = {
-            admin_token: 'demo_admin_token', // 实际应从登录状态获取
+            admin_token: 'qaexchange_admin_2024', // 管理员令牌 @yutiansut @quantaxis
             account_id: this.accountStatus.account_id,
             freeze_type: this.freezeForm.freeze_type,
             reason: this.freezeForm.reason
           }
-          const res = await freezeAccount(data)
-          if (res.success) {
-            this.$message.success('账户冻结成功')
-            this.freezeDialogVisible = false
-            this.searchAccount() // 刷新状态
-          } else {
-            this.$message.error(res.error || '冻结失败')
-          }
+          // axios拦截器已处理响应 @yutiansut @quantaxis
+          await freezeAccount(data)
+          this.$message.success('账户冻结成功')
+          this.freezeDialogVisible = false
+          this.searchAccount() // 刷新状态
         } catch (err) {
           console.error('冻结账户失败:', err)
-          this.$message.error('冻结账户失败')
+          this.$message.error(err.message || '冻结账户失败')
         } finally {
           this.submitting = false
         }
@@ -268,21 +276,18 @@ export default {
         this.submitting = true
         try {
           const data = {
-            admin_token: 'demo_admin_token', // 实际应从登录状态获取
+            admin_token: 'qaexchange_admin_2024', // 管理员令牌 @yutiansut @quantaxis
             account_id: this.accountStatus.account_id,
             reason: this.unfreezeForm.reason
           }
-          const res = await unfreezeAccount(data)
-          if (res.success) {
-            this.$message.success('账户解冻成功')
-            this.unfreezeDialogVisible = false
-            this.searchAccount() // 刷新状态
-          } else {
-            this.$message.error(res.error || '解冻失败')
-          }
+          // axios拦截器已处理响应 @yutiansut @quantaxis
+          await unfreezeAccount(data)
+          this.$message.success('账户解冻成功')
+          this.unfreezeDialogVisible = false
+          this.searchAccount() // 刷新状态
         } catch (err) {
           console.error('解冻账户失败:', err)
-          this.$message.error('解冻账户失败')
+          this.$message.error(err.message || '解冻账户失败')
         } finally {
           this.submitting = false
         }

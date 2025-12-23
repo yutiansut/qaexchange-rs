@@ -131,16 +131,29 @@ export default {
         const periodKlines = instrumentKlines[durationNs]
         if (!periodKlines || !periodKlines.data) return
 
-        // 转换K线数据格式
-        const klineArray = Object.values(periodKlines.data).map(k => ({
-          datetime: k.datetime / 1000000,
-          open: k.open,
-          high: k.high,
-          low: k.low,
-          close: k.close,
-          volume: k.volume,
-          amount: k.amount || (k.volume * k.close)
-        }))
+        // 转换K线数据格式 @yutiansut @quantaxis
+        // DIFF协议使用纳秒时间戳（字符串格式避免JavaScript精度丢失）
+        // 需要将纳秒字符串转换为毫秒数字用于Date对象
+        const klineArray = Object.values(periodKlines.data).map(k => {
+          // 处理纳秒时间戳：可能是字符串或数字
+          let datetimeMs
+          if (typeof k.datetime === 'string') {
+            // 字符串格式：使用BigInt精确转换后除以1000000
+            datetimeMs = Number(BigInt(k.datetime) / BigInt(1000000))
+          } else {
+            // 数字格式：直接除以1000000（可能有精度损失但仍可用）
+            datetimeMs = Math.floor(k.datetime / 1000000)
+          }
+          return {
+            datetime: datetimeMs,
+            open: k.open,
+            high: k.high,
+            low: k.low,
+            close: k.close,
+            volume: k.volume,
+            amount: k.amount || (k.volume * k.close)
+          }
+        })
 
         klineArray.sort((a, b) => a.datetime - b.datetime)
         this.klineDataList = klineArray

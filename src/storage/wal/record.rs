@@ -22,6 +22,9 @@
 // 支持的记录类型：
 // - AccountOpen/AccountUpdate: 账户数据
 // - OrderInsert/TradeExecuted: 用户订单和成交
+// - OrderStatusUpdate: 订单状态变更（部分成交、撤单等）✨ Phase 14
+// - PositionSnapshot: 持仓快照 ✨ Phase 14
+// - AccountSnapshot: 账户完整快照（含订单、持仓、冻结）✨ Phase 14
 // - ExchangeOrderRecord/ExchangeTradeRecord: 交易所逐笔数据
 // - TickData/OrderBookSnapshot/OrderBookDelta: 行情数据
 // - KLineFinished: K线数据（多周期）
@@ -123,6 +126,10 @@ pub enum WalRecord {
         phone: [u8; 16],         // 手机号（可选）
         email: [u8; 32],         // 邮箱（可选）
         created_at: i64,         // 创建时间戳
+        /// 用户角色位掩码 @yutiansut @quantaxis
+        /// bit 0: Trader, bit 1: Analyst, bit 2: ReadOnly,
+        /// bit 3: RiskManager, bit 4: Settlement, bit 7: Admin
+        roles_bitmask: u8,
     },
 
     /// 账户绑定到用户
@@ -130,6 +137,13 @@ pub enum WalRecord {
         user_id: [u8; 40],    // 用户ID (UUID, 36 chars + padding)
         account_id: [u8; 40], // 账户ID (UUID, 36 chars + padding)
         timestamp: i64,       // 绑定时间戳
+    },
+
+    /// 用户角色更新 @yutiansut @quantaxis
+    UserRoleUpdate {
+        user_id: [u8; 40],    // 用户ID (UUID, 36 chars + padding)
+        roles_bitmask: u8,    // 新的角色位掩码
+        timestamp: i64,       // 更新时间戳
     },
 
     /// 交易所内部逐笔委托记录 (Phase 5)
@@ -231,6 +245,109 @@ pub enum WalRecord {
         update_count: u64,          // 更新计数
         checkpoint_id: u64,         // 检查点ID
         timestamp: i64,             // 快照时间戳（纳秒）
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 14: 订单生命周期和账户恢复增强
+    // @yutiansut @quantaxis
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// 订单状态更新 (Phase 14)
+    /// 用于记录订单生命周期中的状态变化：部分成交、撤单等
+    /// 恢复时重建 dailyorders 和 frozen_margin
+    ///
+    /// 状态码:
+    /// - 0: ALIVE (活跃/待成交)
+    /// - 1: FINISHED (全部成交)
+    /// - 2: CANCELLED (已撤单)
+    /// - 3: REJECTED (被拒绝)
+    /// - 4: PARTIALLY_FILLED (部分成交中)
+    OrderStatusUpdate {
+        order_id: [u8; 64],      // 订单ID (qars内部ID)
+        user_id: [u8; 32],       // 用户/账户ID
+        instrument_id: [u8; 16], // 合约ID
+        status: u8,              // 订单状态: 0=ALIVE, 1=FINISHED, 2=CANCELLED, 3=REJECTED, 4=PARTIALLY_FILLED
+        volume_orign: f64,       // 原始委托量
+        volume_left: f64,        // 剩余未成交量
+        volume_filled: f64,      // 已成交量
+        frozen_margin: f64,      // 当前冻结保证金
+        frozen_amount: f64,      // 当前冻结资金（开仓用）
+        direction: u8,           // 0=BUY, 1=SELL
+        offset: u8,              // 0=OPEN, 1=CLOSE, 2=CLOSETODAY
+        limit_price: f64,        // 委托价格
+        avg_price: f64,          // 成交均价（部分成交时）
+        last_msg: [u8; 128],     // 最后消息（撤单原因等）
+        timestamp: i64,          // 纳秒时间戳
+    },
+
+    /// 持仓快照 (Phase 14)
+    /// 用于定期保存持仓状态，支持快速恢复
+    /// 每个合约独立记录，恢复时重建 hold HashMap
+    PositionSnapshot {
+        user_id: [u8; 32],       // 用户/账户ID
+        instrument_id: [u8; 16], // 合约ID
+        exchange_id: [u8; 16],   // 交易所ID
+        // 多头持仓
+        volume_long_today: f64,        // 今日多头
+        volume_long_his: f64,          // 昨日多头
+        volume_long_frozen_today: f64, // 今日多头冻结
+        volume_long_frozen_his: f64,   // 昨日多头冻结
+        open_price_long: f64,          // 多头开仓均价
+        open_cost_long: f64,           // 多头开仓成本
+        position_price_long: f64,      // 多头持仓均价
+        position_cost_long: f64,       // 多头持仓成本
+        margin_long: f64,              // 多头保证金
+        // 空头持仓
+        volume_short_today: f64,        // 今日空头
+        volume_short_his: f64,          // 昨日空头
+        volume_short_frozen_today: f64, // 今日空头冻结
+        volume_short_frozen_his: f64,   // 昨日空头冻结
+        open_price_short: f64,          // 空头开仓均价
+        open_cost_short: f64,           // 空头开仓成本
+        position_price_short: f64,      // 空头持仓均价
+        position_cost_short: f64,       // 空头持仓成本
+        margin_short: f64,              // 空头保证金
+        // 盈亏
+        float_profit_long: f64,    // 多头浮动盈亏
+        float_profit_short: f64,   // 空头浮动盈亏
+        position_profit_long: f64, // 多头持仓盈亏
+        position_profit_short: f64, // 空头持仓盈亏
+        last_price: f64,           // 最新价格
+        timestamp: i64,            // 纳秒时间戳
+    },
+
+    /// 账户完整快照 (Phase 14)
+    /// 用于定期保存账户完整状态，支持快速恢复
+    /// 包含资金、持仓数量、订单数量等汇总信息
+    /// 详细的持仓和订单通过 PositionSnapshot 和 OrderStatusUpdate 恢复
+    AccountSnapshot {
+        account_id: [u8; 64],    // 账户ID
+        user_id: [u8; 32],       // 用户ID（所有者）
+        // 资金状态
+        balance: f64,            // 账户权益
+        available: f64,          // 可用资金
+        frozen: f64,             // 冻结资金总额
+        margin: f64,             // 占用保证金
+        frozen_margin: f64,      // 冻结保证金（挂单用）
+        frozen_commission: f64,  // 冻结手续费
+        // 盈亏
+        close_profit: f64,       // 平仓盈亏
+        position_profit: f64,    // 持仓盈亏
+        float_profit: f64,       // 浮动盈亏
+        commission: f64,         // 手续费
+        // 出入金
+        deposit: f64,            // 入金
+        withdraw: f64,           // 出金
+        pre_balance: f64,        // 上日权益
+        static_balance: f64,     // 静态权益
+        // 汇总
+        position_count: u16,     // 持仓合约数量
+        order_count: u16,        // 活跃订单数量
+        trade_count: u16,        // 今日成交数量
+        // 检查点
+        checkpoint_id: u64,      // 检查点ID
+        last_sequence: u64,      // 最后处理的WAL序列号
+        timestamp: i64,          // 纳秒时间戳
     },
 }
 

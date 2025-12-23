@@ -243,12 +243,15 @@ export default {
           // 如果有多头持仓
           if (pos.volume_long > 0) {
             const positionValue = pos.volume_long * lastPrice * 300
+            // @yutiansut @quantaxis: 可平量 = 持仓量 - 冻结量
+            const frozenLong = pos.volume_long_frozen || 0
             positions.push({
               account_id: pos.account_id,  // 保存account_id（用于平仓）
               instrument_id: pos.instrument_id,
               direction: 'LONG',
               volume: pos.volume_long,
-              available: pos.volume_long, // 假设全部可平
+              available: Math.max(0, pos.volume_long - frozenLong), // 可平量 = 持仓 - 冻结
+              frozen: frozenLong,
               open_price: pos.cost_long,
               last_price: lastPrice,
               position_value: positionValue,
@@ -261,12 +264,15 @@ export default {
           // 如果有空头持仓
           if (pos.volume_short > 0) {
             const positionValue = pos.volume_short * lastPrice * 300
+            // @yutiansut @quantaxis: 可平量 = 持仓量 - 冻结量
+            const frozenShort = pos.volume_short_frozen || 0
             positions.push({
               account_id: pos.account_id,  // 保存account_id（用于平仓）
               instrument_id: pos.instrument_id,
               direction: 'SHORT',
               volume: pos.volume_short,
-              available: pos.volume_short, // 假设全部可平
+              available: Math.max(0, pos.volume_short - frozenShort), // 可平量 = 持仓 - 冻结
+              frozen: frozenShort,
               open_price: pos.cost_short,
               last_price: lastPrice,
               position_value: positionValue,

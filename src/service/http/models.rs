@@ -115,6 +115,8 @@ pub struct PositionInfo {
     pub instrument_id: String,
     pub volume_long: f64,
     pub volume_short: f64,
+    pub volume_long_frozen: f64,   // 多头冻结量 @yutiansut @quantaxis
+    pub volume_short_frozen: f64,  // 空头冻结量 @yutiansut @quantaxis
     pub cost_long: f64,
     pub cost_short: f64,
     pub profit_long: f64,
@@ -135,16 +137,28 @@ pub struct TradeInfo {
 }
 
 /// 入金请求
+///
+/// 支持两种方式 @yutiansut @quantaxis：
+/// 1. 传入 account_id (ACC_xxx 格式) - 直接指定账户
+/// 2. 传入 user_id (UUID 格式) - 自动查找用户的第一个账户
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepositRequest {
-    pub user_id: String,
+    /// 账户ID (优先使用) 或 用户ID (向后兼容)
+    #[serde(alias = "user_id")]
+    pub account_id: String,
     pub amount: f64,
 }
 
 /// 出金请求
+///
+/// 支持两种方式：
+/// 1. 传入 account_id (ACC_xxx 格式) - 直接指定账户
+/// 2. 传入 user_id (UUID 格式) - 自动查找用户的第一个账户
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WithdrawRequest {
-    pub user_id: String,
+    /// 账户ID (优先使用) 或 用户ID (向后兼容)
+    #[serde(alias = "user_id")]
+    pub account_id: String,
     pub amount: f64,
 }
 
@@ -514,6 +528,12 @@ pub struct AccountStatusInfo {
     pub freeze_reason: Option<String>,
     pub frozen_at: Option<i64>,
     pub frozen_by: Option<String>,
+    /// 是否允许交易 @yutiansut @quantaxis
+    #[serde(default)]
+    pub can_trade: bool,
+    /// 是否允许出金
+    #[serde(default)]
+    pub can_withdraw: bool,
 }
 
 // ==================== Phase 13: 审计日志 API Models ====================

@@ -148,12 +148,48 @@
     <div class="footer">
       <p>@yutiansut @quantaxis · QAExchange v1.0</p>
     </div>
+
+    <!-- ✨ 登录公告弹窗 @yutiansut @quantaxis -->
+    <el-dialog
+      title="系统公告"
+      :visible.sync="showAnnouncementDialog"
+      width="600px"
+      :close-on-click-modal="false"
+      custom-class="announcement-dialog"
+      @close="closeAnnouncementDialog"
+    >
+      <div class="announcement-list">
+        <div
+          v-for="(announcement, index) in loginAnnouncements"
+          :key="announcement.id"
+          class="announcement-item"
+        >
+          <div class="announcement-header">
+            <el-tag :type="getPriorityType(announcement.priority)" size="small">
+              {{ announcement.announcement_type || '公告' }}
+            </el-tag>
+            <span class="announcement-date">
+              {{ formatDate(announcement.created_at) }}
+            </span>
+          </div>
+          <h4 class="announcement-title">{{ announcement.title }}</h4>
+          <div class="announcement-content" v-html="announcement.content"></div>
+          <el-divider v-if="index < loginAnnouncements.length - 1"></el-divider>
+        </div>
+      </div>
+      <span slot="footer" class="dialog-footer">
+        <el-button type="primary" @click="closeAnnouncementDialog">
+          我知道了，进入系统
+        </el-button>
+      </span>
+    </el-dialog>
   </div>
 </template>
 
 <script>
 // @yutiansut @quantaxis - 专业量化交易系统登录页面
 import { mapActions } from 'vuex'
+import { queryAnnouncements } from '@/api'
 
 export default {
   name: 'Login',
@@ -172,7 +208,10 @@ export default {
           { required: true, message: '请输入密码', trigger: 'blur' }
         ]
       },
-      loading: false
+      loading: false,
+      // ✨ 登录公告弹窗 @yutiansut @quantaxis
+      showAnnouncementDialog: false,
+      loginAnnouncements: []
     }
   },
   methods: {
@@ -198,8 +237,8 @@ export default {
 
           this.$message.success('登录成功')
 
-          const redirect = this.$route.query.redirect || '/dashboard'
-          this.$router.push(redirect)
+          // ✨ 登录成功后检查公告 @yutiansut @quantaxis
+          await this.checkLoginAnnouncements()
         } catch (error) {
           const errorMsg = (error.response && error.response.data && error.response.data.error) || error.message || '登录失败'
           this.$message.error(errorMsg)
@@ -211,6 +250,66 @@ export default {
 
     goToRegister() {
       this.$router.push({ name: 'Register' })
+    },
+
+    // ✨ 检查登录时的公告 @yutiansut @quantaxis
+    async checkLoginAnnouncements() {
+      try {
+        const res = await queryAnnouncements({ active_only: true, page_size: 10 })
+        const now = Date.now()
+        // 过滤有效期内的公告
+        const validAnnouncements = (res.announcements || []).filter(a => {
+          const from = a.effective_from ? a.effective_from * 1000 : 0
+          const until = a.effective_until ? a.effective_until * 1000 : Number.MAX_SAFE_INTEGER
+          return now >= from && now <= until
+        })
+        // 按优先级排序
+        const priorityOrder = { 'Urgent': 0, 'High': 1, 'Normal': 2, 'Low': 3 }
+        validAnnouncements.sort((a, b) =>
+          (priorityOrder[a.priority] || 3) - (priorityOrder[b.priority] || 3)
+        )
+
+        if (validAnnouncements.length > 0) {
+          this.loginAnnouncements = validAnnouncements
+          this.showAnnouncementDialog = true
+        } else {
+          this.navigateToDashboard()
+        }
+      } catch (error) {
+        console.error('加载公告失败', error)
+        this.navigateToDashboard()
+      }
+    },
+
+    // ✨ 关闭公告弹窗并跳转 @yutiansut @quantaxis
+    closeAnnouncementDialog() {
+      this.showAnnouncementDialog = false
+      this.navigateToDashboard()
+    },
+
+    // ✨ 跳转到首页 @yutiansut @quantaxis
+    navigateToDashboard() {
+      const redirect = this.$route.query.redirect || '/dashboard'
+      this.$router.push(redirect)
+    },
+
+    // ✨ 格式化日期 @yutiansut @quantaxis
+    formatDate(timestamp) {
+      if (!timestamp) return ''
+      const date = new Date(timestamp * 1000)
+      return date.toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    },
+
+    // ✨ 获取公告优先级类型 @yutiansut @quantaxis
+    getPriorityType(priority) {
+      const map = { 'Urgent': 'danger', 'High': 'warning', 'Normal': 'info', 'Low': '' }
+      return map[priority] || 'info'
     }
   }
 }
@@ -619,6 +718,73 @@ $dark-text-muted: #6e7681;
 
   .login-card {
     padding: 32px 24px;
+  }
+}
+
+// ✨ 公告弹窗样式 @yutiansut @quantaxis
+::v-deep .announcement-dialog {
+  background: $dark-bg-secondary !important;
+  border: 1px solid $dark-border;
+  border-radius: 12px;
+
+  .el-dialog__header {
+    border-bottom: 1px solid $dark-border;
+    padding: 16px 20px;
+
+    .el-dialog__title {
+      color: $dark-text-primary;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .el-dialog__headerbtn .el-dialog__close {
+      color: $dark-text-secondary;
+    }
+  }
+
+  .el-dialog__body {
+    padding: 20px;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .el-dialog__footer {
+    border-top: 1px solid $dark-border;
+    padding: 16px 20px;
+  }
+}
+
+.announcement-list {
+  .announcement-item {
+    .announcement-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .announcement-date {
+      color: $dark-text-muted;
+      font-size: 12px;
+    }
+
+    .announcement-title {
+      color: $dark-text-primary;
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0 0 10px;
+    }
+
+    .announcement-content {
+      color: $dark-text-secondary;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    ::v-deep .el-divider {
+      background-color: $dark-border;
+      margin: 16px 0;
+    }
   }
 }
 </style>

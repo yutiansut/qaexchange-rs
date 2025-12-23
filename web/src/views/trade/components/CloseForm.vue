@@ -219,6 +219,13 @@ export default {
       }
     },
 
+    // ✨ 刷新持仓数据，供父组件在下单成功后调用 @yutiansut @quantaxis
+    async refresh() {
+      if (this.form.account_id) {
+        await this.fetchPositions(this.form.account_id)
+      }
+    },
+
     async handleAccountChange(accountId) {
       this.selectedAccount = this.accounts.find(acc => acc.account_id === accountId)
       this.$emit('account-change', accountId)
@@ -263,8 +270,16 @@ export default {
         this.form.volume = 0
         return
       }
-      const volume = this.form.direction === 'LONG' ? position.volume_long : position.volume_short
-      this.availableVolume = Math.max(0, Math.floor(volume))
+      // @yutiansut @quantaxis: 可平量 = 持仓量 - 冻结量
+      let volume, frozen
+      if (this.form.direction === 'LONG') {
+        volume = position.volume_long || 0
+        frozen = position.volume_long_frozen || 0
+      } else {
+        volume = position.volume_short || 0
+        frozen = position.volume_short_frozen || 0
+      }
+      this.availableVolume = Math.max(0, Math.floor(volume - frozen))
       if (this.availableVolume === 0) {
         this.form.volume = 0
       } else if (this.form.volume > this.availableVolume) {

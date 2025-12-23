@@ -285,6 +285,66 @@ impl CapitalManager {
             .map(|entry| entry.value().len())
             .sum()
     }
+
+    /// 获取所有资金流水 (用于管理后台)
+    pub fn get_all_transactions(&self) -> Vec<FundTransaction> {
+        use rayon::prelude::*;
+
+        // 收集所有用户的transactions
+        let all_entries: Vec<_> = self.transactions
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+
+        // 使用rayon并行展开
+        all_entries
+            .into_par_iter()
+            .flatten()
+            .collect()
+    }
+
+    /// 获取所有资金流水 (带分页和筛选)
+    pub fn get_all_transactions_paginated(
+        &self,
+        transaction_type: Option<TransactionType>,
+        page: u32,
+        page_size: u32,
+    ) -> (Vec<FundTransaction>, usize) {
+        use rayon::prelude::*;
+
+        // 收集所有transactions
+        let all_entries: Vec<_> = self.transactions
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+
+        // 并行展开并筛选
+        let mut all_txns: Vec<FundTransaction> = all_entries
+            .into_par_iter()
+            .flatten()
+            .filter(|txn| {
+                match transaction_type {
+                    Some(t) => txn.transaction_type == t,
+                    None => true,
+                }
+            })
+            .collect();
+
+        // 按时间倒序排列
+        all_txns.par_sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        let total = all_txns.len();
+
+        // 分页
+        let start = ((page - 1) * page_size) as usize;
+        let paged: Vec<FundTransaction> = all_txns
+            .into_iter()
+            .skip(start)
+            .take(page_size as usize)
+            .collect();
+
+        (paged, total)
+    }
 }
 
 #[cfg(test)]

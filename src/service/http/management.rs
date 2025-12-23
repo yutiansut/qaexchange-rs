@@ -212,25 +212,186 @@ pub async fn withdraw(
 }
 
 /// 查询资金流水
+///
+/// 合并查询 CapitalManager 和 TransferStore 的记录 @yutiansut @quantaxis
 pub async fn get_transactions(
     user_id: web::Path<String>,
     query: web::Query<TransactionQuery>,
     state: web::Data<ManagementAppState>,
 ) -> Result<HttpResponse> {
-    let transactions = if let (Some(start), Some(end)) = (&query.start_date, &query.end_date) {
-        // 按日期范围查询
+    use crate::exchange::{TransactionStatus, TransactionType};
+    use crate::service::http::transfer::TRANSFER_STORE;
+
+    // 1. 从 CapitalManager 获取记录
+    let mut transactions = if let (Some(start), Some(end)) = (&query.start_date, &query.end_date) {
         state
             .capital_mgr
             .get_transactions_by_date_range(&user_id, start, end)
     } else if let Some(limit) = query.limit {
-        // 查询最近N条
         state.capital_mgr.get_recent_transactions(&user_id, limit)
     } else {
-        // 查询全部
         state.capital_mgr.get_transactions(&user_id)
     };
 
+    // 2. 从 TransferStore 获取记录（通过 user 的所有账户）
+    let accounts = state.account_mgr.get_accounts_by_user(&user_id);
+    for account in accounts {
+        let account_id = account.read().account_cookie.clone();
+        let (transfer_records, _) = TRANSFER_STORE.get_records(&account_id, None, None, None, None);
+
+        // 转换 TransferRecord 为 FundTransaction
+        for record in transfer_records {
+            let transaction = FundTransaction {
+                transaction_id: record.id,
+                user_id: user_id.to_string(),
+                transaction_type: if record.amount >= 0.0 {
+                    TransactionType::Deposit
+                } else {
+                    TransactionType::Withdrawal
+                },
+                amount: record.amount.abs(),
+                balance_before: 0.0,  // TransferStore 不记录这个
+                balance_after: 0.0,   // TransferStore 不记录这个
+                status: if record.error_id == 0 {
+                    TransactionStatus::Completed
+                } else {
+                    TransactionStatus::Failed
+                },
+                method: Some(record.bank_name),
+                remark: Some(record.error_msg),
+                created_at: chrono::DateTime::from_timestamp_millis(record.datetime)
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_default(),
+                updated_at: chrono::DateTime::from_timestamp_millis(record.datetime)
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_default(),
+            };
+            transactions.push(transaction);
+        }
+    }
+
+    // 3. 按时间排序（最新的在前）
+    transactions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+    // 4. 如果有 limit，截取
+    if let Some(limit) = query.limit {
+        transactions.truncate(limit);
+    }
+
     Ok(HttpResponse::Ok().json(ApiResponse::success(transactions)))
+}
+
+/// 查询所有账户的资金流水（不需要指定用户）
+///
+/// @yutiansut @quantaxis
+/// 管理端默认加载全部流水，支持分页和筛选
+pub async fn get_all_transactions(
+    query: web::Query<AllTransactionsQuery>,
+    state: web::Data<ManagementAppState>,
+) -> Result<HttpResponse> {
+    use crate::exchange::{TransactionStatus, TransactionType};
+    use crate::service::http::transfer::TRANSFER_STORE;
+    use rayon::prelude::*;
+
+    // 1. 并行遍历所有账户，从 TransferStore 获取流水
+    let all_accounts = state.account_mgr.get_all_accounts();
+
+    // 先收集账户信息（需要释放锁）
+    let account_infos: Vec<(String, String)> = all_accounts
+        .iter()
+        .map(|account| {
+            let acc = account.read();
+            (acc.account_cookie.clone(), acc.portfolio_cookie.clone())
+        })
+        .collect();
+
+    // 使用 rayon 并行处理每个账户的 TransferStore 记录
+    let transfer_transactions: Vec<FundTransaction> = account_infos
+        .par_iter()
+        .flat_map(|(account_id, user_id)| {
+            let (transfer_records, _) = TRANSFER_STORE.get_records(account_id, None, None, None, None);
+
+            transfer_records.into_iter().map(|record| {
+                FundTransaction {
+                    transaction_id: record.id,
+                    user_id: user_id.clone(),
+                    transaction_type: if record.amount >= 0.0 {
+                        TransactionType::Deposit
+                    } else {
+                        TransactionType::Withdrawal
+                    },
+                    amount: record.amount.abs(),
+                    balance_before: 0.0,
+                    balance_after: 0.0,
+                    status: if record.error_id == 0 {
+                        TransactionStatus::Completed
+                    } else {
+                        TransactionStatus::Failed
+                    },
+                    method: Some(record.bank_name),
+                    remark: Some(format!("{} (账户: {})", record.error_msg, account_id)),
+                    created_at: chrono::DateTime::from_timestamp_millis(record.datetime)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_default(),
+                    updated_at: chrono::DateTime::from_timestamp_millis(record.datetime)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_default(),
+                }
+            }).collect::<Vec<_>>()
+        })
+        .collect();
+
+    // 2. 从 CapitalManager 获取所有用户的流水（已经使用rayon）
+    let capital_transactions = state.capital_mgr.get_all_transactions();
+
+    // 3. 合并流水
+    let mut all_transactions = transfer_transactions;
+    all_transactions.extend(capital_transactions);
+
+    // 4. 使用 rayon 并行排序（最新的在前）
+    all_transactions.par_sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+    // 5. 筛选类型
+    if let Some(ref tx_type) = query.transaction_type {
+        let tx_type_clone = tx_type.clone();
+        all_transactions = all_transactions
+            .into_par_iter()
+            .filter(|t| {
+                match tx_type_clone.as_str() {
+                    "deposit" => matches!(t.transaction_type, TransactionType::Deposit),
+                    "withdrawal" => matches!(t.transaction_type, TransactionType::Withdrawal),
+                    _ => true,
+                }
+            })
+            .collect();
+    }
+
+    // 6. 分页
+    let page = query.page.unwrap_or(1).max(1) as usize;
+    let page_size = query.page_size.unwrap_or(20).min(100) as usize;
+    let total = all_transactions.len();
+    let start = (page - 1) * page_size;
+
+    let paged: Vec<_> = all_transactions
+        .into_iter()
+        .skip(start)
+        .take(page_size)
+        .collect();
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "records": paged,
+        "total": total,
+        "page": page,
+        "page_size": page_size
+    }))))
+}
+
+/// 全部流水查询参数
+#[derive(Debug, Deserialize)]
+pub struct AllTransactionsQuery {
+    pub transaction_type: Option<String>,  // deposit / withdrawal
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
 }
 
 // ============================================================================

@@ -203,7 +203,7 @@ impl RecoveryManager {
             }
 
             // 用户记录（恢复时跳过，用户数据由 UserManager 独立恢复）
-            WalRecord::UserRegister { .. } | WalRecord::AccountBind { .. } => {
+            WalRecord::UserRegister { .. } | WalRecord::AccountBind { .. } | WalRecord::UserRoleUpdate { .. } => {
                 // 用户数据不需要恢复到账户状态，由 UserManager 独立管理
             }
 
@@ -218,6 +218,15 @@ impl RecoveryManager {
             WalRecord::FactorUpdate { .. } | WalRecord::FactorSnapshot { .. } => {
                 // 因子数据不需要恢复到账户状态，因子计算状态由 FactorEngine 独立管理
                 // 可通过 factor/state.rs 的 StateRecovery::load_checkpoint 恢复
+            }
+
+            // Phase 14: 订单生命周期恢复记录
+            // 这些记录由 unified_recovery.rs 处理，此处跳过
+            WalRecord::OrderStatusUpdate { .. }
+            | WalRecord::PositionSnapshot { .. }
+            | WalRecord::AccountSnapshot { .. } => {
+                // 订单状态、持仓快照、账户快照由统一恢复管理器 (UnifiedRecoveryManager) 处理
+                // 此 RecoveryManager 仅处理账户基础状态恢复
             }
         }
 

@@ -782,9 +782,10 @@ pub async fn get_position_analysis(
         // 需要可变引用来调用float_profit方法
         let mut account_write = account.write();
 
+        // @yutiansut @quantaxis: 直接用 qars 的 volume_long()/volume_short()
         for (inst_id, pos) in account_write.hold.iter_mut() {
-            let volume_long = pos.volume_long_today + pos.volume_long_his;
-            let volume_short = pos.volume_short_today + pos.volume_short_his;
+            let volume_long = pos.volume_long();
+            let volume_short = pos.volume_short();
 
             if volume_long > 0.0 {
                 let margin = pos.margin_long;
@@ -884,11 +885,11 @@ pub async fn get_settlement_statement(
         // 需要可变引用来调用float_profit方法
         let mut account_write = account.write();
 
-        // 先收集持仓数据（需要可变引用）
+        // @yutiansut @quantaxis: 直接用 qars 的 volume_long()/volume_short()
         let mut positions = Vec::new();
         for (inst_id, pos) in account_write.hold.iter_mut() {
-            let volume_long = (pos.volume_long_today + pos.volume_long_his) as i64;
-            let volume_short = (pos.volume_short_today + pos.volume_short_his) as i64;
+            let volume_long = pos.volume_long() as i64;
+            let volume_short = pos.volume_short() as i64;
 
             if volume_long > 0 {
                 positions.push(SettlementPosition {
@@ -1068,23 +1069,15 @@ pub async fn export_data(
                 }));
             },
             "positions" => {
-                // 计算float_profit需要：price * volume * unit - open_cost
-                // 这里使用简化计算（不访问unit_table）直接用volume * (price - open_price)
-                let positions: Vec<serde_json::Value> = account_read.hold.iter()
+                // @yutiansut @quantaxis: 释放读锁，获取写锁以调用 qars 的 volume_long()/volume_short()
+                drop(account_read);
+                let mut account_write = account.write();
+                let positions: Vec<serde_json::Value> = account_write.hold.iter_mut()
                     .map(|(id, p)| {
-                        let volume_long = p.volume_long_today + p.volume_long_his;
-                        let volume_short = p.volume_short_today + p.volume_short_his;
-                        // 简化的浮动盈亏计算（基于持仓成本）
-                        let pnl_long = if volume_long > 0.0 && p.position_cost_long > 0.0 {
-                            p.lastest_price * volume_long * p.preset.unit_table as f64 - p.open_cost_long
-                        } else {
-                            0.0
-                        };
-                        let pnl_short = if volume_short > 0.0 && p.position_cost_short > 0.0 {
-                            p.open_cost_short - p.lastest_price * volume_short * p.preset.unit_table as f64
-                        } else {
-                            0.0
-                        };
+                        let volume_long = p.volume_long();
+                        let volume_short = p.volume_short();
+                        let pnl_long = p.float_profit_long();
+                        let pnl_short = p.float_profit_short();
                         serde_json::json!({
                             "instrument_id": id,
                             "exchange_id": p.exchange_id,

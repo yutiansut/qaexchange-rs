@@ -380,14 +380,15 @@ impl AccountManager {
     }
 
     /// 统计指定合约的总持仓量（多空取最大值，避免重复计数）
+    // @yutiansut @quantaxis: 用写锁调用 qars 的 volume_long()/volume_short()
     pub fn get_instrument_open_interest(&self, instrument_id: &str) -> i64 {
         self.accounts
             .iter()
             .map(|entry| {
-                let acc = entry.value().read();
-                if let Some(pos) = acc.get_position_unmut(instrument_id) {
-                    let long_total = pos.volume_long_today + pos.volume_long_his;
-                    let short_total = pos.volume_short_today + pos.volume_short_his;
+                let mut acc = entry.value().write();
+                if let Some(pos) = acc.get_position(instrument_id) {
+                    let long_total = pos.volume_long();
+                    let short_total = pos.volume_short();
                     long_total.max(short_total)
                 } else {
                     0.0

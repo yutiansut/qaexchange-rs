@@ -347,6 +347,16 @@ impl OltpBatchAdapter {
             | WalRecord::Checkpoint { .. } => {
                 result = result.with_value("record_type", RecordValue::String("Metadata".to_string()));
             }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // Phase 14: 订单生命周期恢复记录（用于独立恢复路径）
+            // ═══════════════════════════════════════════════════════════════════
+            WalRecord::OrderStatusUpdate { .. }
+            | WalRecord::PositionSnapshot { .. }
+            | WalRecord::AccountSnapshot { .. }
+            | WalRecord::UserRoleUpdate { .. } => {
+                result = result.with_value("record_type", RecordValue::String("Recovery".to_string()));
+            }
         }
 
         result

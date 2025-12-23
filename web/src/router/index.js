@@ -203,6 +203,13 @@ const routes = [
         component: () => import('@/views/admin/announcements.vue'),
         meta: { title: '系统公告', icon: 'el-icon-bell', group: 'admin', requireAdmin: true, permissions: ['ManageAnnouncements'] }
       },
+      // ✨ 用户公告页面 @yutiansut @quantaxis
+      {
+        path: 'announcements',
+        name: 'Announcements',
+        component: () => import('@/views/announcements/index.vue'),
+        meta: { title: '系统公告', icon: 'el-icon-bell', group: 'user' }
+      },
       // WebSocket 测试页面
       {
         path: 'websocket-test',

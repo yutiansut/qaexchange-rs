@@ -14,6 +14,8 @@ use super::models::{
     BatchOrderRequest, BatchOrderResponse, SingleOrderResult,
     BatchCancelRequest, BatchCancelResponse,
     ModifyOrderRequest, CreateConditionalOrderRequest,
+    // Phase 14: 入金流水记录 @yutiansut @quantaxis
+    TransferRecord,
 };
 use crate::core::account_ext::{AccountType, OpenAccountRequest as CoreOpenAccountRequest};
 use crate::exchange::order_router::{
@@ -662,14 +664,17 @@ pub async fn query_position(
 ) -> Result<HttpResponse> {
     match state.account_mgr.get_account(&account_id) {
         Ok(account) => {
-            let mut acc = account.write(); // 需要 mut 才能调用 float_profit 方法
+            // @yutiansut @quantaxis: 直接用 qars 的 volume_long()/volume_short() 包含冻结量
+            let mut acc = account.write();
             let mut positions = Vec::new();
             for (code, pos) in acc.hold.iter_mut() {
                 positions.push(PositionInfo {
-                    account_id: account_id.to_string(), // 添加account_id
+                    account_id: account_id.to_string(),
                     instrument_id: code.clone(),
-                    volume_long: pos.volume_long_today + pos.volume_long_his,
-                    volume_short: pos.volume_short_today + pos.volume_short_his,
+                    volume_long: pos.volume_long(),
+                    volume_short: pos.volume_short(),
+                    volume_long_frozen: pos.volume_long_frozen(),   // @yutiansut @quantaxis
+                    volume_short_frozen: pos.volume_short_frozen(), // @yutiansut @quantaxis
                     cost_long: pos.open_price_long,
                     cost_short: pos.open_price_short,
                     profit_long: pos.float_profit_long(),
@@ -703,16 +708,19 @@ pub async fn query_positions_by_user(
         )));
     }
 
+    // @yutiansut @quantaxis: 直接用 qars 的 volume_long()/volume_short()
     let mut all_positions = Vec::new();
     for account in accounts {
         let mut acc = account.write();
-        let acc_id = acc.account_cookie.clone(); // 获取account_id
+        let acc_id = acc.account_cookie.clone();
         for (code, pos) in acc.hold.iter_mut() {
             all_positions.push(PositionInfo {
-                account_id: acc_id.clone(), // 添加account_id
+                account_id: acc_id.clone(),
                 instrument_id: code.clone(),
-                volume_long: pos.volume_long_today + pos.volume_long_his,
-                volume_short: pos.volume_short_today + pos.volume_short_his,
+                volume_long: pos.volume_long(),
+                volume_short: pos.volume_short(),
+                volume_long_frozen: pos.volume_long_frozen(),   // @yutiansut @quantaxis
+                volume_short_frozen: pos.volume_short_frozen(), // @yutiansut @quantaxis
                 cost_long: pos.open_price_long,
                 cost_short: pos.open_price_short,
                 profit_long: pos.float_profit_long(),
@@ -725,20 +733,74 @@ pub async fn query_positions_by_user(
 }
 
 /// 入金
+///
+/// 支持两种方式 @yutiansut @quantaxis：
+/// 1. 传入 account_id (ACC_xxx 格式) - 直接指定账户（推荐）
+/// 2. 传入 user_id (UUID 格式) - 仅当用户只有一个账户时有效
+///
+/// 注意：如果用户有多个账户，必须使用 account_id 指定具体账户
 pub async fn deposit(
     req: web::Json<DepositRequest>,
     state: web::Data<Arc<AppState>>,
 ) -> Result<HttpResponse> {
-    match state.account_mgr.get_account(&req.user_id) {
+    use crate::service::http::transfer::TRANSFER_STORE;
+    use chrono::Utc;
+
+    // 尝试直接获取账户，如果失败且ID不是ACC_开头，则尝试按user_id查找
+    let account = if req.account_id.starts_with("ACC_") {
+        state.account_mgr.get_account(&req.account_id)
+    } else {
+        // 尝试按 user_id 查找用户的账户
+        let accounts = state.account_mgr.get_accounts_by_user(&req.account_id);
+        if accounts.is_empty() {
+            Err(crate::ExchangeError::AccountError(format!(
+                "No accounts found for user: {}",
+                req.account_id
+            )))
+        } else if accounts.len() > 1 {
+            // 用户有多个账户，必须指定 account_id
+            let account_ids: Vec<String> = accounts
+                .iter()
+                .map(|a| a.read().account_cookie.clone())
+                .collect();
+            return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+                400,
+                format!(
+                    "User has {} accounts, please specify account_id: {:?}",
+                    accounts.len(),
+                    account_ids
+                ),
+            )));
+        } else {
+            Ok(accounts[0].clone())
+        }
+    };
+
+    match account {
         Ok(account) => {
             let mut acc = account.write();
+            let account_id = acc.account_cookie.clone();
             // 使用 QA_Account 的标准 deposit 方法
             acc.deposit(req.amount);
 
-            log::info!("Deposit {} to account {}", req.amount, req.user_id);
+            // 记录转账流水到 TransferStore
+            let record = TransferRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                datetime: Utc::now().timestamp_millis(),
+                currency: "CNY".to_string(),
+                amount: req.amount,
+                error_id: 0,
+                error_msg: "入金成功".to_string(),
+                bank_id: "API".to_string(),
+                bank_name: "API入金".to_string(),
+            };
+            TRANSFER_STORE.add_record(&account_id, record);
+
+            log::info!("Deposit {} to account {}", req.amount, account_id);
 
             Ok(
                 HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                    "account_id": account_id,
                     "balance": acc.get_balance(),
                     "available": acc.money
                 }))),
@@ -755,13 +817,53 @@ pub async fn deposit(
 }
 
 /// 出金
+///
+/// 支持两种方式 @yutiansut @quantaxis：
+/// 1. 传入 account_id (ACC_xxx 格式) - 直接指定账户（推荐）
+/// 2. 传入 user_id (UUID 格式) - 仅当用户只有一个账户时有效
+///
+/// 注意：如果用户有多个账户，必须使用 account_id 指定具体账户
 pub async fn withdraw(
     req: web::Json<WithdrawRequest>,
     state: web::Data<Arc<AppState>>,
 ) -> Result<HttpResponse> {
-    match state.account_mgr.get_account(&req.user_id) {
+    use crate::service::http::transfer::TRANSFER_STORE;
+    use chrono::Utc;
+
+    // 尝试直接获取账户，如果失败且ID不是ACC_开头，则尝试按user_id查找
+    let account = if req.account_id.starts_with("ACC_") {
+        state.account_mgr.get_account(&req.account_id)
+    } else {
+        // 尝试按 user_id 查找用户的账户
+        let accounts = state.account_mgr.get_accounts_by_user(&req.account_id);
+        if accounts.is_empty() {
+            Err(crate::ExchangeError::AccountError(format!(
+                "No accounts found for user: {}",
+                req.account_id
+            )))
+        } else if accounts.len() > 1 {
+            // 用户有多个账户，必须指定 account_id
+            let account_ids: Vec<String> = accounts
+                .iter()
+                .map(|a| a.read().account_cookie.clone())
+                .collect();
+            return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+                400,
+                format!(
+                    "User has {} accounts, please specify account_id: {:?}",
+                    accounts.len(),
+                    account_ids
+                ),
+            )));
+        } else {
+            Ok(accounts[0].clone())
+        }
+    };
+
+    match account {
         Ok(account) => {
             let mut acc = account.write();
+            let account_id = acc.account_cookie.clone();
 
             // 检查可用余额（acc.money 才是真正的可用资金）
             if acc.money < req.amount {
@@ -774,10 +876,24 @@ pub async fn withdraw(
             // 使用 QA_Account 的标准 withdraw 方法
             acc.withdraw(req.amount);
 
-            log::info!("Withdraw {} from account {}", req.amount, req.user_id);
+            // 记录转账流水到 TransferStore（出金用负数表示）
+            let record = TransferRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                datetime: Utc::now().timestamp_millis(),
+                currency: "CNY".to_string(),
+                amount: -req.amount, // 出金用负数
+                error_id: 0,
+                error_msg: "出金成功".to_string(),
+                bank_id: "API".to_string(),
+                bank_name: "API出金".to_string(),
+            };
+            TRANSFER_STORE.add_record(&account_id, record);
+
+            log::info!("Withdraw {} from account {}", req.amount, account_id);
 
             Ok(
                 HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                    "account_id": account_id,
                     "balance": acc.get_balance(),
                     "available": acc.money
                 }))),

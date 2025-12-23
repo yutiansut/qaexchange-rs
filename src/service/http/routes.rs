@@ -204,6 +204,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 // 资金管理
                 .route("/deposit", web::post().to(management::deposit))
                 .route("/withdraw", web::post().to(management::withdraw))
+                // 所有资金流水 (默认加载全部，然后筛选) @yutiansut @quantaxis
+                .route("/transactions", web::get().to(management::get_all_transactions))
                 .route(
                     "/transactions/{user_id}",
                     web::get().to(management::get_transactions),

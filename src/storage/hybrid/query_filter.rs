@@ -27,6 +27,7 @@ pub enum RecordType {
     // 用户类型 (0x01xx)
     UserRegister = 0x0100,
     AccountBind = 0x0101,
+    UserRoleUpdate = 0x0102,
 
     // 订单类型 (0x02xx)
     OrderInsert = 0x0200,
@@ -46,6 +47,11 @@ pub enum RecordType {
     // 因子类型 (0x05xx)
     FactorUpdate = 0x0500,
     FactorSnapshot = 0x0501,
+
+    // 恢复类型 (0x06xx) Phase 14
+    OrderStatusUpdate = 0x0600,
+    PositionSnapshot = 0x0601,
+    AccountSnapshot = 0x0602,
 
     // 系统类型 (0xFFxx)
     Checkpoint = 0xFF00,
@@ -72,6 +78,12 @@ impl RecordType {
             WalRecord::FactorUpdate { .. } => Self::FactorUpdate,
             WalRecord::FactorSnapshot { .. } => Self::FactorSnapshot,
             WalRecord::Checkpoint { .. } => Self::Checkpoint,
+            // Phase 14: 恢复类型
+            WalRecord::OrderStatusUpdate { .. } => Self::OrderStatusUpdate,
+            WalRecord::PositionSnapshot { .. } => Self::PositionSnapshot,
+            WalRecord::AccountSnapshot { .. } => Self::AccountSnapshot,
+            // 用户角色更新 @yutiansut @quantaxis
+            WalRecord::UserRoleUpdate { .. } => Self::UserRoleUpdate,
         }
     }
 
@@ -95,6 +107,12 @@ impl RecordType {
             Self::FactorUpdate => "FactorUpdate",
             Self::FactorSnapshot => "FactorSnapshot",
             Self::Checkpoint => "Checkpoint",
+            // Phase 14: 恢复类型
+            Self::OrderStatusUpdate => "OrderStatusUpdate",
+            Self::PositionSnapshot => "PositionSnapshot",
+            Self::AccountSnapshot => "AccountSnapshot",
+            // 用户角色更新 @yutiansut @quantaxis
+            Self::UserRoleUpdate => "UserRoleUpdate",
         }
     }
 
@@ -134,6 +152,10 @@ impl RecordType {
             0x0402 => Some(Self::ExchangeResponseRecord),
             0x0500 => Some(Self::FactorUpdate),
             0x0501 => Some(Self::FactorSnapshot),
+            // Phase 14: 恢复类型
+            0x0600 => Some(Self::OrderStatusUpdate),
+            0x0601 => Some(Self::PositionSnapshot),
+            0x0602 => Some(Self::AccountSnapshot),
             0xFF00 => Some(Self::Checkpoint),
             _ => None,
         }
@@ -281,6 +303,12 @@ impl RecordTypeSet {
             RecordType::FactorUpdate => 1 << 13,
             RecordType::FactorSnapshot => 1 << 14,
             RecordType::Checkpoint => 1 << 15,
+            // Phase 14: 订单生命周期恢复记录
+            RecordType::OrderStatusUpdate => 1 << 16,
+            RecordType::PositionSnapshot => 1 << 17,
+            RecordType::AccountSnapshot => 1 << 18,
+            // 用户角色更新 @yutiansut @quantaxis
+            RecordType::UserRoleUpdate => 1 << 19,
         }
     }
 }
