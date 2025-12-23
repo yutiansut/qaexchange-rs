@@ -65,6 +65,8 @@ impl HttpServer {
             server_start_time: chrono::Utc::now(),
             // WebSocket 连接计数器 @yutiansut @quantaxis
             ws_connection_count: Arc::new(AtomicUsize::new(0)),
+            // SnapshotManager（由WebSocketServer设置）@yutiansut @quantaxis
+            snapshot_mgr: None,
         });
 
         let market_service = Arc::new(MarketDataService::new(matching_engine));

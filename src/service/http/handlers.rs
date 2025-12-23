@@ -24,6 +24,7 @@ use crate::exchange::order_router::{
 use crate::exchange::settlement::AccountSettlement;
 use crate::exchange::{AccountManager, OrderRouter, SettlementEngine};
 use crate::matching::trade_recorder::{TradeRecord, TradeRecorder};
+use crate::protocol::diff::snapshot::SnapshotManager;
 use crate::storage::conversion::ConversionManager;
 use crate::storage::subscriber::SubscriberStats;
 use crate::user::UserManager;
@@ -45,6 +46,8 @@ pub struct AppState {
     pub server_start_time: DateTime<Utc>,
     /// WebSocket 连接数计数器 @yutiansut @quantaxis
     pub ws_connection_count: Arc<AtomicUsize>,
+    /// SnapshotManager 用于广播公告到所有连接的用户 @yutiansut @quantaxis
+    pub snapshot_mgr: Option<Arc<SnapshotManager>>,
 }
 
 /// 用户成交视图 - 包含用户方向信息

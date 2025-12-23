@@ -41,7 +41,11 @@ const state = {
   subscribedInstruments: [],
 
   // 事件监听器取消函数
-  unsubscribers: []
+  unsubscribers: [],
+
+  // ✨ 公告通知 @yutiansut @quantaxis
+  processedNotifications: new Set(),  // 已处理的通知ID集合（防止重复处理）
+  lastAnnouncement: null              // 最新收到的公告（用于顶部栏刷新）
 }
 
 const mutations = {
@@ -78,6 +82,19 @@ const mutations = {
 
   ADD_UNSUBSCRIBER(state, unsubscriber) {
     state.unsubscribers.push(unsubscriber)
+  },
+
+  // ✨ 公告通知 mutations @yutiansut @quantaxis
+  ADD_PROCESSED_NOTIFICATION(state, notificationKey) {
+    state.processedNotifications.add(notificationKey)
+  },
+
+  SET_LAST_ANNOUNCEMENT(state, announcement) {
+    state.lastAnnouncement = announcement
+  },
+
+  CLEAR_PROCESSED_NOTIFICATIONS(state) {
+    state.processedNotifications.clear()
   },
 
   CLEAR_UNSUBSCRIBERS(state) {
@@ -409,13 +426,78 @@ const actions = {
 
   /**
    * WebSocket 消息处理
+   * @yutiansut @quantaxis
    */
-  onWebSocketMessage({ state, commit }, message) {
+  onWebSocketMessage({ state, commit, dispatch }, message) {
     // 更新业务截面
     if (state.ws) {
       const snapshot = state.ws.getSnapshot()
       commit('SET_SNAPSHOT', snapshot)
+
+      // ✨ 处理公告通知 @yutiansut @quantaxis
+      if (snapshot && snapshot.notify) {
+        dispatch('handleNotifications', snapshot.notify)
+      }
     }
+  },
+
+  /**
+   * 处理通知消息（包括公告）
+   * @yutiansut @quantaxis
+   */
+  handleNotifications({ state, commit }, notifications) {
+    if (!notifications || typeof notifications !== 'object') return
+
+    // 遍历所有通知
+    Object.entries(notifications).forEach(([key, notify]) => {
+      // 跳过已处理的通知
+      if (state.processedNotifications && state.processedNotifications.has(key)) {
+        return
+      }
+
+      // 处理公告通知
+      if (notify.type === 'ANNOUNCEMENT') {
+        console.log('[WebSocket] New announcement received:', notify.title)
+
+        // 使用 Element UI 的 Notification 组件显示
+        const { Notification } = require('element-ui')
+
+        // 根据优先级选择类型
+        const typeMap = {
+          'ERROR': 'error',
+          'WARNING': 'warning',
+          'INFO': 'info'
+        }
+        const type = typeMap[notify.level] || 'info'
+
+        Notification({
+          title: `📢 ${notify.title}`,
+          message: notify.content.length > 100
+            ? notify.content.substring(0, 100) + '...'
+            : notify.content,
+          type: type,
+          duration: notify.level === 'ERROR' ? 0 : 10000, // 紧急公告不自动关闭
+          position: 'top-right',
+          onClick: () => {
+            // 点击通知跳转到公告页面
+            const router = require('@/router').default
+            router.push('/announcements')
+          }
+        })
+
+        // 记录已处理的通知
+        commit('ADD_PROCESSED_NOTIFICATION', key)
+
+        // 触发公告刷新事件（用于顶部公告栏更新）
+        commit('SET_LAST_ANNOUNCEMENT', {
+          id: notify.announcement_id,
+          title: notify.title,
+          content: notify.content,
+          priority: notify.priority,
+          timestamp: notify.publish_time
+        })
+      }
+    })
   },
 
   /**

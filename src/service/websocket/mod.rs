@@ -48,6 +48,9 @@ pub struct WebSocketServer {
 
     /// DIFF 协议处理器（零拷贝共享）
     diff_handler: Arc<DiffHandler>,
+
+    /// SnapshotManager - 用于广播公告等系统通知 @yutiansut @quantaxis
+    snapshot_mgr: Arc<SnapshotManager>,
 }
 
 impl WebSocketServer {
@@ -76,8 +79,11 @@ impl WebSocketServer {
         }
         log::info!("✅ SnapshotManager connected to TradeGateway for real-time order/trade push");
 
+        // ✨ 设置全局 SnapshotManager，用于系统公告广播 @yutiansut @quantaxis
+        crate::service::http::account_admin::set_global_snapshot_manager(snapshot_mgr.clone());
+
         let diff_handler = Arc::new(
-            DiffHandler::new(snapshot_mgr, account_mgr) // ✨ 传递 account_mgr
+            DiffHandler::new(snapshot_mgr.clone(), account_mgr) // ✨ 传递 account_mgr，clone snapshot_mgr
                 .with_user_manager(user_manager.clone())
                 .with_order_router(order_router)
                 .with_market_broadcaster(market_broadcaster.clone())
@@ -91,7 +97,13 @@ impl WebSocketServer {
             trade_gateway,
             market_broadcaster,
             diff_handler,
+            snapshot_mgr,
         }
+    }
+
+    /// 获取 SnapshotManager 用于广播系统通知 @yutiansut @quantaxis
+    pub fn get_snapshot_manager(&self) -> Arc<SnapshotManager> {
+        self.snapshot_mgr.clone()
     }
 
     /// 处理 WebSocket 连接

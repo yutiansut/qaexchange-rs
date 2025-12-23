@@ -7,9 +7,11 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+use tokio::sync::OnceCell;
 
 use super::models::*;
 use crate::exchange::account_mgr::AccountManager;
+use crate::protocol::diff::snapshot::SnapshotManager;
 
 // ==================== 内存存储（生产环境应使用数据库） ====================
 
@@ -39,6 +41,22 @@ lazy_static::lazy_static! {
 
     // 系统公告存储
     static ref ANNOUNCEMENTS: DashMap<String, Announcement> = DashMap::new();
+}
+
+// ==================== 全局 SnapshotManager（用于广播公告）====================
+// @yutiansut @quantaxis
+
+static GLOBAL_SNAPSHOT_MANAGER: OnceCell<Arc<SnapshotManager>> = OnceCell::const_new();
+
+/// 设置全局 SnapshotManager（由 WebSocket 服务器调用）
+pub fn set_global_snapshot_manager(mgr: Arc<SnapshotManager>) {
+    let _ = GLOBAL_SNAPSHOT_MANAGER.set(mgr);
+    log::info!("✅ Global SnapshotManager set for announcement broadcasting");
+}
+
+/// 获取全局 SnapshotManager
+pub fn get_global_snapshot_manager() -> Option<Arc<SnapshotManager>> {
+    GLOBAL_SNAPSHOT_MANAGER.get().cloned()
 }
 
 // 管理员令牌验证（从环境变量读取，生产环境应使用JWT等）
@@ -670,6 +688,8 @@ pub async fn get_audit_log(
 // ==================== Phase 13: 系统公告 ====================
 
 /// 创建公告
+/// 创建后会通过 WebSocket 实时推送到所有已连接的用户
+/// @yutiansut @quantaxis
 pub async fn create_announcement(
     req: web::Json<CreateAnnouncementRequest>,
 ) -> HttpResponse {
@@ -694,6 +714,33 @@ pub async fn create_announcement(
     };
 
     ANNOUNCEMENTS.insert(id.clone(), announcement.clone());
+
+    // ✨ 通过 WebSocket 广播公告到所有已连接用户 @yutiansut @quantaxis
+    if let Some(snapshot_mgr) = get_global_snapshot_manager() {
+        let notify_patch = serde_json::json!({
+            "notify": {
+                format!("announcement_{}", id): {
+                    "type": "ANNOUNCEMENT",
+                    "level": match announcement.priority {
+                        AnnouncementPriority::Urgent => "ERROR",  // 紧急公告用红色
+                        AnnouncementPriority::High => "WARNING",  // 高优先级用黄色
+                        _ => "INFO"
+                    },
+                    "code": 2000,
+                    "announcement_id": id,
+                    "title": announcement.title,
+                    "content": announcement.content,
+                    "announcement_type": format!("{:?}", announcement.announcement_type),
+                    "priority": format!("{:?}", announcement.priority),
+                    "publish_time": announcement.publish_time
+                }
+            }
+        });
+        let count = snapshot_mgr.broadcast_patch(notify_patch).await;
+        log::info!("📢 Announcement '{}' broadcasted to {} connected users", announcement.title, count);
+    } else {
+        log::warn!("⚠️ SnapshotManager not available, announcement not broadcasted via WebSocket");
+    }
 
     HttpResponse::Ok().json(ApiResponse::success(announcement))
 }
