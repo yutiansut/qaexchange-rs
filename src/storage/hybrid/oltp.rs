@@ -360,12 +360,24 @@ impl OltpHybridStorage {
     /// # Performance
     /// - 写入速度：> 100 MB/s
     /// - 阻塞时间：最小化（使用双缓冲）
+    /// 强制把 memtable 落盘,不看 `should_flush()` @yutiansut @quantaxis
+    ///
+    /// 供 `create_checkpoint` 使用:删 WAL 之前必须保证内存里没有未持久化的数据。
+    /// 与 `try_flush` 的唯一区别是跳过「是否已满」的判定。
+    pub fn force_flush(&self) -> Result<(), String> {
+        self.flush_inner(true)
+    }
+
     fn try_flush(&self) -> Result<(), String> {
+        self.flush_inner(false)
+    }
+
+    fn flush_inner(&self, force: bool) -> Result<(), String> {
         // 获取写锁（阻塞写入）
         let memtable = self.memtable.write();
 
-        // 快速检查是否真的需要 flush
-        if !memtable.should_flush() {
+        // 快速检查是否真的需要 flush(force 时跳过)
+        if !force && !memtable.should_flush() {
             return Ok(());
         }
 
@@ -545,8 +557,18 @@ impl OltpHybridStorage {
     }
 
     /// 创建 Checkpoint（快照当前状态）
-    pub fn create_checkpoint(&self) -> Result<(), String> {
-        // 获取当前 WAL 序列号
+    pub fn create_checkpoint(&self) -> Result<usize, String> {
+        // ✨ 必须先把 memtable 落盘,再取 WAL 序号 @yutiansut @quantaxis
+        //
+        // 原实现直接 `get_current_sequence()`(= WAL 当前写到哪)就去
+        // `wal.checkpoint(seq)` 删旧文件。若此刻 memtable 里还有**未落 SSTable**
+        // 的数据,对应的 WAL 段会被删掉 —— 崩溃后这批数据永久丢失。
+        //
+        // 这大概是本函数「零生产调用」的真实原因:接上去反而会引入数据丢失。
+        // 先强制 flush,让「已落盘的最大序号」= 「WAL 当前序号」,再删才安全。
+        self.force_flush()?;
+
+        // 获取当前 WAL 序列号(此时 memtable 已空,该序号之前的数据都在 SSTable 里)
         let wal_sequence = self.wal.get_current_sequence();
 
         // 获取所有 SSTable 文件路径
@@ -598,9 +620,9 @@ impl OltpHybridStorage {
         self.checkpoint_manager.cleanup_old_checkpoints(3)?;
 
         // 清理已 checkpoint 的 WAL
-        self.wal.checkpoint(wal_sequence)?;
+        let removed = self.wal.checkpoint(wal_sequence)?;
 
-        Ok(())
+        Ok(removed)
     }
 
     /// 从最新的 Checkpoint 恢复

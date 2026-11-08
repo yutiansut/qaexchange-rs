@@ -93,6 +93,9 @@ impl CapitalManager {
 
     /// 入金 (旧接口,保持兼容)
     pub fn deposit(&self, user_id: &str, amount: f64) -> Result<(), ExchangeError> {
+        // 统一金额校验(有限/正数/上限)@yutiansut @quantaxis
+        crate::service::http::models::validate_money_amount(amount)
+            .map_err(ExchangeError::AccountError)?;
         let account = self.account_mgr.get_default_account(user_id)?;
         account.write().deposit(amount);
         log::info!("Deposit: user={}, amount={}", user_id, amount);
@@ -163,6 +166,8 @@ impl CapitalManager {
 
     /// 出金 (旧接口,保持兼容)
     pub fn withdraw(&self, user_id: &str, amount: f64) -> Result<(), ExchangeError> {
+        crate::service::http::models::validate_money_amount(amount)
+            .map_err(ExchangeError::AccountError)?;
         let account = self.account_mgr.get_default_account(user_id)?;
         let mut acc = account.write();
 
@@ -172,7 +177,7 @@ impl CapitalManager {
             ));
         }
 
-        acc.withdraw(amount);
+        crate::exchange::account_mgr::withdraw_checked(&mut acc, amount)?;
         log::info!("Withdraw: user={}, amount={}", user_id, amount);
         Ok(())
     }
@@ -205,9 +210,9 @@ impl CapitalManager {
             )));
         }
 
-        // 执行出金
+        // 执行出金(带核对 —— 全额出金曾被静默忽略却记为 completed)
         let account = self.account_mgr.get_account(&account_id)?;
-        account.write().withdraw(amount);
+        crate::exchange::account_mgr::withdraw_checked(&mut account.write(), amount)?;
 
         // 获取交易后余额（重新计算）
         let balance_after = {
@@ -273,7 +278,24 @@ impl CapitalManager {
         self.get_transactions(user_id)
             .into_iter()
             .filter(|txn| {
-                txn.created_at.as_str() >= start_date && txn.created_at.as_str() <= end_date
+                // ⚠️ 必须只比**日期部分** @yutiansut @quantaxis
+                //
+                // `created_at` 是 `"%Y-%m-%d %H:%M:%S"`(capital_mgr.rs 写入时的格式),
+                // 而 `end_date` 来自查询参数、是 `"%Y-%m-%d"`。直接字节序比较:
+                //     "2026-08-15 00:00:00" <= "2026-08-15"  →  **false**
+                // (因为空格 0x20 > 字符串结束)。于是**整个结束日的记录全被丢掉** ——
+                // 选「今天」作结束日会一条都查不到,而且是静默的:接口 200、返回空表。
+                //
+                // 这个缺陷此前是休眠的:前端 `admin/transactions.vue` 的日期选择器
+                // 根本没接上(dateRange 只被写不被读),本会话接上后才激活它。
+                //
+                // 只取前 10 个字符(YYYY-MM-DD)比较,两端都按日期粒度。
+                let day = if txn.created_at.len() >= 10 {
+                    &txn.created_at[..10]
+                } else {
+                    txn.created_at.as_str()
+                };
+                day >= start_date && day <= end_date
             })
             .collect()
     }

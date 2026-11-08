@@ -218,6 +218,18 @@ const routes = [
         meta: { title: 'WebSocket 测试', icon: 'el-icon-connection', group: 'system' }
       }
     ]
+  },
+  // ⚠️ 404 兜底 —— 必须放在**最后**,否则会吞掉后面的具体路由。@yutiansut @quantaxis
+  //
+  // 此前路由表 33 条全是具体路径,**没有通配兜底**:访问未注册路径
+  // (实测 `/#/user/commission`,真实路由是 `/#/commission`)渲染**完全空白**页,
+  // `tables:0, buttons:[], bodyText:""`,既无 404 也无重定向。
+  // 用户分不清是「路径写错」「页面挂了」还是「还在加载」。
+  {
+    path: '*',
+    name: 'NotFound',
+    component: () => import('@/views/not-found.vue'),
+    meta: { title: '页面不存在' }
   }
 ]
 

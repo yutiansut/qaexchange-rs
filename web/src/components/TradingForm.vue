@@ -214,7 +214,7 @@ export default {
 
       } catch (error) {
         console.error('[TradingForm] Order submission failed:', error)
-        this.errorMessage = `订单提交失败: ${error.message || '未知错误'}`
+        this.errorMessage = `订单提交失败: ${this.$errMsg(error, '未知错误')}`
       } finally {
         this.submitting = false
       }

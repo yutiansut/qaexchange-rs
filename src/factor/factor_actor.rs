@@ -211,8 +211,32 @@ impl Actor for FactorActor {
             );
 
             loop {
+                // ⚠️ 这里用 spawn_blocking(recv()) 是**可以的**,但仅限于单例消费者。
+                //    阻塞中的线程不算 idle,tokio 阻塞池永不回收 —— 所以这个写法
+                //    等价于「常驻一个 OS 线程」。本 actor 是单例(全局只启动一次)、
+                //    且消费全量行情,一个专用线程换低延迟是划算的。
+                //    ❌ **不要把这个形状复制到按连接/按订阅者的路径上** ——
+                //    `diff_handler.rs` 曾这么做,实测 40 个订阅 → 线程 24→120 且永不回收。
+                //    那种场景用 `session.rs:140` 的 run_interval + try_recv 批量取。
+                //    @yutiansut @quantaxis
                 let receiver_clone = receiver.clone();
-                match tokio::task::spawn_blocking(move || receiver_clone.recv()).await {
+                // ⚠️ 必须用 `recv_timeout` 而不是 `recv()` @yutiansut @quantaxis
+                //
+                // `recv()` 会一直阻塞到有事件为止 —— 而 tokio 运行时 **drop 时会
+                // 无限期等待所有 spawn_blocking 任务结束**。无行情时这个任务永不返回,
+                // 于是:
+                //   SIGTERM → 优雅停机日志全部打完 → main 返回 → runtime drop **卡死**
+                //   → 进程永不退出(实测隔离实例停机 6 分钟后仍存活,端口已释放、
+                //      HTTP 无响应,18 个线程全在 futex_wait)
+                //   → 部署脚本 `kill; wait; start` 永久挂起
+                //   → 于是只能 `kill -9` —— **而 kill -9 正是 2026-09-05 毁掉
+                //      172,035 条订单那次事故的直接动作**。
+                //
+                // 100ms 超时不改变有事件时的延迟(有数据立即返回),
+                // 只保证无事件时最多 100ms 就让出,runtime 得以完成 drop。
+                // 原注释接受「常驻一个 OS 线程」的代价是对的,但没考虑到
+                // 「这个线程让进程永远退不出去」。
+                match tokio::task::spawn_blocking(move || receiver_clone.recv_timeout(std::time::Duration::from_millis(100))).await {
                     Ok(Ok(event)) => {
                         // 处理 KLineFinished 事件
                         if let MarketDataEvent::KLineFinished {
@@ -272,6 +296,14 @@ impl Actor for FactorActor {
                                 }
                             }
                         }
+                    }
+                    // ⚠️ 必须区分「超时」与「通道关闭」@yutiansut @quantaxis
+                    // 改成 recv_timeout 后,超时返回的也是 `Ok(Err(..))`。
+                    // 原来这一支无条件 `break`,会让 actor 在 100ms 无行情后
+                    // **直接退出** —— 那比原来的「进程退不出去」更糟。
+                    Ok(Err(crossbeam::channel::RecvTimeoutError::Timeout)) => {
+                        // 无事件,继续等下一轮(这正是让 runtime 能 drop 的关键)
+                        continue;
                     }
                     Ok(Err(_)) => {
                         log::warn!("📈 [FactorActor] Market data channel disconnected");

@@ -274,6 +274,12 @@ fn get_account_stats(account_mgr: &AccountManager) -> AccountStats {
     // 中央银行视角：汇总所有账户的入金/出金 @yutiansut @quantaxis
     let mut total_deposit = 0.0;
     let mut total_withdraw = 0.0;
+    // ✨ 非有限/超量级防护(与 management.rs:237 同一 MONEY_MAX=1e15 口径)。
+    // 单个账户 balance/available=1e300(测试账户 T1e300)会把全局合计吸成 1e300,
+    // 令 dashboard 资金饼图「数据不可用」。management.rs 的分页求和早已跳过,
+    // 这里 consolidate 同一 guard。@yutiansut @quantaxis
+    const MONEY_MAX: f64 = 1e15;
+    let mut excluded_nonfinite = 0usize;
 
     for account in accounts {
         let acc = account.read();
@@ -284,11 +290,41 @@ fn get_account_stats(account_mgr: &AccountManager) -> AccountStats {
         }
 
         // QA_Account 字段：money（可用资金）, accounts.balance（总权益）
-        total_available += acc.money;
+        // ✨ 三个资金字段任一非有限/超界,整户从资金合计剔除(与 management.rs 一致)。
+        let money_ok = acc.money.is_finite()
+            && acc.money.abs() < MONEY_MAX
+            && acc.accounts.balance.is_finite()
+            && acc.accounts.balance.abs() < MONEY_MAX
+            && acc.accounts.margin.is_finite()
+            && acc.accounts.margin.abs() < MONEY_MAX;
+        if money_ok {
+            total_available += acc.money;
+        }
 
-        // 汇总 QIFI 的 deposit/withdraw 字段 @yutiansut @quantaxis
-        total_deposit += acc.accounts.deposit;
-        total_withdraw += acc.accounts.withdraw;
+        // 汇总资金流向 @yutiansut @quantaxis
+        //
+        // ⚠️ 原实现是 `total_withdraw += acc.accounts.withdraw`,而这个指标
+        // **结构性恒为 0** —— qars 的 `withdraw()`(qars2 account.rs:541-548)
+        // 做的是 `self.accounts.deposit -= amount`,**从不写 `accounts.withdraw`**
+        // (该字段只在反序列化/恢复时被赋值)。实测面板显示
+        // `total_deposit 9,910,601 / total_withdraw 0`,而系统确实发生过多笔出金。
+        // 于是「总出金」永远是 0,「总入金」其实是**净额**,两个数都在误导读者。
+        //
+        // 拿不到真正的「总额」:资金变动分散在三条路径且没有统一账本 ——
+        //   · `/api/management/deposit|withdraw` → CapitalManager 的 transactions
+        //   · `/api/account/deposit|withdraw`    → **绕过 CapitalManager**(handlers.rs:808 注释)
+        //   · 银期转账                            → TransferStore
+        // 在数据模型允许的范围内做诚实呈现:按账户净额的正负拆分。
+        // `total_deposit - total_withdraw` 仍等于真实净流入。
+        if acc.accounts.deposit >= 0.0 {
+            total_deposit += acc.accounts.deposit;
+        } else {
+            total_withdraw += -acc.accounts.deposit;
+        }
+        // qars 若将来真的写 withdraw 字段,这里也要计入,避免重复统计需先判零
+        if acc.accounts.withdraw != 0.0 {
+            total_withdraw += acc.accounts.withdraw;
+        }
 
         // 总权益与保证金 —— 直接读账户自己的值,不要自己重算 @yutiansut @quantaxis
         //
@@ -302,8 +338,18 @@ fn get_account_stats(account_mgr: &AccountManager) -> AccountStats {
         // `acc.accounts.balance / margin` 由 `risk::risk_monitor` 每秒回写
         // (monitor_interval_ms 默认 1000),所以读锁路径就能拿到 ≤1s 新鲜的真值,
         // 不必为 get_margin() 升级写锁。口径与 management.rs:110 一致。
-        total_balance += acc.accounts.balance;
-        total_margin_used += acc.accounts.margin;
+        if money_ok {
+            total_balance += acc.accounts.balance;
+            total_margin_used += acc.accounts.margin;
+        } else {
+            excluded_nonfinite += 1;
+        }
+    }
+    if excluded_nonfinite > 0 {
+        log::warn!(
+            "[monitoring] {} 个账户因 balance/available/margin 非有限或超 {:.0e} 被剔除出资金合计",
+            excluded_nonfinite, MONEY_MAX
+        );
     }
 
     AccountStats {
@@ -513,7 +559,19 @@ pub async fn get_system_status(app_state: web::Data<Arc<AppState>>) -> impl Resp
         uptime_display,
         ws_connections,
         status: "running".to_string(),
-        matching_latency_p99: "P99 < 100μs".to_string(),
+        // ⚠️ 这个值**没有任何测量支撑**,是硬编码字面量 @yutiansut @quantaxis
+        //
+        // 前端 `dashboard/index.vue:211` 把它当「撮合延迟」显示给用户,
+        // 而它从头到尾就是这一行字符串 —— 前后端各编一次。
+        //
+        // 真实的撮合延迟数据其实**存在**:`matching/engine.rs` 的
+        // `test_latency_single_order` 实测 P50 1.6μs / P99 520μs(隔离下),
+        // 但那是测试里的采样,生产没有在线统计。
+        //
+        // 改为明确的「未采集」,而不是编一个看起来很好的数 ——
+        // 用户看到 "P99 < 100μs" 会以为系统在测量它。
+        // 要真给这个数,需要在撮合热路径上加直方图统计(有性能代价,是独立决定)。
+        matching_latency_p99: "未采集".to_string(),
     };
 
     HttpResponse::Ok().json(status)

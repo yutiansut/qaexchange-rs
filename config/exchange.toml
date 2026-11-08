@@ -69,6 +69,15 @@ min_balance = 0.0
 commission_rate = 0.0003
 margin_rate = 0.15
 
+# 日终结算(用户拍板:每个自然日)@yutiansut @quantaxis
+# 流程:闭市(新单拒 4100 → CTP 91)→ 撤全部活单 → 归档当日快照到 snapshots/history/<交易日>/
+#       → 结算(今仓→昨仓、清当日委托/成交、退冻结)→ 新交易日清客户端编号 → 开市
+# time = 北京时间 HH:MM;结算的是这一时刻之前的那个自然日(00:00 → 刚结束的前一天)
+# 手动触发:POST /api/admin/settlement/execute(同一流程)
+[settlement]
+auto_daily = true
+time = "00:00"
+
 [[instruments]]
 instrument_id = "IF2501"
 name = "沪深300股指期货2501"
@@ -98,3 +107,55 @@ contract_multiplier = 300.0
 tick_size = 0.2
 init_price = 2800.0
 is_trading = true
+
+# ✨ 郑商所玻璃 / 纯碱(2026-11-08 用户拍板,供 hft_maker FG 模型联调;与其生产合约一致)@yutiansut @quantaxis
+# 规格:乘数 20、最小变动 1 元。手续费 / 保证金按真实值覆盖 qars MarketPreset(见 core::account_ext):
+#   FG 开 / 平 / 平今均 2 元/手(qars 预设开 3 / 平今 6,是旧标准)、保证金 9%;SA 万分之一、保证金 8%。
+# init_price 取 11-06 收盘附近;同品种两个月份价差保持稳定(FG +13、SA +25),仿真做市按此联动。
+[[instruments]]
+instrument_id = "FG2701"
+name = "玻璃2701"
+exchange_id = "CZCE"
+product_type = "futures"
+contract_multiplier = 20.0
+tick_size = 1.0
+init_price = 882.0
+is_trading = true
+commission_per_lot = 2.0
+margin_rate = 0.09
+
+[[instruments]]
+instrument_id = "FG2703"
+name = "玻璃2703"
+exchange_id = "CZCE"
+product_type = "futures"
+contract_multiplier = 20.0
+tick_size = 1.0
+init_price = 895.0
+is_trading = true
+commission_per_lot = 2.0
+margin_rate = 0.09
+
+[[instruments]]
+instrument_id = "SA2701"
+name = "纯碱2701"
+exchange_id = "CZCE"
+product_type = "futures"
+contract_multiplier = 20.0
+tick_size = 1.0
+init_price = 961.0
+is_trading = true
+commission_rate = 0.0001
+margin_rate = 0.08
+
+[[instruments]]
+instrument_id = "SA2703"
+name = "纯碱2703"
+exchange_id = "CZCE"
+product_type = "futures"
+contract_multiplier = 20.0
+tick_size = 1.0
+init_price = 986.0
+is_trading = true
+commission_rate = 0.0001
+margin_rate = 0.08

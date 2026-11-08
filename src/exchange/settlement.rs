@@ -15,6 +15,7 @@ use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use chrono::Utc;
+use chrono::Local;
 use dashmap::DashMap;
 use log;
 use parking_lot::RwLock;
@@ -319,6 +320,32 @@ pub struct SettlementEngine {
 
     /// 最大重试次数
     max_retry_count: u32,
+
+    // ========== 日终(每自然日北京 00:00,用户拍板)==========
+    /// 日终流程互斥:定时任务与手动接口可能同时触发 @yutiansut @quantaxis
+    eod_lock: parking_lot::Mutex<()>,
+    /// 账户快照目录(`<storage>/snapshots`)。设置后日终会归档当日快照、落结算后快照。
+    snapshot_dir: std::sync::OnceLock<String>,
+}
+
+/// 日终结算报告(`run_end_of_day`)。结算字段平铺在顶层,与手动结算接口原来的
+/// `SettlementResult` 响应兼容(前端 `admin/settlement.vue` 照旧读)。@yutiansut @quantaxis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndOfDayReport {
+    #[serde(flatten)]
+    pub settlement: SettlementResult,
+    /// 日终撤单(GFD 失效)
+    pub sweep: crate::exchange::order_router::EodSweep,
+    /// 归档到 `snapshots/history/<交易日>/` 的结算前快照数
+    pub archived_snapshots: usize,
+    /// 归档目录(未设置快照目录时为空)
+    pub archive_dir: String,
+    /// 新交易日清掉的客户端编号(CTP 报单引用)条数
+    pub client_order_ids_cleared: usize,
+    /// 结算价:合约 → 价格(手工设置优先,否则撮合簿最新价)
+    pub settlement_prices: HashMap<String, f64>,
+    /// 闭市时长(毫秒):置闸 → 开闸
+    pub halted_ms: u64,
 }
 
 /// 强平任务
@@ -365,13 +392,16 @@ impl SettlementEngine {
             account_liquidations: Arc::new(DashMap::new()),
             liquidation_seq: AtomicU64::new(1),
             max_retry_count: 3,
+            eod_lock: parking_lot::Mutex::new(()),
+            snapshot_dir: std::sync::OnceLock::new(),
         }
     }
 
     /// 生成强平ID
     fn generate_liquidation_id(&self) -> String {
         let seq = self.liquidation_seq.fetch_add(1, Ordering::SeqCst);
-        format!("LIQ{}{:08}", Utc::now().format("%Y%m%d"), seq)
+        // 业务日期用 Local —— 同 daily_settlement 的说明。@yutiansut @quantaxis
+        format!("LIQ{}{:08}", Local::now().format("%Y%m%d"), seq)
     }
 
     /// 获取强平记录
@@ -499,6 +529,43 @@ impl SettlementEngine {
     }
 
     /// 构建强平计划（静态方法）
+    /// 按结算价计算一个持仓的盯市盈亏。@yutiansut @quantaxis
+    ///
+    /// **提取出来是因为原先有两份拷贝,而我上次只修好了一份。**
+    /// `pre_calculate_account`(:777)与 `settle_account`(:928)各写了一遍同样的循环:
+    /// 前者补过合约乘数(`* unit`),后者**没补** —— 于是同一个量在同一次结算里
+    /// 一份对、一份少算 300 倍(IF 乘数 300)。这正是「双实现分叉」:
+    /// 修了一处不等于修好了。
+    ///
+    /// 两个必须一起守住的点:
+    ///
+    /// ① **乘合约乘数** `pos.preset.unit_table`(qars2 `marketpreset.rs:99`)。
+    ///    IF2501 乘数 300:1 手动 10 个点应为 10×1×300 = 3000 元,漏了就算成 10 元。
+    ///
+    /// ② **手数要用 `volume_*_unmut()`,不能用 `today + his`**。
+    ///    qars 的真实不变量是 `volume = today + his + frozen_today + frozen_his`
+    ///    (`position.rs:403`),`today + his` **漏掉被挂单冻结的部分**。
+    ///    实测线上 82 份 QIFI 快照:41 个非空持仓边里 **20 个(49%)`frozen ≠ 0`**,
+    ///    绝对误差合计 **604 手**,最坏一笔真实 599 手、按旧式只算 478 手(少 20%)。
+    ///    该不变量在 106/106 个持仓上逐个验证成立;并用 28,287 笔真实成交
+    ///    交叉验证过 `volume_short = SELL OPEN 3295 − BUY CLOSE 3227 = 68` ✓。
+    fn position_profit_at(
+        pos: &qars::qaaccount::position::QA_Position,
+        settlement_price: f64,
+    ) -> f64 {
+        let unit = pos.preset.unit_table as f64;
+        let mut profit = 0.0;
+        let long_volume = pos.volume_long_unmut();
+        if long_volume > 0.0 {
+            profit += (settlement_price - pos.open_price_long) * long_volume * unit;
+        }
+        let short_volume = pos.volume_short_unmut();
+        if short_volume > 0.0 {
+            profit += (pos.open_price_short - settlement_price) * short_volume * unit;
+        }
+        profit
+    }
+
     fn build_force_plans(
         account: &Arc<parking_lot::RwLock<qars::qaaccount::account::QA_Account>>,
         settlement_prices: &DashMap<String, f64>,
@@ -597,6 +664,154 @@ impl SettlementEngine {
         );
     }
 
+    /// 设置账户快照目录(启动时一次)。设置后 `run_end_of_day` 会在结算前把当日快照
+    /// 归档到 `<dir>/history/<交易日>/`,结算后立即落一轮快照。@yutiansut @quantaxis
+    pub fn set_snapshot_dir(&self, dir: String) {
+        if self.snapshot_dir.set(dir).is_err() {
+            log::warn!("SettlementEngine 快照目录已设置过,本次调用被忽略");
+        }
+    }
+
+    /// 日终:闭市 → 撤全部活单 → 归档当日快照 → 结算 → 新交易日 → 开市。@yutiansut @quantaxis
+    ///
+    /// `trading_day` = 被结算的那一天(`YYYY-MM-DD`)。定时任务与手动接口都走这里。
+    ///
+    /// 为什么必须先撤单:qars `QA_Account::settle()` 清空当日委托与冻结
+    /// (qars2 account.rs:550-555),而挂单还留在撮合簿里。之后该单一撤单 → qars
+    /// `cancel_order` expect 失败(account.rs:1237);一成交 → `receive_deal_sim` unwrap 失败
+    /// (account.rs:1681)。release 是 panic=abort,整个进程退出 —— 2026-11-08 隔离实例
+    /// 「挂单 → 结算 → 撤单」实测复现。真实交易所也是收盘时 GFD 单失效。
+    ///
+    /// 闭市期间新单拒 4100(→ CTP 91),撤单照常;撮合簿复核不干净就**不结算**、直接开市。
+    /// 阻塞调用(撤单、两轮快照落盘、并行结算),异步上下文里放进 `spawn_blocking`。
+    pub fn run_end_of_day(&self, trading_day: &str) -> Result<EndOfDayReport, ExchangeError> {
+        let _eod = self.eod_lock.try_lock().ok_or_else(|| {
+            ExchangeError::InternalError("日终结算已在进行中".to_string())
+        })?;
+        let router = self
+            .order_router
+            .read()
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .ok_or_else(|| {
+                ExchangeError::InternalError("日终需要 OrderRouter(未注入)".to_string())
+            })?;
+
+        let t0 = Instant::now();
+        log::info!("[EOD] {} 日终开始:闭市 → 撤活单 → 归档 → 结算 → 开市", trading_day);
+        if !router.begin_eod_halt(std::time::Duration::from_secs(10)) {
+            router.end_eod_halt();
+            return Err(ExchangeError::InternalError(
+                "在途报单 10 秒内未落定,放弃本轮日终".to_string(),
+            ));
+        }
+        let outcome = self.end_of_day_while_halted(&router, trading_day);
+        router.end_eod_halt();
+        let halted_ms = t0.elapsed().as_millis() as u64;
+        let mut report = match outcome {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("[EOD] {} 日终失败,已恢复收单(未结算): {}", trading_day, e);
+                return Err(e);
+            }
+        };
+        report.halted_ms = halted_ms;
+        log::info!("[EOD] {} 已开市,闭市 {}ms", trading_day, halted_ms);
+
+        // 开市后:结算后快照(当日委托/成交已清,KB 级)+ 按 DIFF 推一次资金 / 持仓
+        if let Some(dir) = self.snapshot_dir.get() {
+            if let Err(e) = self.account_mgr.save_snapshots(dir) {
+                log::error!("[EOD] 结算后快照落盘失败: {}", e);
+            }
+        }
+        for account in self.account_mgr.get_all_accounts() {
+            let id = account.read().account_cookie.clone();
+            router.trade_gateway().publish_account_views(&id);
+        }
+
+        log::info!(
+            "[EOD] {} 日终完成 {}ms:撤单 {} / 失败 {} / 摘残单 {};归档 {} 份 → {};\
+             结算 {} 户(失败 {}、强平 {});结算价 {} 个合约;客户端编号清 {} 条",
+            trading_day,
+            t0.elapsed().as_millis(),
+            report.sweep.cancelled,
+            report.sweep.cancel_failed,
+            report.sweep.residual_removed,
+            report.archived_snapshots,
+            report.archive_dir,
+            report.settlement.settled_accounts,
+            report.settlement.failed_accounts,
+            report.settlement.force_closed_accounts.len(),
+            report.settlement_prices.len(),
+            report.client_order_ids_cleared,
+        );
+        Ok(report)
+    }
+
+    /// `run_end_of_day` 的闭市段(闸门已置位)。
+    fn end_of_day_while_halted(
+        &self,
+        router: &OrderRouter,
+        trading_day: &str,
+    ) -> Result<EndOfDayReport, ExchangeError> {
+        // 1. 撤全部活单(GFD 日终失效)+ 复核撮合簿
+        let sweep = router.cancel_all_active_orders();
+        log::info!(
+            "[EOD] 撤单 {} / 失败 {} / 摘残单 {} / 簿上剩余 {}",
+            sweep.cancelled,
+            sweep.cancel_failed,
+            sweep.residual_removed,
+            sweep.residual_left
+        );
+        if sweep.residual_left > 0 {
+            return Err(ExchangeError::InternalError(format!(
+                "撮合簿仍有 {} 张挂单,本轮不结算(结算会清当日委托,残单再成交/撤单会 panic)",
+                sweep.residual_left
+            )));
+        }
+
+        // 2. 归档:结算会清掉当日委托/成交 —— 先落一轮最新快照,再硬链接进
+        //    history/<交易日>/(不复制数据;之后快照的 tmp+rename 换的是目录项,归档那份不受影响)
+        let compact_day: String = trading_day.chars().filter(|c| c.is_ascii_digit()).collect();
+        let (archived_snapshots, archive_dir) = match self.snapshot_dir.get() {
+            Some(dir) => {
+                self.account_mgr.save_snapshots(dir)?;
+                archive_snapshots(dir, &compact_day)?
+            }
+            None => (0, String::new()),
+        };
+
+        // 3. 结算价:手工设置的优先,其余取撮合簿最新价(真实交易所是当日成交量加权均价 ——
+        //    当日累计量额要先按北京 00:00 切日才算得出,见 TODO 2b)
+        for (instrument, px) in router.last_prices() {
+            self.settlement_prices.entry(instrument).or_insert(px);
+        }
+        let settlement_prices: HashMap<String, f64> = self
+            .settlement_prices
+            .iter()
+            .map(|e| (e.key().clone(), *e.value()))
+            .collect();
+
+        // 4. 结算(今仓 → 昨仓、清当日委托/成交、退冻结、重置资金)
+        let settled = self.daily_settlement_for(trading_day);
+        // 结算价按次有效:手工设过的价不能留到下一次结算
+        self.settlement_prices.clear();
+        let settlement = settled?;
+
+        // 5. 新交易日:客户端编号(CTP 报单引用)按交易日唯一
+        let client_order_ids_cleared = router.roll_client_order_ids(&compact_day);
+
+        Ok(EndOfDayReport {
+            settlement,
+            sweep,
+            archived_snapshots,
+            archive_dir,
+            client_order_ids_cleared,
+            settlement_prices,
+            halted_ms: 0,
+        })
+    }
+
     /// 执行日终结算（高性能并行版本）
     ///
     /// ## 三阶段处理流程
@@ -608,11 +823,26 @@ impl SettlementEngine {
     /// - 使用 Rayon 并行处理，充分利用多核 CPU
     /// - 10,000 账户结算时间: ~60 秒 (8 核) vs ~500 秒 (单线程)
     pub fn daily_settlement(&self) -> Result<SettlementResult, ExchangeError> {
+        // ⚠️ 业务日期必须用 `Local`,不能用 `Utc` @yutiansut @quantaxis
+        // 交易所时区 Asia/Shanghai(+0800),**本地 00:00–08:00 期间 UTC 日期比本地早一天**。
+        // 该窗口正好覆盖期货夜盘收盘(02:30)之后的时段 —— 凌晨执行的操作会被
+        // 打上前一天的日期。结算历史按日期做键(`settlement.rs:755`),错一天会撞键。
+        // (时间戳/文件名用 Utc 是对的,只有「业务日期」要走本地日历。)
+        let settlement_date = Local::now().format("%Y-%m-%d").to_string();
+        self.daily_settlement_for(&settlement_date)
+    }
+
+    /// 同 `daily_settlement`,结算日期显式给出(`YYYY-MM-DD`)。
+    ///
+    /// 00:00 定时日终结算的是**刚结束的那一天** —— 用「现在」的日期会打成新一天。
+    /// ⚠️ 只做账户结算本身:调用前撮合簿里不能有挂单(否则 qars `settle()` 清掉当日委托后,
+    /// 残单再成交/撤单会 panic)。生产入口一律走 `run_end_of_day`。@yutiansut @quantaxis
+    pub fn daily_settlement_for(&self, settlement_date: &str) -> Result<SettlementResult, ExchangeError> {
         // 确保强平线程已启动，避免任务丢失
         self.start_force_close_worker();
 
         let start_time = Instant::now();
-        let settlement_date = Utc::now().format("%Y-%m-%d").to_string();
+        let settlement_date = settlement_date.to_string();
         let parallelism = rayon::current_num_threads();
 
         log::info!(
@@ -795,21 +1025,7 @@ impl SettlementEngine {
         let mut position_profit = 0.0;
         for (code, pos) in acc.hold.iter() {
             if let Some(settlement_price) = self.settlement_prices.get(code) {
-                let unit = pos.preset.unit_table as f64;
-
-                // 多头盈亏
-                let long_volume = pos.volume_long_today + pos.volume_long_his;
-                if long_volume > 0.0 {
-                    position_profit +=
-                        (settlement_price.value() - pos.open_price_long) * long_volume * unit;
-                }
-
-                // 空头盈亏
-                let short_volume = pos.volume_short_today + pos.volume_short_his;
-                if short_volume > 0.0 {
-                    position_profit +=
-                        (pos.open_price_short - settlement_price.value()) * short_volume * unit;
-                }
+                position_profit += Self::position_profit_at(pos, *settlement_price.value());
             }
         }
 
@@ -874,6 +1090,19 @@ impl SettlementEngine {
         {
             let mut acc = account.write();
 
+            // 持仓按结算价盯市:qars `QA_Position::settle()` 把持仓价设成持仓自己的最新价
+            // (qars2 position.rs:302-303),而各账户持仓的最新价只在本账户有行情/成交时才更新,
+            // 不同账户同一合约的「结算价」会不一样。结算前统一写成本次结算价(同一合约全市场
+            // 一个价,与交易所口径一致);没有结算价的合约保持原样。@yutiansut @quantaxis
+            if !self.settlement_prices.is_empty() {
+                let now = crate::core::account_ext::beijing_now_str();
+                for (code, pos) in acc.hold.iter_mut() {
+                    if let Some(px) = self.settlement_prices.get(code) {
+                        pos.on_price_change(*px.value(), now.clone());
+                    }
+                }
+            }
+
             // 【关键】调用 QA_Account::settle() 完成完整结算流程
             // 包括：清空日订单/成交、持仓结转、释放冻结资金、重置账户状态
             acc.settle();
@@ -936,14 +1165,7 @@ impl SettlementEngine {
             let mut position_profit = 0.0;
             for (code, pos) in acc.hold.iter() {
                 if let Some(settlement_price) = self.settlement_prices.get(code) {
-                    let long_volume = pos.volume_long_today + pos.volume_long_his;
-                    if long_volume > 0.0 {
-                        position_profit += (settlement_price.value() - pos.open_price_long) * long_volume;
-                    }
-                    let short_volume = pos.volume_short_today + pos.volume_short_his;
-                    if short_volume > 0.0 {
-                        position_profit += (pos.open_price_short - settlement_price.value()) * short_volume;
-                    }
+                    position_profit += Self::position_profit_at(pos, *settlement_price.value());
                 }
             }
             (pre_balance, close_profit, commission, position_profit, acc.accounts.margin)
@@ -1287,8 +1509,48 @@ impl Default for SettlementEngine {
             account_liquidations: Arc::new(DashMap::new()),
             liquidation_seq: AtomicU64::new(1),
             max_retry_count: 3,
+            eod_lock: parking_lot::Mutex::new(()),
+            snapshot_dir: std::sync::OnceLock::new(),
         }
     }
+}
+
+/// 结算前快照归档:把 `<snapshot_dir>/*.json` 硬链接进 `<snapshot_dir>/history/<day>/`
+/// (同一交易日再次结算 → `<day>-2`、`-3`…)。@yutiansut @quantaxis
+///
+/// 硬链接不复制数据;之后快照的 tmp+rename 替换的是活目录里的目录项,归档那份 inode 不变。
+/// 硬链接失败(如跨文件系统)时退回复制。恢复(`restore_from_snapshots`)只读顶层
+/// `*.json`,`history/` 子目录不会被当成账户快照。
+fn archive_snapshots(snapshot_dir: &str, day: &str) -> Result<(usize, String), ExchangeError> {
+    let base = std::path::Path::new(snapshot_dir).join("history");
+    let mut target = base.join(day);
+    let mut n = 2;
+    while target.exists() {
+        target = base.join(format!("{}-{}", day, n));
+        n += 1;
+    }
+    std::fs::create_dir_all(&target).map_err(|e| {
+        ExchangeError::IOError(format!("创建快照归档目录失败 {:?}: {}", target, e))
+    })?;
+
+    let entries = std::fs::read_dir(snapshot_dir)
+        .map_err(|e| ExchangeError::IOError(format!("读取快照目录失败 {}: {}", snapshot_dir, e)))?;
+    let mut count = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(name) = path.file_name() else { continue };
+        let dest = target.join(name);
+        if std::fs::hard_link(&path, &dest).is_err() {
+            std::fs::copy(&path, &dest).map_err(|e| {
+                ExchangeError::IOError(format!("归档快照失败 {:?}: {}", path, e))
+            })?;
+        }
+        count += 1;
+    }
+    Ok((count, target.to_string_lossy().into_owned()))
 }
 
 struct ForcePlan {
@@ -1390,6 +1652,70 @@ mod tests {
     ///   - Pending: 待提交
     ///   - Submitted: 已提交
     ///   - PartiallyFilled: 部分成交
+    #[test]
+    /// 盯市盈亏必须乘合约乘数,且手数必须含冻结。@yutiansut @quantaxis
+    ///
+    /// 两个错误此前叠在 `settle_account` 那份拷贝上:
+    /// 缺乘数(IF 少算 300 倍)+ 手数用 `today+his`(漏冻结)。
+    #[test]
+    fn position_profit_includes_multiplier_and_frozen() {
+        use qars::qaaccount::position::QA_Position;
+
+        // 线上 ACC_55361002319047 的 IF2502:真实 285 手 = today 216 + frozen 69
+        let mut pos = QA_Position::new_with_inithold(
+            "IF2502".to_string(), "u".to_string(), "u".to_string(),
+            "acc".to_string(), "p".to_string(),
+            216.0, 0.0, 0.0, 0.0,   // long_today, long_his, short_today, short_his
+            2800.0, 0.0, 2800.0, 0.0,
+        );
+        pos.volume_long_frozen_today = 69.0;
+        pos.volume_long_frozen_his = 0.0;
+
+        assert_eq!(pos.volume_long_unmut(), 285.0, "真实持仓 = today+his+frozen");
+
+        let unit = pos.preset.unit_table as f64;
+        assert!(unit > 1.0, "IF 应有合约乘数(实得 {}),否则本测试失去意义", unit);
+
+        // 结算价比开仓价高 10 点
+        let got = SettlementEngine::position_profit_at(&pos, 2810.0);
+        let want = 10.0 * 285.0 * unit;
+        assert!((got - want).abs() < 1e-6, "期望 {}, 实得 {}", want, got);
+
+        // ── 负对照 1:漏乘数会少算 unit 倍 ──
+        let no_unit = 10.0 * 285.0;
+        assert!((got - no_unit).abs() > 1.0, "必须与「漏乘数」的结果不同");
+
+        // ── 负对照 2:手数用 today+his 会少算 69 手 ──
+        let no_frozen = 10.0 * 216.0 * unit;
+        assert!((got - no_frozen).abs() > 1.0, "必须与「漏冻结手数」的结果不同");
+    }
+
+    /// 空头方向:符号必须相反,且冻结为负时也要正确合入。
+    #[test]
+    fn short_side_profit_and_negative_frozen() {
+        use qars::qaaccount::position::QA_Position;
+
+        // 线上 ACC_14805c37 的 IF2502:volume_short 68 = today 73 + frozen(-5)
+        let mut pos = QA_Position::new_with_inithold(
+            "IF2502".to_string(), "u".to_string(), "u".to_string(),
+            "acc".to_string(), "p".to_string(),
+            0.0, 0.0, 73.0, 0.0,
+            0.0, 2800.0, 0.0, 2800.0,
+        );
+        pos.volume_short_frozen_today = -5.0;
+        assert_eq!(pos.volume_short_unmut(), 68.0, "冻结为负时也要如实合入");
+
+        let unit = pos.preset.unit_table as f64;
+        // 结算价跌 10 点 ⇒ 空头赚
+        let got = SettlementEngine::position_profit_at(&pos, 2790.0);
+        assert!((got - 10.0 * 68.0 * unit).abs() < 1e-6, "空头盈亏,实得 {}", got);
+        assert!(got > 0.0, "空头在价格下跌时应盈利");
+
+        // 价格上涨 ⇒ 空头亏
+        let loss = SettlementEngine::position_profit_at(&pos, 2810.0);
+        assert!(loss < 0.0, "空头在价格上涨时应亏损,实得 {}", loss);
+    }
+
     #[test]
     fn test_force_liquidation_status_is_final() {
         // 终态状态

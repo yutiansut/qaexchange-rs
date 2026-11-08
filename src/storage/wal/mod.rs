@@ -10,6 +10,6 @@ pub mod manager;
 pub mod per_instrument;
 pub mod record;
 
-pub use manager::WalManager;
+pub use manager::{configure_wal_sync_mode, flush_all_pending, wal_async_enabled, WalManager};
 pub use per_instrument::PerInstrumentWalManager;
 pub use record::{WalEntry, WalRecord};

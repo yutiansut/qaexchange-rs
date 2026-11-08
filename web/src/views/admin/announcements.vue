@@ -28,7 +28,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" icon="el-icon-search" @click="loadAnnouncements">查询</el-button>
+          <el-button type="primary" icon="el-icon-search" @click="handleSearch">查询</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -36,6 +36,7 @@
     <!-- 公告列表 -->
     <el-card class="table-card">
       <el-table
+        :empty-text="$emptyText(loadError)"
         :data="announcements"
         v-loading="loading"
         stripe
@@ -58,9 +59,9 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" min-width="180">
+        <el-table-column prop="publish_time" label="发布时间" min-width="180">
           <template slot-scope="scope">
-            {{ formatTime(scope.row.created_at) }}
+            {{ formatTime(scope.row.publish_time) }}
           </template>
         </el-table-column>
         <el-table-column prop="expire_time" label="有效期" min-width="180">
@@ -160,9 +161,9 @@
             {{ getPriorityLabel(currentAnnouncement.priority) }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="创建时间">{{ formatTime(currentAnnouncement.created_at) }}</el-descriptions-item>
-        <el-descriptions-item label="创建者">{{ currentAnnouncement.created_by || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="生效时间">{{ currentAnnouncement.publish_time ? formatTime(currentAnnouncement.publish_time) : '立即生效' }}</el-descriptions-item>
+        <el-descriptions-item label="发布时间">{{ formatTime(currentAnnouncement.publish_time) }}</el-descriptions-item>
+        <!-- 后端字段是 author,没有 created_by(models.rs:666)。@yutiansut @quantaxis -->
+        <el-descriptions-item label="创建者">{{ currentAnnouncement.author || '-' }}</el-descriptions-item>
         <el-descriptions-item label="失效时间">{{ currentAnnouncement.expire_time ? formatTime(currentAnnouncement.expire_time) : '永久有效' }}</el-descriptions-item>
         <el-descriptions-item label="内容">
           <div class="announcement-content">{{ currentAnnouncement.content }}</div>
@@ -183,6 +184,9 @@ export default {
 
   data() {
     return {
+      // 加载失败原因 —— 与「真的没数据」区分开,交给 $emptyText 渲染
+      // @yutiansut @quantaxis
+      loadError: null,
       loading: false,
       submitting: false,
       announcements: [],
@@ -233,8 +237,21 @@ export default {
   },
 
   methods: {
+    // 查询 —— 必须先回第一页再拉数据。@yutiansut @quantaxis
+    //
+    // ⚠️ 原来「查询」按钮直接绑 loadAnnouncements,不重置页码。
+    // 于是:翻到第 3 页 → 改筛选条件 → 点查询 → 仍带 page=3 请求。
+    // 新条件下总数可能只有 1 页,后端返回空数组,页面显示「暂无数据」,
+    // 而分页条显示「共 N 条」—— 与 P1-5 完全同一种「查到了却看不见」。
+    // 不能直接在 loadAnnouncements 里重置:它同时被两个分页 handler 调用
+    // (:339 / :344),塞 page=1 会让分页永远翻不动。故单开一层。
+    handleSearch() {
+      this.pagination.page = 1
+      this.loadAnnouncements()
+    },
+
     async loadAnnouncements() {
-      this.loading = true
+      this.loading = true; this.loadError = null
       try {
         const params = {
           page: this.pagination.page,
@@ -249,8 +266,9 @@ export default {
         this.announcements = (data && data.announcements) || []
         this.pagination.total = (data && data.total) || 0
       } catch (err) {
+        this.loadError = (err && err.message) || '加载失败'
         console.error('加载公告失败:', err)
-        this.$message.error(err.message || '加载公告失败')
+        this.$message.error(this.$errMsg(err, '加载公告失败'))
       } finally {
         this.loading = false
       }
@@ -291,7 +309,7 @@ export default {
           this.loadAnnouncements()
         } catch (err) {
           console.error('发布公告失败:', err)
-          this.$message.error(err.message || '发布公告失败')
+          this.$message.error(this.$errMsg(err, '发布公告失败'))
         } finally {
           this.submitting = false
         }
@@ -306,7 +324,7 @@ export default {
         this.detailDialogVisible = true
       } catch (err) {
         console.error('获取公告详情失败:', err)
-        this.$message.error(err.message || '获取公告详情失败')
+        this.$message.error(this.$errMsg(err, '获取公告详情失败'))
       }
     },
 
@@ -323,8 +341,10 @@ export default {
           this.loadAnnouncements()
         } catch (err) {
           console.error('删除公告失败:', err)
-          this.$message.error(err.message || '删除公告失败')
+          this.$message.error(this.$errMsg(err, '删除公告失败'))
         }
+      // 用户点「取消」时 $confirm 会 reject('cancel'),空 catch 是接住它,
+      // 不接会产生一条未捕获的 Promise rejection。@yutiansut @quantaxis
       }).catch(() => {})
     },
 

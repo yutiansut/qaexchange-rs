@@ -61,7 +61,7 @@ pub enum WalRecord {
         user_id: [u8; 40],       // 用户ID
         instrument_id: [u8; 16], // 合约ID（已隐含在 Per-Instrument WAL 中，但保留用于跨品种查询）
         direction: u8,           // 0=BUY, 1=SELL
-        offset: u8,              // 0=OPEN, 1=CLOSE
+        offset: u8,              // 0=OPEN, 1=CLOSE, 2=CLOSETODAY, 3=CLOSEYESTERDAY
         price: f64,
         volume: f64,
         timestamp: i64, // 纳秒时间戳
@@ -153,7 +153,7 @@ pub enum WalRecord {
         instrument: [u8; 16],        // 合约代码 (e.g. "cu2501")
         exchange_order_id: i64,      // 交易所订单号（统一事件序列）
         direction: u8,               // 0=BUY, 1=SELL
-        offset: u8,                  // 0=OPEN, 1=CLOSE, 2=CLOSETODAY
+        offset: u8,                  // 0=OPEN, 1=CLOSE, 2=CLOSETODAY, 3=CLOSEYESTERDAY
         price_type: u8,              // 0=LIMIT, 1=MARKET
         price: f64,                  // 委托价格
         volume: f64,                 // 委托数量
@@ -273,7 +273,7 @@ pub enum WalRecord {
         frozen_margin: f64,      // 当前冻结保证金
         frozen_amount: f64,      // 当前冻结资金（开仓用）
         direction: u8,           // 0=BUY, 1=SELL
-        offset: u8,              // 0=OPEN, 1=CLOSE, 2=CLOSETODAY
+        offset: u8,              // 0=OPEN, 1=CLOSE, 2=CLOSETODAY, 3=CLOSEYESTERDAY
         limit_price: f64,        // 委托价格
         avg_price: f64,          // 成交均价（部分成交时）
         last_msg: [u8; 128],     // 最后消息（撤单原因等）
@@ -367,6 +367,60 @@ impl WalRecord {
     /// 塞进 [u8;32] 丢掉末尾 4 字符,WAL 账户恢复 46/46 全败且无任何报错。
     /// **凡是装 user_id / account_id 的一律用 `to_fixed_array_40`。**
     /// @yutiansut @quantaxis
+    /// 把 direction 字符串编码成 WAL 里的 u8 @yutiansut @quantaxis
+    ///
+    /// 与 `encode_offset` 对称。原先同样是 `match direction { "BUY"=>0, "SELL"=>1,
+    /// _ => 0 }` 复制 5 份 —— 未知方向静默落成 **BUY**。
+    /// 入口 `order_router::normalize_direction` 现已拒掉非法值,
+    /// 这里的 error 分支正常不该触发;真触发说明有路径绕过了归一化。
+    ///
+    /// 编码: 0=BUY, 1=SELL
+    pub fn encode_direction(direction: &str) -> u8 {
+        match direction {
+            "BUY" => 0,
+            "SELL" => 1,
+            other => {
+                log::error!(
+                    "未知 direction {:?} 落盘为 BUY(0) —— 入口 normalize_direction 本应拦住",
+                    other
+                );
+                0
+            }
+        }
+    }
+
+    /// 把 offset 字符串编码成 WAL 里的 u8 @yutiansut @quantaxis
+    ///
+    /// ⚠️ 此前这段 match 在 `trade_gateway.rs` 里**原样复制了 5 遍**
+    /// (:609 / :681 / :773 / :992 / :1148),每一份都只写到 `CLOSETODAY => 2`,
+    /// 没有 `CLOSEYESTERDAY` 分支 —— 而 `order_router::normalize_offset` 是接受
+    /// 平昨单的、`calculate_towards` 也正确路由。结果:**合法的平昨单被持久化成
+    /// offset=0(开仓)**,回放与审计里平昨全变开仓。5 份拷贝一起漏同一个分支。
+    ///
+    /// `storage/subscriber.rs:305` 还有第 6 份,映射更粗
+    /// (`if offset == "OPEN" { 0 } else { 1 }`),把 CLOSETODAY 也压成 CLOSE。
+    ///
+    /// 统一到这里,并对未知值记 error —— 静默落 0 会把「平仓」写成「开仓」,
+    /// 是最坏的一种默认值。
+    ///
+    /// 编码: 0=OPEN, 1=CLOSE, 2=CLOSETODAY, 3=CLOSEYESTERDAY
+    pub fn encode_offset(offset: &str) -> u8 {
+        match offset {
+            "OPEN" => 0,
+            "CLOSE" => 1,
+            "CLOSETODAY" => 2,
+            "CLOSEYESTERDAY" => 3,
+            other => {
+                log::error!(
+                    "未知 offset {:?} 落盘为 OPEN(0) —— 入口 normalize_offset 本应拦住,\
+                     出现说明有路径绕过了归一化",
+                    other
+                );
+                0
+            }
+        }
+    }
+
     pub fn to_fixed_array_32(s: &str) -> [u8; 32] {
         let mut arr = [0u8; 32];
         let bytes = s.as_bytes();

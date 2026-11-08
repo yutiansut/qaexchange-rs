@@ -14,7 +14,7 @@ use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -143,11 +143,55 @@ pub struct SubmitOrderResponse {
 }
 
 /// 提交行为控制选项
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[derive(Default)]
 struct OrderSubmitOptions {
     /// 是否为强制（风险绕过）订单
     force: bool,
+    /// 客户端编号(DIFF insert_order 的 order_id)。账户内唯一,重复 → CTP 22。@yutiansut @quantaxis
+    client_order_id: Option<String>,
+}
+
+/// CTP 错误码(取自 LocalCTP `ctp_file/current/error.xml`)的提示文本 @yutiansut @quantaxis
+pub fn ctp_error_prompt(error_id: i32) -> &'static str {
+    match error_id {
+        15 => "CTP:报单字段有误",
+        16 => "CTP:找不到合约",
+        22 => "CTP:报单错误：不允许重复报单",
+        24 => "CTP:撤单已报送，不允许重复撤单",
+        25 => "CTP:撤单找不到相应报单",
+        26 => "CTP:报单已全成交或已撤销，不能再撤",
+        30 => "CTP:平仓量超过持仓量",
+        31 => "CTP:资金不足",
+        50 => "CTP:平今仓位不足",
+        51 => "CTP:平昨仓位不足",
+        62 => "CTP:没有条件单交易权限",
+        80 => "CTP:交易所不支持的价格类型",
+        95 => "CTP：不支持的价格",
+        116 => "CTP:下单频率限制",
+        _ => "CTP：交易所返回的错误",
+    }
+}
+
+/// 交易所内部拒单码 → CTP ErrorID(对照稿 v0,已与 hft_maker 确认)@yutiansut @quantaxis
+pub fn ctp_error_id(code: u32, msg: &str) -> i32 {
+    match code {
+        22 => 22,
+        15 => 15,
+        1001 | 1004 => 31,                         // 资金不足 / 风险度过高
+        1007 | 4006 => 16,                         // 合约不存在
+        1003 | 1008 | 4000 | 4002 | 4003 | 4004 | 4007 => 15, // 报单字段有误
+        4001 => {
+            if msg.contains("Insufficient funds") || msg.contains("资金") {
+                31
+            } else if msg.contains("position") || msg.contains("持仓") || msg.contains("平仓") {
+                30
+            } else {
+                31
+            }
+        }
+        _ => 91, // 1002 持仓比例 / 1005 自成交 / 4005 数量条件 / 4100 4101 交易状态 等
+    }
 }
 
 
@@ -247,6 +291,16 @@ pub struct OrderRouter {
     engine_id_to_user: DashMap<(String, u64), String>,
 
     /// 订单序号生成器
+    /// (账户, 客户端编号) → 交易所单号。客户端编号查重(CTP 22)与按客户端编号撤单用。
+    /// 值为空串 = 已占用但订单在生成单号前就被拒了。@yutiansut @quantaxis
+    client_orders: DashMap<(String, String), String>,
+
+    /// 客户端编号映射文件路径(启动时由 main 设置一次)
+    client_order_id_file: std::sync::OnceLock<String>,
+
+    /// 客户端编号映射文件的常驻追加句柄(首次写入时打开)@yutiansut @quantaxis
+    client_order_id_writer: parking_lot::Mutex<Option<std::fs::File>>,
+
     order_seq: AtomicU64,
 
     /// 统计：总成交笔数
@@ -279,6 +333,52 @@ pub struct OrderRouter {
 
     /// 交易状态机（可选） @yutiansut @quantaxis
     trading_state_machine: Option<Arc<crate::exchange::TradingStateMachine>>,
+
+    /// 日终闸门:置位期间新单一律拒(4100 → CTP 91,与交易所闭市拒单同口径),撤单照常。
+    /// @yutiansut @quantaxis
+    ///
+    /// 日终结算前必须先把活单撤干净:qars `settle()` 清空当日委托,撮合簿里若还留着
+    /// 该账户的单,之后撤单(qars `cancel_order` 的 expect)或成交(`receive_deal_sim`
+    /// 的 unwrap)都会 panic —— release 是 panic=abort,整个进程退出。
+    eod_halt: AtomicBool,
+    /// 已过闸门检查、尚未返回的下单数。置闸后等它归零,保证扫单时没有在途报单。
+    inflight_submits: AtomicUsize,
+}
+
+/// 日终扫单结果(`cancel_all_active_orders`)@yutiansut @quantaxis
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EodSweep {
+    /// 走正常撤单路径撤掉的活单(释放冻结 + 推 DIFF「已撤单」)
+    pub cancelled: usize,
+    /// 撤单失败的活单(扫描后已自行终结等),见日志
+    pub cancel_failed: usize,
+    /// 撮合簿里有、路由侧已不是活单(或无记录)的残单,直接从簿上摘掉
+    pub residual_removed: usize,
+    /// 扫完后撮合簿里仍在的挂单数 —— 不为 0 就不能结算
+    pub residual_left: usize,
+}
+
+/// `get_user_order_details` 的返回项。@yutiansut @quantaxis
+///
+/// ⚠️ **`qa_order_id` 是本结构存在的理由** —— 它是 qars 内部订单 ID,
+/// 也是账户 QIFI `orders` map 的 key。同一笔订单在两处有**两个不同的 ID**:
+///   OrderRouter: `O1788625578538000000001`
+///   QIFI:        `abff8eb6-0649-5b52-b236-f4...`
+/// `handlers.rs::query_user_orders` 把两边合并展示,只按 `order_id` 去重时
+/// **同一笔单会显示成两条**(实测:下 1 单 → 页面 2 行,时间戳只差 14 微秒、
+/// 合约/量/价全同,仅 ID 与 status 大小写不同)。带上 qa_order_id 才去得掉。
+///
+/// 原先这里返回 6 元组,加到 7 就没法读了 —— 改具名结构体。
+#[derive(Debug, Clone)]
+pub struct UserOrderDetail {
+    pub order_id: String,
+    /// qars 内部订单 ID = QIFI `orders` 的 key,跨源去重要用它
+    pub qa_order_id: String,
+    pub order: Order,
+    pub status: OrderStatus,
+    pub submit_time: i64,
+    pub update_time: i64,
+    pub filled_volume: f64,
 }
 
 impl OrderRouter {
@@ -302,6 +402,9 @@ impl OrderRouter {
             user_orders: DashMap::new(),
             engine_id_to_order: DashMap::new(),
             engine_id_to_user: DashMap::new(),
+            client_orders: DashMap::new(),
+            client_order_id_file: std::sync::OnceLock::new(),
+            client_order_id_writer: parking_lot::Mutex::new(None),
             order_seq: AtomicU64::new(1),
             trade_count: AtomicU64::new(0),
             trade_volume: parking_lot::RwLock::new(0.0),
@@ -314,6 +417,8 @@ impl OrderRouter {
             priority_queue: None, // 默认不启用
             priority_queue_enabled: AtomicBool::new(false),
             trading_state_machine: None, // 默认不启用
+            eod_halt: AtomicBool::new(false),
+            inflight_submits: AtomicUsize::new(0),
         }
     }
 
@@ -403,6 +508,9 @@ impl OrderRouter {
             user_orders: DashMap::new(),
             engine_id_to_order: DashMap::new(),
             engine_id_to_user: DashMap::new(),
+            client_orders: DashMap::new(),
+            client_order_id_file: std::sync::OnceLock::new(),
+            client_order_id_writer: parking_lot::Mutex::new(None),
             order_seq: AtomicU64::new(1),
             trade_count: AtomicU64::new(0),
             trade_volume: parking_lot::RwLock::new(0.0),
@@ -415,17 +523,452 @@ impl OrderRouter {
             priority_queue: None, // 默认不启用
             priority_queue_enabled: AtomicBool::new(false),
             trading_state_machine: None, // 默认不启用
+            eod_halt: AtomicBool::new(false),
+            inflight_submits: AtomicUsize::new(0),
         }
     }
 
     /// 提交订单 (核心方法)
     pub fn submit_order(&self, req: SubmitOrderRequest) -> SubmitOrderResponse {
-        self.submit_order_with_options(req, OrderSubmitOptions::default())
+        self.submit_and_publish(req, OrderSubmitOptions::default())
     }
 
     /// 提交强制订单（跳过风控/资金校验，用于强平等场景）
     pub fn submit_force_order(&self, req: SubmitOrderRequest) -> SubmitOrderResponse {
-        self.submit_order_with_options(req, OrderSubmitOptions { force: true })
+        self.submit_and_publish(req, OrderSubmitOptions { force: true, ..Default::default() })
+    }
+
+    /// 带客户端编号提交(DIFF insert_order)。编号账户内唯一,重复 → CTP 22;
+    /// DIFF 回报 `trade.<account>.orders/trades` 以它为键。@yutiansut @quantaxis
+    pub fn submit_order_with_client_id(
+        &self,
+        req: SubmitOrderRequest,
+        client_order_id: Option<String>,
+    ) -> SubmitOrderResponse {
+        self.submit_and_publish(
+            req,
+            OrderSubmitOptions { client_order_id, ..Default::default() },
+        )
+    }
+
+    /// 所有提交入口的公共外壳:提交完成后推一次订单最终视图(撮合途中的中间状态
+    /// 由 `handle_success_result` 推)。重复推同一视图无害(Merge Patch 幂等)。
+    fn submit_and_publish(
+        &self,
+        req: SubmitOrderRequest,
+        opts: OrderSubmitOptions,
+    ) -> SubmitOrderResponse {
+        // 日终闸门:先登记在途、再看闸门(两边都 SeqCst,与 `begin_eod_halt` 的
+        // 「先置闸、再等在途归零」配对)—— 任何一笔要么看到闸门被拒,要么被日终等到落定。
+        // 拒单在一切副作用之前(客户端编号未占位、未冻结、未进撮合)。@yutiansut @quantaxis
+        struct InflightGuard<'a>(&'a AtomicUsize);
+        impl Drop for InflightGuard<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        self.inflight_submits.fetch_add(1, Ordering::SeqCst);
+        let _inflight = InflightGuard(&self.inflight_submits);
+        if self.eod_halt.load(Ordering::SeqCst) {
+            return SubmitOrderResponse {
+                success: false,
+                order_id: None,
+                status: Some("rejected".to_string()),
+                error_message: Some("日终结算中,暂停接收报单".to_string()),
+                error_code: Some(4100), // 交易状态拒绝 → CTP 91(交易所闭市拒单同口径)
+            };
+        }
+
+        let resp = self.submit_order_with_options(req, opts);
+        if let Some(ref oid) = resp.order_id {
+            if self.orders.contains_key(oid) {
+                let reason = if resp.success { None } else { resp.error_message.as_deref() };
+                self.push_diff_order(oid, reason);
+            }
+        }
+        resp
+    }
+
+    /// 客户端编号映射的持久化文件(`<storage>/client_order_ids.jsonl`,每行
+    /// `{"account","client_order_id","exchange_order_id"}`)。QIFI 订单没有客户端编号字段、
+    /// qars 也不收外部单号,所以单独记一份;启动时 `load_client_order_ids` 读回。@yutiansut @quantaxis
+    pub fn set_client_order_id_file(&self, path: String) {
+        let _ = self.client_order_id_file.set(path);
+    }
+
+    fn persist_client_order_id(&self, account_id: &str, client_order_id: &str, order_id: &str) {
+        let Some(path) = self.client_order_id_file.get() else { return };
+        use std::io::Write;
+        let line = serde_json::json!({
+            "account": account_id,
+            "client_order_id": client_order_id,
+            "exchange_order_id": order_id,
+        });
+        // 追加写、不 fsync(与 WAL 的 async 模式同一取舍);只有带客户端编号的单才写。
+        // ⚡ 整行先拼好再一次 write(2),句柄常驻 —— 原来每笔都 open + 用 `Value` 的 Display
+        //    往无缓冲 File 里逐段写(十几~几十次 write(2))+ close,而且就在撮合之前,
+        //    落在走 DIFF 客户端编号的 hft_maker 下单路径上。@yutiansut @quantaxis
+        let mut text = line.to_string();
+        text.push('\n');
+        let mut w = self.client_order_id_writer.lock();
+        if w.is_none() {
+            match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                Ok(f) => *w = Some(f),
+                Err(e) => {
+                    log::warn!("客户端编号映射写入失败 {}: {}", path, e);
+                    return;
+                }
+            }
+        }
+        if let Some(f) = w.as_mut() {
+            if let Err(e) = f.write_all(text.as_bytes()) {
+                log::warn!("客户端编号映射写入失败 {}: {}", path, e);
+                *w = None; // 下次重新打开
+            }
+        }
+    }
+
+    /// 日终闸门置位,并等在途报单落定;`timeout` 内没落定返回 false
+    /// (调用方应放弃本轮日终并 `end_eod_halt`)。@yutiansut @quantaxis
+    pub fn begin_eod_halt(&self, timeout: Duration) -> bool {
+        self.eod_halt.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + timeout;
+        while self.inflight_submits.load(Ordering::SeqCst) > 0 {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
+    /// 日终闸门复位(恢复收单)
+    pub fn end_eod_halt(&self) {
+        self.eod_halt.store(false, Ordering::SeqCst);
+    }
+
+    /// 日终闸门是否置位
+    pub fn is_eod_halted(&self) -> bool {
+        self.eod_halt.load(Ordering::SeqCst)
+    }
+
+    /// 日终撤单:撤掉全部活单(真实交易所收盘时 GFD 单失效)。@yutiansut @quantaxis
+    ///
+    /// 活单走与客户端撤单**同一条路径**(`cancel_order`),账户冻结、撮合簿、DIFF 回报
+    /// 三处一致;随后逐簿复核,撮合簿里路由已不认得的残单直接从簿上摘掉(它们没有可释放的
+    /// 账户冻结 —— 结算时 qars 会把残余冻结一并退回)。调用前应已 `begin_eod_halt`。
+    pub fn cancel_all_active_orders(&self) -> EodSweep {
+        let mut sweep = EodSweep::default();
+
+        // 先收集再撤:不在 DashMap 迭代期间持有条目锁去走撤单路径
+        let active: Vec<(String, String)> = self
+            .orders
+            .iter()
+            .filter_map(|e| {
+                let info = e.value().read();
+                matches!(info.status, OrderStatus::Submitted | OrderStatus::PartiallyFilled)
+                    .then(|| (e.key().clone(), info.order.user_id.clone()))
+            })
+            .collect();
+        for (order_id, account_id) in active {
+            match self.cancel_order(CancelOrderRequest { account_id, order_id: order_id.clone() }) {
+                Ok(()) => sweep.cancelled += 1,
+                Err(e) => {
+                    sweep.cancel_failed += 1;
+                    log::warn!("[EOD] 撤单失败 {}: {}", order_id, e);
+                    // 撮合簿里已没有这张单(实测:启动恢复时恢复单彼此交叉成交,
+                    // `restore_orders_from_accounts` 只认 Accepted —— 隔离实例 64 笔):
+                    // 路由侧按已撤收尾,否则每天日终都再撤一遍、风控活单计数也一直挂着。
+                    // qars 侧的委托与冻结由随后的结算清空、退回。@yutiansut @quantaxis
+                    let still_active = self.orders.get(&order_id).is_some_and(|i| {
+                        matches!(i.read().status, OrderStatus::Submitted | OrderStatus::PartiallyFilled)
+                    });
+                    if still_active {
+                        let _ = self.update_order_status(&order_id, OrderStatus::Cancelled);
+                    }
+                }
+            }
+        }
+
+        // 复核撮合簿。锁序:先读簿收集、放锁,再撤单(撤单路径自己按「簿 → 账户」取锁)
+        for instrument in self.matching_engine.get_instruments() {
+            let Some(book) = self.matching_engine.get_orderbook(&instrument) else { continue };
+            let resting: Vec<(u64, bool)> = {
+                let ob = book.read();
+                let bids = ob.bid_queue.get_sorted_orders().unwrap_or_default();
+                let asks = ob.ask_queue.get_sorted_orders().unwrap_or_default();
+                bids.iter()
+                    .map(|o| (o.id, true))
+                    .chain(asks.iter().map(|o| (o.id, false)))
+                    .collect()
+            };
+            for (engine_id, is_bid) in resting {
+                let routed = self
+                    .engine_id_to_order
+                    .get(&(instrument.clone(), engine_id))
+                    .map(|e| e.value().clone());
+                if let Some(order_id) = routed {
+                    let account_id = self
+                        .orders
+                        .get(&order_id)
+                        .map(|i| i.read().order.user_id.clone())
+                        .unwrap_or_default();
+                    if self
+                        .cancel_order(CancelOrderRequest { account_id, order_id })
+                        .is_ok()
+                    {
+                        sweep.cancelled += 1;
+                        continue;
+                    }
+                }
+                let removed = {
+                    let mut ob = book.write();
+                    if is_bid {
+                        ob.bid_queue.cancel(engine_id)
+                    } else {
+                        ob.ask_queue.cancel(engine_id)
+                    }
+                };
+                if removed {
+                    sweep.residual_removed += 1;
+                    log::warn!(
+                        "[EOD] 摘除撮合簿残单 {} engine_id={}(路由侧不是活单)",
+                        instrument,
+                        engine_id
+                    );
+                }
+            }
+            let left = {
+                let ob = book.read();
+                ob.bid_queue.get_sorted_orders().map_or(0, |v| v.len())
+                    + ob.ask_queue.get_sorted_orders().map_or(0, |v| v.len())
+            };
+            sweep.residual_left += left;
+        }
+        sweep
+    }
+
+    /// 各合约撮合簿最新价(日终结算价用;没成交过的合约 lastprice 为 0,跳过)
+    pub fn last_prices(&self) -> Vec<(String, f64)> {
+        self.matching_engine
+            .get_instruments()
+            .into_iter()
+            .filter_map(|i| {
+                let px = self.matching_engine.get_last_price(&i)?;
+                (px.is_finite() && px > 0.0).then_some((i, px))
+            })
+            .collect()
+    }
+
+    /// 新交易日:客户端编号(CTP 报单引用)按交易日唯一 —— 清空查重表,
+    /// 映射文件改名归档为 `<文件名>.<交易日>.jsonl`,之后的映射写进新文件。
+    /// 返回清掉的条目数。@yutiansut @quantaxis
+    pub fn roll_client_order_ids(&self, trading_day: &str) -> usize {
+        // 持写入锁做改名,与 `persist_client_order_id` 互斥
+        let mut writer = self.client_order_id_writer.lock();
+        let n = self.client_orders.len();
+        self.client_orders.clear();
+        *writer = None; // 下一笔重新打开(新文件)
+        if let Some(path) = self.client_order_id_file.get() {
+            let p = std::path::Path::new(path);
+            if p.exists() {
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("client_order_ids");
+                let archived = p.with_file_name(format!("{}.{}.jsonl", stem, trading_day));
+                if let Err(e) = std::fs::rename(p, &archived) {
+                    log::warn!("[EOD] 客户端编号映射归档失败 {} → {:?}: {}", path, archived, e);
+                }
+            }
+        }
+        n
+    }
+
+    /// 启动时读回客户端编号映射(须在 `restore_orders_from_accounts` 之后,单号才对得上)
+    pub fn load_client_order_ids(&self) -> usize {
+        let Some(path) = self.client_order_id_file.get() else { return 0 };
+        let Ok(text) = std::fs::read_to_string(path) else { return 0 };
+        let mut n = 0;
+        for line in text.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            let (Some(a), Some(c), Some(o)) = (
+                v["account"].as_str(),
+                v["client_order_id"].as_str(),
+                v["exchange_order_id"].as_str(),
+            ) else {
+                continue;
+            };
+            self.client_orders
+                .insert((a.to_string(), c.to_string()), o.to_string());
+            self.trade_gateway.register_client_order_id(o, c);
+            n += 1;
+        }
+        n
+    }
+
+    /// 把客户端编号或交易所单号解析成交易所单号(撤单用)
+    pub fn resolve_order_id(&self, account_id: &str, id: &str) -> String {
+        if self.orders.contains_key(id) {
+            return id.to_string();
+        }
+        self.client_orders
+            .get(&(account_id.to_string(), id.to_string()))
+            .map(|e| e.value().clone())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| id.to_string())
+    }
+
+    /// DIFF 订单视图 `trade.<account>.orders.<key>`:QIFI Order 字段 + `status_code`(EIFI §4.1)。
+    /// @yutiansut @quantaxis
+    ///
+    /// 终态口径(与 hft_maker 确认):全部成交 0;撤单(含 FAK 零成 / 部成撤余量)5,
+    /// 用 `volume_left` 区分;拒单 7 + `error_id`。`exchange_order_id` = 交易所单号
+    /// (HTTP 撤单 / 查询用的那个)。
+    fn push_diff_order(&self, order_id: &str, reason: Option<&str>) {
+        if let Some((account_id, key, value)) = self.diff_order_view(order_id, reason) {
+            self.trade_gateway
+                .publish_trade_section(&account_id, "orders", &key, value);
+        }
+    }
+
+    /// 交易网关(DIFF 登录初始快照等需要直接推账户视图)
+    pub fn trade_gateway(&self) -> &Arc<TradeGateway> {
+        &self.trade_gateway
+    }
+
+    /// 某账户的活单视图(登录初始快照用):PendingRisk / PendingRoute / Submitted / PartiallyFilled
+    pub fn diff_live_order_views(&self, account_id: &str) -> Vec<(String, serde_json::Value)> {
+        let ids: Vec<String> = self
+            .user_orders
+            .get(account_id)
+            .map(|v| v.read().clone())
+            .unwrap_or_default();
+        ids.iter()
+            .filter(|oid| {
+                self.orders.get(*oid).map_or(false, |i| {
+                    matches!(
+                        i.read().status,
+                        OrderStatus::PendingRisk
+                            | OrderStatus::PendingRoute
+                            | OrderStatus::Submitted
+                            | OrderStatus::PartiallyFilled
+                    )
+                })
+            })
+            .filter_map(|oid| self.diff_order_view(oid, None).map(|(_, k, v)| (k, v)))
+            .collect()
+    }
+
+    /// 订单视图本体:`(账户, 键, QIFI Order + status_code)`
+    fn diff_order_view(
+        &self,
+        order_id: &str,
+        reason: Option<&str>,
+    ) -> Option<(String, String, serde_json::Value)> {
+        let info_arc = self.orders.get(order_id).map(|e| e.value().clone())?;
+        let info = info_arc.read();
+        let o = &info.order;
+        let account_id = o.user_id.clone();
+        let key = self.trade_gateway.diff_order_key(order_id);
+        let filled = info.filled_volume;
+        let volume_left = (o.volume_orign - filled).max(0.0);
+        let (status, status_code, last_msg) = match info.status {
+            OrderStatus::Filled => ("FINISHED", 0, "全部成交".to_string()),
+            OrderStatus::Cancelled => (
+                "FINISHED",
+                5,
+                if filled > 0.0 { "部分成交，剩余已撤单" } else { "已撤单" }.to_string(),
+            ),
+            OrderStatus::Rejected => (
+                "FINISHED",
+                7,
+                format!("{}: {}", ctp_error_prompt(91), reason.unwrap_or("交易所拒单")),
+            ),
+            OrderStatus::PartiallyFilled => ("ALIVE", 1, "部分成交".to_string()),
+            _ if filled > 0.0 => ("ALIVE", 1, "部分成交".to_string()),
+            _ => ("ALIVE", 3, "未成交".to_string()),
+        };
+        let mut value = serde_json::json!({
+            "user_id": account_id,
+            "order_id": key,
+            "exchange_id": self.trade_gateway.exchange_of(&o.instrument_id, &o.exchange_id),
+            "instrument_id": o.instrument_id,
+            "direction": o.direction,
+            "offset": o.offset,
+            "volume_orign": o.volume_orign,
+            "price_type": o.price_type,
+            "limit_price": o.limit_price,
+            "time_condition": info.time_condition.to_string(),
+            "volume_condition": info.volume_condition.to_string(),
+            "insert_date_time": info.submit_time,
+            "exchange_order_id": order_id,
+            "status": status,
+            "volume_left": volume_left,
+            "last_msg": last_msg,
+            "status_code": status_code,
+        });
+        if status_code == 7 {
+            value["error_id"] = serde_json::json!(91);
+        }
+        drop(info);
+        Some((account_id, key, value))
+    }
+
+    /// 在进入订单表**之前**就被拒的单(柜台风控等,两段式的第一段)推一张终态订单视图:
+    /// FINISHED + status_code 7 + error_id,`exchange_order_id` 为空。
+    /// FOK 不能全部成交按「交易所撤单」报 status_code 4。由 DIFF 下单路径调用。@yutiansut @quantaxis
+    pub fn publish_rejected_order(
+        &self,
+        req: &SubmitOrderRequest,
+        client_order_id: Option<&str>,
+        exchange_id: &str,
+        resp: &SubmitOrderResponse,
+    ) {
+        if let Some(ref oid) = resp.order_id {
+            if self.orders.contains_key(oid) {
+                return; // 已进订单表,由 push_diff_order 负责
+            }
+        }
+        // ⚠️ 重复客户端编号(22)**绝不能**推订单视图:键就是那个重复的编号,
+        //    会把原来那张(可能还活着的)订单覆盖成 FINISHED/7。CTP 也只回
+        //    OnRspOrderInsert 错误,原单不受影响 —— 这里只靠 notify 告知。@yutiansut @quantaxis
+        if resp.error_code == Some(22) {
+            return;
+        }
+        let key = client_order_id
+            .map(str::to_string)
+            .or_else(|| resp.order_id.clone())
+            .unwrap_or_else(|| self.generate_order_id());
+        let code = resp.error_code.unwrap_or(0);
+        let msg = resp.error_message.clone().unwrap_or_else(|| "拒单".to_string());
+        let (status_code, error_id, last_msg) = if code == 4010 {
+            (4, 0, "FOK 未能全部成交，已撤单".to_string())
+        } else {
+            let eid = ctp_error_id(code, &msg);
+            (7, eid, format!("{}: {}", ctp_error_prompt(eid), msg))
+        };
+        let mut value = serde_json::json!({
+            "user_id": req.account_id,
+            "order_id": key,
+            "exchange_id": self.trade_gateway.exchange_of(&req.instrument_id, exchange_id),
+            "instrument_id": req.instrument_id,
+            "direction": req.direction,
+            "offset": req.offset,
+            "volume_orign": req.volume,
+            "price_type": req.order_type,
+            "limit_price": req.price,
+            "time_condition": req.time_condition.map(|t| t.to_string()).unwrap_or_else(|| "GFD".into()),
+            "volume_condition": req.volume_condition.map(|v| v.to_string()).unwrap_or_else(|| "ANY".into()),
+            "insert_date_time": chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+            "exchange_order_id": "",
+            "status": "FINISHED",
+            "volume_left": req.volume,
+            "last_msg": last_msg,
+            "status_code": status_code,
+        });
+        if error_id != 0 {
+            value["error_id"] = serde_json::json!(error_id);
+        }
+        self.trade_gateway
+            .publish_trade_section(&req.account_id, "orders", &key, value);
     }
 
     fn submit_order_with_options(
@@ -433,6 +976,29 @@ impl OrderRouter {
         mut req: SubmitOrderRequest,
         opts: OrderSubmitOptions,
     ) -> SubmitOrderResponse {
+        // 客户端编号查重(CTP 在柜台层就拒,先于一切校验)—— entry 原子占位,
+        // 并发同号也只有一个能进 @yutiansut @quantaxis
+        if let Some(ref cid) = opts.client_order_id {
+            let reject = |code: u32, msg: String| SubmitOrderResponse {
+                success: false,
+                order_id: None,
+                status: Some("rejected".to_string()),
+                error_message: Some(msg),
+                error_code: Some(code),
+            };
+            if cid.trim().is_empty() {
+                return reject(15, "order_id 为空".to_string());
+            }
+            match self.client_orders.entry((req.account_id.clone(), cid.clone())) {
+                dashmap::mapref::entry::Entry::Occupied(_) => {
+                    return reject(22, format!("客户端编号重复: {}", cid));
+                }
+                dashmap::mapref::entry::Entry::Vacant(v) => {
+                    v.insert(String::new());
+                }
+            }
+        }
+
         // 0. offset 归一化 + 未知值拒单 @yutiansut @quantaxis
         //
         // ⚠️ 这一步以前没有,后果是**方向做反、真金白银**:
@@ -451,6 +1017,21 @@ impl OrderRouter {
         //
         //   `CLOSEYESTERDAY`(规范拼写)同样没有 match 分支,一并补上 ——
         //   risk/pre_trade_check.rs:348 认它,order_router 不认。
+        match Self::normalize_direction(&req.direction) {
+            Some(canonical) => req.direction = canonical.to_string(),
+            None => {
+                return SubmitOrderResponse {
+                    success: false,
+                    order_id: None,
+                    status: Some("rejected".to_string()),
+                    error_message: Some(format!(
+                        "无效的买卖方向 direction={:?};合法值:BUY / SELL(大小写不敏感)",
+                        req.direction
+                    )),
+                    error_code: Some(4004), // 无效买卖方向
+                };
+            }
+        }
         match Self::normalize_offset(&req.offset) {
             Some(canonical) => req.offset = canonical.to_string(),
             None => {
@@ -469,6 +1050,14 @@ impl OrderRouter {
 
         // 1. 生成订单ID（无锁操作）
         let order_id = self.generate_order_id();
+        // 客户端编号 ↔ 交易所单号:必须在撮合**之前**登记 —— 撮合途中产生的成交补丁
+        // 就要用客户端编号做键 @yutiansut @quantaxis
+        if let Some(ref cid) = opts.client_order_id {
+            self.client_orders
+                .insert((req.account_id.clone(), cid.clone()), order_id.clone());
+            self.trade_gateway.register_client_order_id(&order_id, cid);
+            self.persist_client_order_id(&req.account_id, cid, &order_id);
+        }
 
         // 1.5 市价单价格转换 @yutiansut @quantaxis
         // 市价单需要从行情获取实际价格：买单用卖一价，卖单用买一价
@@ -547,8 +1136,11 @@ impl OrderRouter {
         // 使本补丁严格增量、不改变任何现有可交易合约的行为。
         //
         // 只拦下单，不拦撤单 —— 合约暂停后必须仍能撤掉挂单。
+        // 合约所属交易所顺手留下,写进 QIFI 委托的 exchange_id(见下方 send_order 之后)@yutiansut @quantaxis
+        let mut inst_exchange = String::new();
         if let Some(inst) = self.instrument_registry.get(&req.instrument_id) {
             use crate::exchange::instrument_registry::InstrumentStatus;
+            inst_exchange = inst.exchange.clone();
             if inst.status != InstrumentStatus::Active {
                 let reason = format!(
                     "Instrument {} is not tradable (status: {:?})",
@@ -563,6 +1155,27 @@ impl OrderRouter {
                     error_code: Some(4101), // 合约状态拒绝
                 };
             }
+        }
+        if inst_exchange.is_empty() {
+            // 未登记到注册表的合约退回行情侧合约配置(与 DIFF 视图同一口径)
+            inst_exchange = self.trade_gateway.exchange_of(&req.instrument_id, "");
+        }
+
+        // 2.4.1 合约必须已上市(有撮合簿)—— 在冻结资金**之前**拒 @yutiansut @quantaxis
+        //
+        // CTP 对未上市合约直接拒 16「找不到合约」,不冻结任何资金。原来这里放行:按兜底乘数 1 /
+        // 保证金率 0.2 冻结后到路由才失败,而路由失败只把路由侧委托标成 Rejected —— qars 账户里
+        // 那笔委托仍是 SUBMITTED、冻结永不释放(撤单拒绝撤 Rejected 单;2026-09-06 生产快照
+        // 6 笔挂在 NOSUCH0000 等合约上)。文案与错误码沿用路由失败分支(4006 → CTP 16)。
+        if self.matching_engine.get_orderbook(&req.instrument_id).is_none() {
+            log::warn!("Order rejected: instrument not listed: {}", req.instrument_id);
+            return SubmitOrderResponse {
+                success: false,
+                order_id: Some(order_id.clone()),
+                status: Some("rejected".to_string()),
+                error_message: Some(format!("合约不存在或未上市:{}", req.instrument_id)),
+                error_code: Some(4006),
+            };
         }
 
         // 2.5 交易状态检查 @yutiansut @quantaxis
@@ -623,8 +1236,21 @@ impl OrderRouter {
                         success: false,
                         order_id: Some(order_id.clone()),
                         status: Some("rejected".to_string()),
-                        error_message: Some(format!("Risk check error: {}", e)),
-                        error_code: Some(9999),
+                        // ⚠️ 码用 **4005(用户输入)** 而非 9999(未知错误)。@yutiansut @quantaxis
+                        //
+                        // 实测(2026-09-05)走到这个分支的都是**用户输入问题**:
+                        //   volume=-1 → "Order volume -1 below minimum 1"
+                        //   price=0   → "Invalid order price for LIMIT order"
+                        // 归到 9999「未知」会让运维排查时把用户笔误当成系统故障。
+                        //
+                        // 措辞去掉 `Risk check error:` 前缀 —— 原输出是
+                        // "Risk check error: Risk check failed: Order volume -1 below minimum 1",
+                        // **同一件事说了三遍**。ExchangeError 的 Display 本身已完整。
+                        // 对照 :465/:480 那两条(非法方向/开平)是中文且列出合法值,
+                        // 这里保持同一水准。
+                        error_message: Some(format!("下单参数不合法:{}", e)),
+                        // 4005 已被「不支持的数量条件」占用(:692),这里用 4007。
+                        error_code: Some(4007),
                     };
                 }
             }
@@ -641,6 +1267,30 @@ impl OrderRouter {
         // @yutiansut @quantaxis
         let time_cond = req.time_condition.unwrap_or(TimeCondition::GFD);
         let volume_cond = req.volume_condition.unwrap_or(VolumeCondition::ANY);
+
+        // ⚠️ MIN 未实现 —— 拒绝而非静默按 ANY 处理 @yutiansut @quantaxis
+        //
+        // `VolumeCondition::MIN`(最小成交量)全仓**只有 Display / FromStr / 单测**,
+        // 没有任何撮合侧实现(`grep -rn 'VolumeCondition::MIN'` 除声明外零命中)。
+        // 存进 `OrderRouteInfo.volume_condition` 的那份更是从头到尾没被读过
+        // (编译器的 dead_code 警告能报出来,但被 lib.rs:40 的
+        //  `#![allow(dead_code)]` 全局关掉了)。
+        //
+        // 于是 MIN 单会按 ANY 撮合:客户要求「至少成交 N 手」,实际可能只成交 1 手。
+        // 静默降级订单条件比直接拒绝危险得多 —— 客户以为条件生效了。
+        // 当前前端只发 ANY/ALL,所以这条是潜在契约缺口而非现行故障;
+        // 真要支持 MIN,需在撮合侧实现后再放开。
+        if volume_cond == VolumeCondition::MIN {
+            return SubmitOrderResponse {
+                success: false,
+                order_id: Some(order_id.clone()),
+                status: Some("rejected".to_string()),
+                error_message: Some(
+                    "volume_condition=MIN 暂未实现,不接受该条件的订单(可用 ANY 或 ALL)".to_string(),
+                ),
+                error_code: Some(4005), // 不支持的数量条件
+            };
+        }
 
         // FOK = IOC + ALL (立即全部成交或撤销)
         let is_fok = time_cond == TimeCondition::IOC && volume_cond == VolumeCondition::ALL;
@@ -707,7 +1357,7 @@ impl OrderRouter {
         let towards = self.calculate_towards(&req.direction, &req.offset);
         let current_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-        let order = QAOrder::new(
+        let mut order = QAOrder::new(
             req.account_id.clone(),
             req.instrument_id.clone(),
             towards,
@@ -717,6 +1367,32 @@ impl OrderRouter {
             req.price,
             order_id.clone(),
         );
+        // ✨ 回填权威的 direction / offset —— QAOrder::new 是**有损**的
+        // @yutiansut @quantaxis
+        //
+        // qars 的 `QAOrder::new`(qars2 order.rs:51-56)从 towards **反推**方向与开平,
+        // 但它只认四个值:
+        //   ```
+        //   1 | 2 => (BUY, OPEN),  -1 | -2 => (SELL, OPEN),
+        //   3 => (BUY, CLOSE),     -3 => (SELL, CLOSE),
+        //   _ => (BUY, OPEN),      // ← 平今的 ±4 掉进这里
+        //   ```
+        // 而 `calculate_towards` 对平今产出 ±4。后果(2026-09-04 直接解码
+        // gateway_wal 的 rkyv 记录、以 SELL OPEN 作 ground truth 校准字节位实测):
+        //   · 提交 SELL CLOSETODAY   → 落盘 **direction=BUY, offset=OPEN**(方向翻转!)
+        //   · 提交 BUY  CLOSETODAY   → 落盘 offset=OPEN(平仓变开仓)
+        //   · 提交 CLOSEYESTERDAY    → 落盘 offset=CLOSE(平昨的区分丢失)
+        //
+        // 这个降级后的 `order` 随后被 `handle_success_result` 当作权威值,
+        // `&order.offset` / `&order.direction` 一路传到 `WalRecord::encode_*`,
+        // 所以那两个编码函数**永远收不到** CLOSETODAY/CLOSEYESTERDAY ——
+        // 光修编码是不够的,值在上游就已经没了。
+        //
+        // 账户持仓数学走的是 towards(未受影响),错的是**订单记录**:
+        // QIFI orders、WAL、以及 API 返回给用户的委托。
+        // `req.direction` / `req.offset` 在 :454 已归一化,是权威源,直接覆盖。
+        order.direction = req.direction.clone();
+        order.offset = req.offset.clone();
 
         // 7. 短时写锁：仅用于冻结资金 + send_order
         // 优化点：将锁范围缩小到最小必要操作
@@ -743,6 +1419,10 @@ impl OrderRouter {
                 };
             }
 
+            // 7.1.5 按合约覆盖的费率 / 保证金写进持仓副本(必要时先建仓),
+            //       让本单的冻结保证金与之后的成交手续费都按覆盖值算 @yutiansut @quantaxis
+            crate::core::account_ext::apply_preset_override(&mut acc, &req.instrument_id, true);
+
             // 7.2 执行 send_order（冻结资金）
             match acc.send_order(
                 &req.instrument_id,
@@ -754,29 +1434,91 @@ impl OrderRouter {
                 &req.order_type,
             ) {
                 Ok(ref qa_order) => {
-                    // ✨ Debug: 检查 frozen 状态 @yutiansut @quantaxis
-                    let frozen_keys: Vec<String> = acc.frozen.keys().cloned().collect();
-                    let frozen_count = acc.frozen.len();
-                    log::info!(
-                        "💰 [DEBUG] After send_order: qa_order_id={}, money={:.2}, frozen_count={}, frozen_keys={:?}",
+                    // ✨ 降为 debug + 内联:原来是热路径 info! 每笔订单刷屏,且 frozen_keys 每次克隆全量。
+                    //    debug! 默认关闭且惰性求值,内联后关闭时零分配。@yutiansut @quantaxis
+                    log::debug!(
+                        "After send_order: qa_order_id={}, money={:.2}, frozen_count={}, frozen_keys={:?}",
                         qa_order.order_id,
                         acc.money,
-                        frozen_count,
-                        frozen_keys
+                        acc.frozen.len(),
+                        acc.frozen.keys().cloned().collect::<Vec<String>>()
                     );
+                    // ✨ 把交易所单号写进账户 QIFI 订单的 exchange_order_id(QIFI 本义就是交易所单号),
+                    //    随 60s 快照落盘 —— 重启恢复挂单时据此还原原单号,客户端用旧单号仍能撤单。
+                    //    此前该字段恒为空串,恢复出来的挂单单号变成 qars UUID。@yutiansut @quantaxis
+                    if let Some(o) = acc.dailyorders.get_mut(&qa_order.order_id) {
+                        o.exchange_order_id = order_id.clone();
+                        // ✨ qars sim 分支把 time_condition 写死成 "AND"、volume_condition 写死成 "GFD"、
+                        //    exchange_id 写死成 ""(qars2 account.rs:1413-1432)—— 落盘 / 恢复 / HTTP 视图
+                        //    看到的都是这三个占位值。按请求如实回填(缺省 GFD / ANY,与 TimeCondition /
+                        //    VolumeCondition 的 Default 一致)。@yutiansut @quantaxis
+                        o.time_condition = req.time_condition.unwrap_or_default().to_string();
+                        o.volume_condition = req.volume_condition.unwrap_or_default().to_string();
+                        if o.exchange_id.is_empty() {
+                            o.exchange_id = inst_exchange.clone();
+                        }
+                    }
                     qa_order.order_id.clone()
                 }
-                Err(e) => {
+                Err(()) => {
+                    // ✨ qars 的 `send_order` 返回 `Result<QAOrder, ()>` —— 错误类型就是
+                    //    **unit**,不带任何原因。原写法直接 `format!("Insufficient
+                    //    funds/margin: {:?}", e)`,于是:
+                    //      · 无持仓平仓        → 报「资金不足」(定性就是错的)
+                    //      · 手数为 0          → 同上
+                    //      · 真的资金不足      → 同上
+                    //    三种情况给出完全相同的消息,末尾还带个空的 `()`。
+                    //    用户看到「Insufficient funds/margin: ()」无从下手。
+                    //
+                    //    qaexchange 自己有足够信息判定真实原因,这里补上。
+                    //    @yutiansut @quantaxis
+                    let is_close = req.offset != "OPEN";
+                    let reason = if req.volume <= 0.0 {
+                        "下单手数必须大于 0".to_string()
+                    } else if is_close {
+                        // 平仓失败最常见的原因是可平持仓不足(qars 在 hold 里找不到或数量不够)
+                        let (long_avail, short_avail) = acc
+                            .get_position(&req.instrument_id)
+                            .map(|p| {
+                                (
+                                    // ✨ 可平量含冻结 —— `today + his` 漏掉挂单冻结的部分。
+                                    // qars 的不变量是 `volume = today + his + frozen`
+                                    // (position.rs:403)。用错公式会让提示里的
+                                    // 「该方向可平 N」偏小:线上 ACC_55361002 的 IF2502
+                                    // 实际持有 285 手,旧式只报 216。@yutiansut @quantaxis
+                                    p.volume_long_unmut(),
+                                    p.volume_short_unmut(),
+                                )
+                            })
+                            .unwrap_or((0.0, 0.0));
+                        let side_avail = if req.direction == "SELL" { long_avail } else { short_avail };
+                        if side_avail < req.volume {
+                            format!(
+                                "可平持仓不足: {} 需平 {},该方向可平 {}(多 {} / 空 {})",
+                                req.instrument_id, req.volume, side_avail, long_avail, short_avail
+                            )
+                        } else {
+                            format!(
+                                "平仓被账户拒绝(持仓 {} 足够,可能是手续费不足: 可用 {:.2})",
+                                side_avail, acc.money
+                            )
+                        }
+                    } else {
+                        format!("资金不足: 可用 {:.2}", acc.money)
+                    };
                     log::warn!(
-                        "Order rejected - insufficient funds/margin for account {}: {:?}",
+                        "Order rejected for account {}: {} (offset={}, direction={}, volume={})",
                         req.account_id,
-                        e
+                        reason,
+                        req.offset,
+                        req.direction,
+                        req.volume
                     );
                     return SubmitOrderResponse {
                         success: false,
                         order_id: Some(order_id),
                         status: Some("rejected".to_string()),
-                        error_message: Some(format!("Insufficient funds/margin: {:?}", e)),
+                        error_message: Some(reason),
                         error_code: Some(4001),
                     };
                 }
@@ -911,8 +1653,26 @@ impl OrderRouter {
                     success: false,
                     order_id: Some(order_id),
                     status: Some("rejected".to_string()),
-                    error_message: Some(format!("Routing error: {}", e)),
-                    error_code: Some(5000),
+                    // ⚠️ 区分「用户给了不存在的合约」与「真的路由/撮合故障」。
+                    // @yutiansut @quantaxis
+                    //
+                    // 实测:对不存在的合约下单,用户看到的是
+                    //   "Routing error: Matching error: Orderbook not found for instrument: NOSUCH0000"
+                    // —— **三层嵌套 + 暴露内部实现(orderbook)**,而且码是 5000(服务端错误段),
+                    // 会让运维误以为是系统故障。这其实是最常见的用户输入错误之一。
+                    //
+                    // 判据用错误文本里的 "Orderbook not found":撮合引擎对未注册合约
+                    // 就是这么报的(matching 层无该合约的簿)。
+                    error_message: Some(if e.to_string().contains("Orderbook not found") {
+                        format!("合约不存在或未上市:{}", req.instrument_id)
+                    } else {
+                        format!("订单路由失败:{}", e)
+                    }),
+                    error_code: Some(if e.to_string().contains("Orderbook not found") {
+                        4006 // 合约不存在(用户输入)
+                    } else {
+                        5000 // 真的路由/撮合故障(服务端)
+                    }),
                 }
             }
         }
@@ -1152,6 +1912,7 @@ impl OrderRouter {
                         info.status = OrderStatus::Rejected;
                         info.update_time = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
                     }
+                    self.push_diff_order(order_id, Some(&reason));
                 }
             }
         }
@@ -1577,11 +2338,19 @@ impl OrderRouter {
                 );
             }
         }
+        // ✨ 每次状态变化后推 DIFF 订单视图(taker 与被动成交的 maker 都走这里;
+        //    成交补丁已在 handle_trade_new 里先推,保证「成交先于终态」)@yutiansut @quantaxis
+        self.push_diff_order(order_id, None);
         Ok(())
     }
 
     /// 撤单
     pub fn cancel_order(&self, req: CancelOrderRequest) -> Result<(), ExchangeError> {
+        // ✨ 认客户端编号:DIFF 客户端撤自己的单只知道自己的 order_id @yutiansut @quantaxis
+        let req = CancelOrderRequest {
+            order_id: self.resolve_order_id(&req.account_id, &req.order_id),
+            account_id: req.account_id,
+        };
         // 1. 验证订单存在
         let order_info = self.orders.get(&req.order_id).ok_or_else(|| {
             ExchangeError::OrderError(format!("Order not found: {}", req.order_id))
@@ -1622,9 +2391,42 @@ impl OrderRouter {
         }
 
         // 4. 从撮合引擎撤单
-        let matching_engine_order_id = info.matching_engine_order_id.ok_or_else(|| {
-            ExchangeError::OrderError("Matching engine order ID not found".to_string())
-        })?;
+        //
+        // ✨ 没有撮合引擎订单号时**走本地撤单**,不能直接报错。@yutiansut @quantaxis
+        //
+        // 原实现在这里 `ok_or_else(...)?` 直接失败,后果是这类订单**永久卡死**:
+        //   ① 未注册合约的下单是**被接受**的(:562 有意的兜底口径
+        //      `unwrap_or((1.0, 0.2, 0.0003))`,注释写着「保持增量、不改变既有行为」);
+        //   ② 但撮合引擎没有该合约的订单簿 ⇒ 订单永不成交、拿不到 engine order id;
+        //   ③ 于是撤单在这一行失败 ⇒ **冻结的保证金没有任何回收途径**。
+        //
+        // 实测(2026-09-06 生产快照):3 个账户共 6 笔订单挂在
+        // `NOSUCH0000` / `NOSUCH0` / `NOPE9999` 上,状态永远是 SUBMITTED。
+        // 其中 `ACC_8cff51bb` 的 `frozen_margin = 400.00` 就是这么卡住的。
+        //
+        // 一笔从未进过撮合引擎的订单,**撤销它本来就只需要本地清理** ——
+        // 这里合成一个 `Success::Cancelled` 交给既有的 `handle_success_result`,
+        // 复用它那条已经验证过的「更新状态 + 释放冻结」路径,不另写一套。
+        let matching_engine_order_id = match info.matching_engine_order_id {
+            Some(id) => id,
+            None => {
+                let order = info.order.clone();
+                drop(info);
+                drop(order_info);
+                log::warn!(
+                    "Order {} has no matching-engine id (instrument {} likely not registered); \
+                     cancelling locally and releasing frozen funds",
+                    req.order_id,
+                    order.instrument_id
+                );
+                let synthetic = crate::matching::Success::Cancelled {
+                    id: 0,
+                    ts: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                };
+                self.handle_success_result(&req.order_id, &order, synthetic, true)?;
+                return Ok(());
+            }
+        };
 
         let instrument_id = info.order.instrument_id.clone();
         let direction_str = info.order.direction.clone();
@@ -1923,6 +2725,28 @@ impl OrderRouter {
         // 3. 无行情可用
         0.0
     }
+    /// direction 归一化 —— 与 `normalize_offset` 对称 @yutiansut @quantaxis
+    ///
+    /// ⚠️ 此前**完全没有校验**。`calculate_towards` 的兜底注释写着「已是不可达路径」,
+    /// 那只对 offset 成立(offset 有 normalize_offset 把关),direction 从来没人管。
+    ///
+    /// 2026-09-04 实测(同一账户连发 4 单,价格远离市价故会挂住):
+    ///   direction="buy"   → 200 接受,回查记为 **BUY**
+    ///   direction="Buy"   → 200 接受,回查记为 **BUY**
+    ///   direction="BOGUS" → **200 接受**,回查记为 **BUY**
+    /// 四张单都真挂到了买盘上(随后一张 SELL 被自成交防范拦住,正好反证它们是活单)。
+    /// **direction 里塞任何垃圾都会静默变成买单。**
+    ///
+    /// 大小写不敏感(客户端写 "buy" 是合理输入,归一化比拒绝友好);
+    /// 其余一律返回 None,由调用方拒单 —— **不得**回退到任何默认方向。
+    fn normalize_direction(direction: &str) -> Option<&'static str> {
+        match direction.trim().to_ascii_uppercase().as_str() {
+            "BUY" => Some("BUY"),
+            "SELL" => Some("SELL"),
+            _ => None,
+        }
+    }
+
 
     /// 开平标志归一化 —— 把各处的写法收敛到一套规范值
     ///
@@ -2136,33 +2960,13 @@ impl OrderRouter {
             use crate::storage::wal::record::WalRecord;
 
             // 获取订单簿快照
-            if let Some(orderbook) = self.matching_engine.get_orderbook(instrument_id) {
-                let ob = orderbook.read();
-
-                // 获取买卖队列的前10档数据
-                let bids = ob
-                    .bid_queue
-                    .get_sorted_orders()
-                    .map(|orders| {
-                        orders
-                            .iter()
-                            .take(10)
-                            .map(|o| (o.price, o.volume as i64))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-
-                let asks = ob
-                    .ask_queue
-                    .get_sorted_orders()
-                    .map(|orders| {
-                        orders
-                            .iter()
-                            .take(10)
-                            .map(|o| (o.price, o.volume as i64))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+            // ⚠️ 「10档」必须是 10 个**价位**,不是前 10 张**订单** @yutiansut @quantaxis
+            //    原写法 `get_sorted_orders().take(10)` 取的是逐笔订单:同价位重复出现、
+            //    档数不足,行情接口的 WAL 回读路径据此给出 `1896.0×1, 1896.0×1, …`。
+            //    聚合统一走 ExchangeMatchingEngine::price_levels(与行情 L3 同一实现)。
+            if let Some((bids, asks, ob_last)) = self.matching_engine.price_levels(instrument_id, 10) {
+                let bids: Vec<(f64, i64)> = bids.into_iter().map(|(p, v)| (p, v as i64)).collect();
+                let asks: Vec<(f64, i64)> = asks.into_iter().map(|(p, v)| (p, v as i64)).collect();
 
                 // 创建OrderBookSnapshot记录（10档，不足的用 (0.0, 0) 填充）
                 let mut bids_array = [(0.0, 0i64); 10];
@@ -2182,12 +2986,16 @@ impl OrderRouter {
                     asks_array[i] = (*price, *volume);
                 }
 
-                // 获取最新价（从订单簿的第一档或0.0）
-                let last_price = bids
-                    .first()
-                    .map(|(p, _)| *p)
-                    .or_else(|| asks.first().map(|(p, _)| *p))
-                    .unwrap_or(0.0);
+                // 最新价:用撮合簿的真实最新成交价;没有成交过才退回买一/卖一
+                // (原实现直接拿买一当「最新价」写进记录)
+                let last_price = if ob_last.is_finite() && ob_last > 0.0 {
+                    ob_last
+                } else {
+                    bids.first()
+                        .map(|(p, _)| *p)
+                        .or_else(|| asks.first().map(|(p, _)| *p))
+                        .unwrap_or(0.0)
+                };
 
                 let snapshot_record = WalRecord::OrderBookSnapshot {
                     instrument_id: WalRecord::to_fixed_array_16(instrument_id),
@@ -2371,10 +3179,7 @@ impl OrderRouter {
     }
 
     /// 获取用户所有订单的详细信息 (order_id, order, status, submit_time, update_time, filled_volume)
-    pub fn get_user_order_details(
-        &self,
-        user_id: &str,
-    ) -> Vec<(String, Order, OrderStatus, i64, i64, f64)> {
+    pub fn get_user_order_details(&self, user_id: &str) -> Vec<UserOrderDetail> {
         if let Some(order_ids) = self.user_orders.get(user_id) {
             order_ids
                 .read()
@@ -2382,14 +3187,15 @@ impl OrderRouter {
                 .filter_map(|order_id| {
                     self.orders.get(order_id).map(|info| {
                         let i = info.read();
-                        (
-                            order_id.clone(),
-                            i.order.clone(),
-                            i.status,
-                            i.submit_time,
-                            i.update_time,
-                            i.filled_volume,
-                        )
+                        UserOrderDetail {
+                            order_id: order_id.clone(),
+                            qa_order_id: i.qa_order_id.clone(),
+                            order: i.order.clone(),
+                            status: i.status,
+                            submit_time: i.submit_time,
+                            update_time: i.update_time,
+                            filled_volume: i.filled_volume,
+                        }
                     })
                 })
                 .collect()
@@ -2432,10 +3238,46 @@ impl OrderRouter {
         let mut orderbook_restored_count = 0;
 
         for account_arc in accounts {
-            let account = account_arc.read();
-            let account_id = account.account_cookie.clone();
+            // ⚠️ **先把待恢复订单克隆出来并立刻释放账户读锁**,再去碰 orderbook。
+            //    @yutiansut @quantaxis
+            //
+            // 原写法在整个内层循环期间持有 `account_arc.read()`,而循环体内会取
+            // `orderbook.write()`(见下方 `let mut ob = orderbook.write()`)——
+            // 锁序是 **account.read() → orderbook.write()**。
+            // 而**全仓的既定不变量是 orderbook 锁 → account 锁**(撮合/撤单路径都是
+            // 这个方向)—— 见 `risk/risk_monitor.rs:369-383` 的注释,那里记录了完全同型的
+            // 一次事故:`do_risk_check` 曾在 `account.write()` 内调 `get_last_price()`
+            // (→`orderbook.read()`),构成反向边,实测分别在 60 秒 / 9 分钟 / 26.5 分钟挂死。
+            // 本函数是该不变量**最后一处未修的违反点**。
+            //
+            // 实测(2026-09-05 03:46):部署后启动挂死 —— 14 个线程全部
+            // `futex_wait_queue_me`、无一在干活,8094/8095 未监听,
+            // 日志冻结在恢复第 216 条订单处;kill 后重启即正常(755 条全恢复)
+            // ⇒ 是**间歇性竞态**,意味着系统有概率启动不起来。
+            //
+            // 修法:锁范围收窄到只做数据克隆。`dailyorders` 的值是 QIFI Order(可 Clone),
+            // 克隆 361 条活单的代价可忽略,换来的是恢复期间**不再跨锁**。
+            let (account_id, pending): (String, Vec<(String, _)>) = {
+                let account = account_arc.read();
+                let id = account.account_cookie.clone();
+                let list = account
+                    .dailyorders
+                    .iter()
+                    .filter(|(_, o)| o.status == "SUBMITTED" || o.status == "ALIVE")
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                (id, list)
+            }; // ← 账户读锁在此释放
 
-            for (order_id, order) in &account.dailyorders {
+            for (qa_id, order) in &pending {
+                // ✨ 以快照里的交易所单号恢复(下单时写入的 exchange_order_id);
+                //    老快照该字段为空,退回 qars 键。qa_order_id 仍是 qars 键(账户操作要用)。
+                //    @yutiansut @quantaxis
+                let order_id: &String = if order.exchange_order_id.is_empty() {
+                    qa_id
+                } else {
+                    &order.exchange_order_id
+                };
                 // 只恢复待处理订单 (SUBMITTED/ALIVE)
                 if order.status != "SUBMITTED" && order.status != "ALIVE" {
                     continue;
@@ -2521,10 +3363,22 @@ impl OrderRouter {
                 let info = OrderRouteInfo {
                     order: order.clone(),
                     status,
-                    submit_time: order.insert_date_time / 1_000_000_000, // 纳秒转秒
-                    update_time: chrono::Utc::now().timestamp(),
+                    // ⚠️ 必须保持**纳秒**,与实时下单路径(:912 `timestamp_nanos_opt`)一致
+                    // @yutiansut @quantaxis
+                    //
+                    // 原先这里 `/ 1_000_000_000` 转成了秒,于是同一个
+                    // `OrderInfo.submit_time` 字段有两种单位:
+                    //   · 实时下单  → 1788528083266660725(纳秒)
+                    //   · 重启恢复  → 1788515691(秒)
+                    // 前端 `orders/index.vue:83` 的注释明写「submit_time 是纳秒」并按纳秒
+                    // 格式化 —— 重启后所有恢复出来的订单在界面上会显示成 **1970 年**。
+                    // 任何排序、日期筛选也会对其中一种算错。
+                    submit_time: order.insert_date_time,
+                    update_time: chrono::Utc::now()
+                        .timestamp_nanos_opt()
+                        .unwrap_or(order.insert_date_time),
                     filled_volume,
-                    qa_order_id: order_id.clone(),
+                    qa_order_id: qa_id.clone(),
                     matching_engine_order_id, // ✨ 现在有值了！
                     time_condition: TimeCondition::GFD,
                     volume_condition: VolumeCondition::ANY,
@@ -2572,7 +3426,7 @@ mod tests {
     use crate::core::account_ext::{AccountType, OpenAccountRequest};
     use crate::exchange::instrument_registry::InstrumentInfo;
 
-    fn create_test_router() -> OrderRouter {
+    pub(super) fn create_test_router() -> OrderRouter {
         // 创建账户管理器
         let account_mgr = Arc::new(AccountManager::new());
         let req = OpenAccountRequest {
@@ -2615,7 +3469,21 @@ mod tests {
             .unwrap();
 
         // 创建成交回报网关
-        let trade_gateway = Arc::new(TradeGateway::new(account_mgr.clone()));
+        // ⚠️ 测试必须显式给 wal_root,否则落到**仓库根目录**的 `./data/wal/`
+        //    @yutiansut @quantaxis
+        //
+        // `TradeGateway::new` 的默认 wal_root 是 `"./data/wal"`(trade_gateway.rs:173)
+        // —— **相对当前工作目录**,而 `cargo test` 的 CWD 就是仓库根。
+        // 实测:跑 `cargo test --lib exchange::order_router` 会在
+        // `data/wal/__ACCOUNT__/test_user/`、`data/wal/IX2301/` 写真实 WAL 文件
+        // (IX2301 是本测试夹具里的合约名,一眼可辨)。
+        // 该目录里还躺着 2026-09-03 遗留的 **554 MB**。
+        //
+        // 同文件族的 `trade_gateway.rs:1995/2909/3195` 早就用
+        // `./output/testexchange/wal*`,只有这里漏了。照抄它。
+        let trade_gateway =
+            Arc::new(TradeGateway::new(account_mgr.clone())
+                .with_wal_root("./output/testexchange/wal_order_router"));
 
         OrderRouter::new(
             account_mgr,
@@ -2897,20 +3765,91 @@ mod tests {
             notifications.push(notification);
         }
 
-        // 通知系统可能使用新的NotificationBroker，这里不强制要求
-        log::info!("Total notifications received: {}", notifications.len());
+        // ⚠️ 原先此处只 log 不断言,理由写的是「通知系统可能使用新的 NotificationBroker」。
+        // 那句话本身指向了一条真实的分叉(见 tasks/DECISIONS-PENDING.md),
+        // 但把唯一能发现它的断言取消掉了 —— 于是分叉长期无人察觉。
+        //
+        // 本测试用的 `subscribe_user` 正是 WebSocket 会话走的同一条路
+        // (service/websocket/mod.rs:126),所以这里**必须**收到通知;
+        // 收不到 = 前端实时推送已断。@yutiansut @quantaxis
+        assert!(
+            !notifications.is_empty(),
+            "subscribe_user 没收到任何通知 —— 这条路同时是 WS 前端推送通道,断了前端就看不到成交"
+        );
 
         // 6. 查询订单状态
         let buy_order = router.query_order(&buy_order_id).unwrap();
         log::info!("Buy order status: {:?}", buy_order.status);
 
         // 7. 验证账户状态已更新
-        // 注意：由于撮合逻辑的复杂性，这里只验证账户依然存在且可访问
+        // ⚠️ 原先这里只有 `final_balance > 0.0`,而账户初始就有 100 万 ——
+        // 撮合即使完全不工作,该断言照样通过。测试名写的是
+        // 「风控 -> 路由 -> 撮合 -> 成交 -> 账户更新」,后三项一项都没验。
+        // 另外本文件测试模块不初始化 logger(env_logger 只在 main.rs:1588),
+        // 所以上面那些 log::info! 在 `cargo test` 下**零输出**,不能当观测手段。
+        // @yutiansut @quantaxis
         let account = router.account_mgr.get_default_account("test_user").unwrap();
-        let final_balance = account.read().accounts.balance;
-        log::info!("Final balance: {}", final_balance);
 
-        // 账户应该依然有效
+        // ① 撮合真的发生了:买 10 手、卖 5 手 → 买单应为部分成交
+        //    复用既有公开 API get_order_status(order_router.rs:1955)
+        let buy_status = router
+            .get_order_status(&buy_order_id)
+            .expect("买单应该还在 orders 表里");
+        assert_eq!(
+            buy_status,
+            OrderStatus::PartiallyFilled,
+            "买 10 手 / 卖 5 手,买单应为 PartiallyFilled,实际 {:?} —— 撮合没发生或状态没回写",
+            buy_status
+        );
+
+        // ② 成交落到了账户持仓上(复用 trade_gateway.rs:1212 的既有读法)
+        let pos_volume = {
+            let acc = account.read();
+            // qars 的 get_position 需要 &mut self;只读场景用 get_position_unmut
+            // (qars2 account.rs:462),避免为了读一个数升级成写锁。
+            acc.get_position_unmut("IX2301")
+                .map(|p| p.volume_long_today + p.volume_long_his)
+                .unwrap_or(0.0)
+        };
+        assert_eq!(
+            pos_volume, 5.0,
+            "买方多头持仓应为 5 手,实际 {} —— 成交没写进账户",
+            pos_volume
+        );
+
+        // ③ 账户被更新过 —— **必须断言计算值,不能断言 `accounts.*` 快照字段**。
+        //
+        // qars 里 `accounts.balance` / `accounts.margin` 是**从不自动刷新**的缓存:
+        // qars2 `account.rs` 全文没有一处 `accounts.margin = `。真值来自
+        // `get_balance()`(account.rs:522)/ `get_margin()`(:493),而 QIFI 投影
+        // `get_accountmessage()`(:405)取的正是这些计算值 —— 所以对外输出是对的。
+        //
+        // 生产里那些快照字段由 `RiskMonitor::do_risk_check`(risk_monitor.rs:446-452)
+        // 每秒回写一次;单元测试不跑风控循环,于是快照恒为构造值。
+        // 实测本用例:snap_balance=1000000 / snap_margin=0,
+        // 而 calc_balance=999999.808 / calc_margin=600 —— 断言快照会得到假失败。
+        // @yutiansut @quantaxis
+        let (calc_balance, calc_margin) = {
+            let mut acc = account.write();
+            (acc.get_balance(), acc.get_margin())
+        };
+
+        // 开 5 手必然占用保证金
+        assert!(
+            calc_margin > 0.0,
+            "开仓 5 手后保证金应 > 0,实际 {} —— 成交没影响账户",
+            calc_margin
+        );
+
+        // 手续费必然扣减权益(本用例 commission = 0.192)
+        assert!(
+            calc_balance < init_balance,
+            "扣过手续费后权益应低于初始 {},实际 {}",
+            init_balance, calc_balance
+        );
+
+        let final_balance = calc_balance;
+        assert!(final_balance > 0.0, "Account balance should be positive");
         assert!(final_balance > 0.0, "Account balance should be positive");
 
         log::info!("Complete order flow test passed!");
@@ -3144,11 +4083,18 @@ mod tests {
         assert_eq!(details.len(), 3);
 
         // 验证每个订单详情
-        for (order_id, order, _status, submit_time, update_time, _filled) in details {
-            assert!(!order_id.is_empty());
-            assert_eq!(order.user_id, "test_user");
-            assert!(submit_time > 0);
-            assert!(update_time >= submit_time);
+        for d in details {
+            assert!(!d.order_id.is_empty());
+            assert_eq!(d.order.user_id, "test_user");
+            assert!(d.submit_time > 0);
+            assert!(d.update_time >= d.submit_time);
+            // qa_order_id 是跨源去重的钥匙 —— 它不能是空的,否则
+            // handlers.rs 的 seen 种子少一半,同一笔单会显示成两条。
+            // @yutiansut @quantaxis
+            assert!(
+                !d.qa_order_id.is_empty(),
+                "qa_order_id 为空会让 QIFI/OrderRouter 跨源去重失效"
+            );
         }
     }
 
@@ -3212,6 +4158,293 @@ mod tests {
 
         let orders = router.get_all_orders();
         assert_eq!(orders.len(), 5);
+    }
+
+    /// 回归:CLOSEYESTERDAY 成交后双方账户都要入账,QIFI 委托 / 成交字段如实回填 @yutiansut @quantaxis
+    ///
+    /// 此前 `TradeGateway::update_account` 的开平映射没有平昨分支:撮合簿里已经成交,
+    /// 账户侧却报 "Invalid direction/offset" 返回 —— 持仓不减、同批其余成交也被跳过。
+    #[test]
+    fn close_yesterday_fill_updates_both_accounts_and_qifi_fields() {
+        let router = create_test_router();
+        router
+            .account_mgr
+            .open_account(OpenAccountRequest {
+                user_id: "test_user_cy".to_string(),
+                account_id: Some("test_user_cy".to_string()),
+                account_name: "Close Yesterday".to_string(),
+                init_cash: 1_000_000.0,
+                account_type: AccountType::Individual,
+            })
+            .unwrap();
+        let order = |acc: &str, dir: &str, off: &str, vol: f64| SubmitOrderRequest {
+            account_id: acc.to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: dir.to_string(),
+            offset: off.to_string(),
+            volume: vol,
+            price: 120.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        };
+        for (acc, dir, off, vol) in [
+            ("test_user", "BUY", "OPEN", 2.0),
+            ("test_user_cy", "SELL", "OPEN", 2.0),
+            ("test_user", "SELL", "CLOSEYESTERDAY", 1.0),
+            ("test_user_cy", "BUY", "CLOSEYESTERDAY", 1.0),
+        ] {
+            let r = router.submit_order(order(acc, dir, off, vol));
+            assert!(r.success, "{} {} {}: {:?}", acc, dir, off, r.error_message);
+        }
+        let long_acc = router.account_mgr.get_account("test_user").unwrap();
+        let short_acc = router.account_mgr.get_account("test_user_cy").unwrap();
+        let long = long_acc.read().hold.get("IX2301").map(|p| p.volume_long_unmut());
+        let short = short_acc.read().hold.get("IX2301").map(|p| p.volume_short_unmut());
+        assert_eq!(long, Some(1.0), "多头 2 手平掉 1 手");
+        assert_eq!(short, Some(1.0), "空头 2 手平掉 1 手");
+
+        // QIFI:委托 time/volume_condition 与 exchange_id 按请求 / 合约注册表回填;成交带交易所与成交号
+        let acc = long_acc.read();
+        assert!(acc.dailyorders.values().all(|o| o.time_condition == "GFD"
+            && o.volume_condition == "ANY"
+            && o.exchange_id == "SHFE"));
+        assert_eq!(acc.dailytrades.len(), 2);
+        assert!(acc
+            .dailytrades
+            .values()
+            .all(|t| t.exchange_id == "SHFE" && !t.exchange_trade_id.is_empty()));
+        let pos = acc.hold.get("IX2301").unwrap();
+        assert_eq!(pos.exchange_id, "SHFE");
+        assert!((pos.position_price_long - 120.0).abs() < 1e-9, "均价 {}", pos.position_price_long);
+    }
+
+    /// 回归:未上市合约在冻结资金之前拒单(4006 → CTP 16),账户里不留冻结 @yutiansut @quantaxis
+    #[test]
+    fn unlisted_instrument_rejected_before_freezing_funds() {
+        let router = create_test_router();
+        let acc = router.account_mgr.get_account("test_user").unwrap();
+        let money_before = acc.read().money;
+        let r = router.submit_order(SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "NOSUCH0000".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume: 1.0,
+            price: 100.0,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        });
+        assert!(!r.success);
+        assert_eq!(r.error_code, Some(4006));
+        let a = acc.read();
+        assert_eq!(a.money, money_before, "不应冻结资金");
+        assert!(a.frozen.is_empty(), "不应留下冻结条目");
+        assert!(a.dailyorders.is_empty(), "不应在账户里留下委托");
+    }
+
+    // ==================== 日终(闭市 → 撤活单 → 结算 → 开市)@yutiansut @quantaxis ====================
+
+    fn eod_order(acc: &str, dir: &str, off: &str, vol: f64, px: f64) -> SubmitOrderRequest {
+        SubmitOrderRequest {
+            account_id: acc.to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: dir.to_string(),
+            offset: off.to_string(),
+            volume: vol,
+            price: px,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        }
+    }
+
+    /// 两个账户:成交 1 手建仓,另各挂 1 张不成交的单(买 119 / 卖 121)
+    fn eod_fixture() -> OrderRouter {
+        let router = create_test_router();
+        router
+            .account_mgr
+            .open_account(OpenAccountRequest {
+                user_id: "test_user_eod".to_string(),
+                account_id: Some("test_user_eod".to_string()),
+                account_name: "EOD".to_string(),
+                init_cash: 1_000_000.0,
+                account_type: AccountType::Individual,
+            })
+            .unwrap();
+        for r in [
+            eod_order("test_user", "BUY", "OPEN", 1.0, 120.0),
+            eod_order("test_user_eod", "SELL", "OPEN", 1.0, 120.0),
+            eod_order("test_user", "BUY", "OPEN", 2.0, 119.0),
+            eod_order("test_user_eod", "SELL", "OPEN", 1.0, 121.0),
+        ] {
+            let resp = router.submit_order(r);
+            assert!(resp.success, "{:?}", resp.error_message);
+        }
+        router
+    }
+
+    fn resting_count(router: &OrderRouter) -> usize {
+        let book = router.matching_engine.get_orderbook("IX2301").unwrap();
+        let ob = book.read();
+        ob.bid_queue.get_sorted_orders().map_or(0, |v| v.len())
+            + ob.ask_queue.get_sorted_orders().map_or(0, |v| v.len())
+    }
+
+    /// 闭市期间新单拒 4100(→ CTP 91)且无任何副作用;扫单撤光活单、释放冻结;开市后照常收单
+    #[test]
+    fn eod_halt_rejects_new_orders_and_sweep_cancels_all_resting() {
+        let router = eod_fixture();
+        assert_eq!(resting_count(&router), 2);
+
+        assert!(router.begin_eod_halt(Duration::from_secs(1)));
+        let r = router.submit_order(eod_order("test_user", "BUY", "OPEN", 1.0, 118.0));
+        assert!(!r.success);
+        assert_eq!(r.error_code, Some(4100));
+        assert_eq!(ctp_error_id(4100, ""), 91);
+        let acc = router.account_mgr.get_account("test_user").unwrap();
+        assert_eq!(acc.read().dailyorders.len(), 2, "闭市拒单不进账户");
+
+        let sweep = router.cancel_all_active_orders();
+        assert_eq!(sweep.cancelled, 2, "{:?}", sweep);
+        assert_eq!(sweep.residual_left, 0);
+        assert_eq!(resting_count(&router), 0);
+        for id in ["test_user", "test_user_eod"] {
+            let acc = router.account_mgr.get_account(id).unwrap();
+            let a = acc.read();
+            assert!(a.frozen.is_empty(), "{} 冻结应全部释放: {:?}", id, a.frozen.keys());
+            assert!(a.dailyorders.values().all(|o| o.status == "FINISHED"), "{} 无活单", id);
+        }
+
+        router.end_eod_halt();
+        assert!(router.submit_order(eod_order("test_user", "BUY", "OPEN", 1.0, 118.0)).success);
+    }
+
+    /// 路由认为是活单、撮合簿里却已没有(启动恢复时恢复单交叉成交):日终撤单失败后路由侧
+    /// 按已撤收尾,下一次日终不再重复失败 @yutiansut @quantaxis
+    #[test]
+    fn eod_sweep_retires_router_orders_missing_from_book() {
+        let router = eod_fixture();
+        // 模拟:把 test_user 的 119 买单从簿上直接摘掉,路由仍记为 Submitted
+        let (order_id, engine_id) = router
+            .orders
+            .iter()
+            .find_map(|e| {
+                let i = e.value().read();
+                (i.order.user_id == "test_user" && i.status == OrderStatus::Submitted)
+                    .then(|| (e.key().clone(), i.matching_engine_order_id.unwrap()))
+            })
+            .unwrap();
+        let book = router.matching_engine.get_orderbook("IX2301").unwrap();
+        assert!(book.write().bid_queue.cancel(engine_id));
+
+        let first = router.cancel_all_active_orders();
+        assert_eq!((first.cancelled, first.cancel_failed, first.residual_left), (1, 1, 0));
+        assert_eq!(router.get_order_status(&order_id), Some(OrderStatus::Cancelled));
+        let second = router.cancel_all_active_orders();
+        assert_eq!((second.cancelled, second.cancel_failed), (0, 0), "{:?}", second);
+    }
+
+    /// 回归:结算之后再撤单 / 成交不得 panic(release panic=abort 会让整个交易所退出)。
+    /// 走完整日终:今仓 → 昨仓、当日委托/成交清空、客户端编号按新交易日可重用;
+    /// 快照归档到 history/<交易日>/,结算后快照不再带当日历史。@yutiansut @quantaxis
+    #[test]
+    fn end_of_day_settles_then_trading_resumes_without_panic() {
+        let router = Arc::new(eod_fixture());
+        // 带客户端编号的挂单(DIFF 下单路径):结算后同号应可重用(CTP 报单引用按交易日)
+        let r = router.submit_order_with_client_id(
+            eod_order("test_user", "BUY", "OPEN", 1.0, 118.0),
+            Some("eod_c1".to_string()),
+        );
+        assert!(r.success);
+        let dup = router.submit_order_with_client_id(
+            eod_order("test_user", "BUY", "OPEN", 1.0, 118.0),
+            Some("eod_c1".to_string()),
+        );
+        assert_eq!(dup.error_code, Some(22), "当日内重复编号拒 22");
+
+        let dir = tempfile::tempdir().unwrap();
+        let snap_dir = dir.path().join("snapshots").to_string_lossy().into_owned();
+        let engine = crate::exchange::SettlementEngine::new(router.account_mgr.clone());
+        engine.set_order_router(router.clone());
+        engine.set_snapshot_dir(snap_dir.clone());
+
+        let report = engine.run_end_of_day("2026-11-08").expect("日终应成功");
+        assert_eq!(report.sweep.cancelled, 3, "{:?}", report.sweep);
+        assert_eq!(report.sweep.residual_left, 0);
+        assert!(report.settlement.settled_accounts >= 2);
+        assert_eq!(report.settlement.settlement_date, "2026-11-08");
+        assert_eq!(report.settlement_prices.get("IX2301"), Some(&120.0));
+        assert!(report.client_order_ids_cleared >= 1);
+        assert!(!router.is_eod_halted(), "日终后必须开市");
+        assert_eq!(resting_count(&router), 0);
+
+        // 账户:今仓 → 昨仓,当日委托/成交清空,冻结退回
+        let long_acc = router.account_mgr.get_account("test_user").unwrap();
+        {
+            let a = long_acc.read();
+            assert!(a.dailyorders.is_empty() && a.dailytrades.is_empty() && a.frozen.is_empty());
+            let p = a.hold.get("IX2301").unwrap();
+            assert_eq!((p.volume_long_today, p.volume_long_his), (0.0, 1.0));
+        }
+
+        // 归档 = 结算前完整快照(带当日委托);结算后快照不带
+        let archived = format!("{}/test_user.json", report.archive_dir);
+        let qifi: crate::QIFI =
+            serde_json::from_str(&std::fs::read_to_string(&archived).unwrap()).unwrap();
+        assert_eq!(qifi.orders.len(), 3, "归档里是结算前的 3 笔委托");
+        let live: crate::QIFI = serde_json::from_str(
+            &std::fs::read_to_string(format!("{}/test_user.json", snap_dir)).unwrap(),
+        )
+        .unwrap();
+        assert!(live.orders.is_empty() && live.trades.is_empty());
+
+        // 新交易日:同一客户端编号可重用;挂单 → 撤单、对手成交都不 panic
+        let r = router.submit_order_with_client_id(
+            eod_order("test_user", "BUY", "OPEN", 1.0, 118.0),
+            Some("eod_c1".to_string()),
+        );
+        assert!(r.success, "新交易日同号可用: {:?}", r.error_message);
+        router
+            .cancel_order(CancelOrderRequest {
+                account_id: "test_user".to_string(),
+                order_id: r.order_id.unwrap(),
+            })
+            .expect("结算后撤单");
+        assert!(router.submit_order(eod_order("test_user", "SELL", "CLOSE", 1.0, 120.0)).success);
+        assert!(router.submit_order(eod_order("test_user_eod", "BUY", "CLOSE", 1.0, 120.0)).success);
+        let a = long_acc.read();
+        assert_eq!(a.hold.get("IX2301").map(|p| p.volume_long_unmut()).unwrap_or(0.0), 0.0, "昨仓平掉");
+        assert_eq!(a.dailytrades.len(), 1);
+    }
+
+    /// 纵深防御:绕过日终扫单直接结算(旧的手动结算接口就是这样),残留挂单之后被撤 / 被成交,
+    /// 网关守卫拦在 qars 之前 —— 不 panic。没有守卫时本测试在 qars
+    /// `cancel_order` 的 expect(account.rs:1237)处 panic。@yutiansut @quantaxis
+    #[test]
+    fn settlement_without_sweep_no_longer_panics_on_cancel_or_fill() {
+        let router = Arc::new(eod_fixture());
+        let engine = crate::exchange::SettlementEngine::new(router.account_mgr.clone());
+        engine.daily_settlement_for("2026-11-08").unwrap();
+        assert_eq!(resting_count(&router), 2, "未扫单:挂单仍在簿上,账户当日委托已清");
+
+        // 撤残留的买单(test_user 119):qars 撤单被跳过,不 panic
+        let bid = router
+            .orders
+            .iter()
+            .find(|e| {
+                let i = e.value().read();
+                i.order.user_id == "test_user" && i.status == OrderStatus::Submitted
+            })
+            .map(|e| e.key().clone())
+            .unwrap();
+        let _ = router.cancel_order(CancelOrderRequest {
+            account_id: "test_user".to_string(),
+            order_id: bid,
+        });
+        // 吃掉残留的卖单(test_user_eod 121):挂单方成交不入账,不 panic
+        let _ = router.submit_order(eod_order("test_user", "BUY", "OPEN", 1.0, 121.0));
     }
 
     // ==================== 订单计数测试 @yutiansut @quantaxis ====================
@@ -3826,5 +5059,275 @@ mod tests {
             let count = handle.join().unwrap();
             assert!(count >= 0);
         }
+    }
+}
+
+/// ✨ DIFF 交易回报(第二期 2a,2026-11-08):`trade.<account>.orders/trades` = QIFI 切片、
+/// 客户端编号、CTP 错误码、成交先于终态、seqno。@yutiansut @quantaxis
+#[cfg(test)]
+mod diff_report_tests {
+    use super::tests_support::*;
+    use super::*;
+    use crate::protocol::diff::snapshot::SnapshotManager;
+    use serde_json::Value;
+
+    fn limit(acc: &str, dir: &str, vol: f64, px: f64) -> SubmitOrderRequest {
+        SubmitOrderRequest {
+            account_id: acc.to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: dir.to_string(),
+            offset: "OPEN".to_string(),
+            volume: vol,
+            price: px,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        }
+    }
+
+    async fn order_view(sm: &SnapshotManager, user: &str, acc: &str, key: &str) -> Value {
+        let snap = sm.get_snapshot(user).await.expect("snapshot");
+        snap["trade"][acc]["orders"][key].clone()
+    }
+
+    #[tokio::test]
+    async fn client_id_lifecycle_dup_cancel_trade_and_reject() {
+        let (router, sm) = router_with_snapshots();
+
+        // ① 挂单:键 = 客户端编号,ALIVE / status_code 3 / exchange_order_id = 交易所单号
+        let r = router.submit_order_with_client_id(limit("test_user", "BUY", 1.0, 120.0), Some("hftm1_1".into()));
+        assert!(r.success, "{:?}", r);
+        let v = order_view(&sm, "test_user", "test_user", "hftm1_1").await;
+        assert_eq!(v["status"], "ALIVE");
+        assert_eq!(v["status_code"], 3);
+        assert_eq!(v["volume_left"], 1.0);
+        assert_eq!(v["exchange_order_id"], r.order_id.clone().unwrap());
+
+        // ② 重复客户端编号 → CTP 22,且不影响原单(DIFF 下单路径会调 publish_rejected_order,
+        //    它必须对 22 什么都不推,否则会把原单覆盖成 FINISHED/7)
+        let dup_req = limit("test_user", "BUY", 1.0, 119.0);
+        let dup = router.submit_order_with_client_id(dup_req.clone(), Some("hftm1_1".into()));
+        assert!(!dup.success);
+        assert_eq!(dup.error_code, Some(22));
+        assert_eq!(ctp_error_id(22, ""), 22);
+        router.publish_rejected_order(&dup_req, Some("hftm1_1"), "SHFE", &dup);
+        let v = order_view(&sm, "test_user", "test_user", "hftm1_1").await;
+        assert_eq!(v["status"], "ALIVE", "重复编号不得覆盖原单: {:?}", v);
+
+        // ③ 按客户端编号撤单 → FINISHED / 5,volume_left 不变
+        router
+            .cancel_order(CancelOrderRequest { account_id: "test_user".into(), order_id: "hftm1_1".into() })
+            .expect("cancel by client id");
+        let v = order_view(&sm, "test_user", "test_user", "hftm1_1").await;
+        assert_eq!(v["status"], "FINISHED");
+        assert_eq!(v["status_code"], 5);
+        assert_eq!(v["volume_left"], 1.0);
+        assert_eq!(v["last_msg"], "已撤单");
+
+        // ④ 成交:对手先挂卖单,再以客户端编号吃掉 → 成交键 `hftm1_2|<成交号>`,
+        //    且在补丁流里**成交先于**使订单 FINISHED 的订单补丁
+        let _ = sm.peek("test_user").await; // 清空待发补丁,只看下面这一笔
+        let s = router.submit_order(limit("test_user2", "SELL", 1.0, 120.0));
+        assert!(s.success, "{:?}", s);
+        let _ = sm.peek("test_user").await;
+        let b = router.submit_order_with_client_id(limit("test_user", "BUY", 1.0, 120.0), Some("hftm1_2".into()));
+        assert!(b.success, "{:?}", b);
+        let patches = sm.peek("test_user").await.expect("patches after trade");
+        let mut trade_seq = None;
+        let mut finished_seq = None;
+        for p in &patches {
+            if let Some(trades) = p["trade"]["test_user"]["trades"].as_object() {
+                for (k, t) in trades {
+                    assert!(k.starts_with("hftm1_2|"), "trade key {}", k);
+                    assert_eq!(t["order_id"], "hftm1_2");
+                    assert!(t["commission"].as_f64().unwrap() >= 0.0);
+                    trade_seq.get_or_insert(t["seqno"].as_u64().unwrap());
+                }
+            }
+            if let Some(o) = p["trade"]["test_user"]["orders"]["hftm1_2"].as_object() {
+                if o["status"] == "FINISHED" {
+                    finished_seq.get_or_insert(o["seqno"].as_u64().unwrap());
+                }
+            }
+        }
+        let (ts, fs) = (trade_seq.expect("trade patch"), finished_seq.expect("finished patch"));
+        assert!(ts < fs, "成交补丁 seqno {} 必须先于 FINISHED 订单补丁 {}", ts, fs);
+        let v = order_view(&sm, "test_user", "test_user", "hftm1_2").await;
+        assert_eq!((v["status_code"].as_i64(), v["volume_left"].as_f64()), (Some(0), Some(0.0)));
+
+        // ⑤ 柜台层拒单 → FINISHED / 7 / error_id 按映射表 / exchange_order_id 为空
+        //    (本夹具合约乘数 1,资金不足打不出来 —— 10 万手先撞单笔上限 4007 → CTP 15;
+        //     资金不足 → 31 的映射由 ctp_error_mapping_table 覆盖)
+        let big = limit("test_user", "BUY", 100000.0, 120.0);
+        let rj = router.submit_order_with_client_id(big.clone(), Some("hftm1_3".into()));
+        assert!(!rj.success);
+        router.publish_rejected_order(&big, Some("hftm1_3"), "SHFE", &rj);
+        let v = order_view(&sm, "test_user", "test_user", "hftm1_3").await;
+        assert_eq!(v["status"], "FINISHED");
+        assert_eq!(v["status_code"], 7);
+        let expect = ctp_error_id(rj.error_code.unwrap(), rj.error_message.as_deref().unwrap_or(""));
+        assert_eq!(v["error_id"], expect, "{:?} / {:?}", rj, v);
+        assert_eq!(expect, 15, "单笔超量属于报单字段有误");
+        assert_eq!(v["exchange_order_id"], "");
+        assert_eq!(v["volume_left"], 100000.0);
+    }
+
+    #[test]
+    fn ctp_error_mapping_table() {
+        assert_eq!(ctp_error_id(1001, ""), 31);
+        assert_eq!(ctp_error_id(4006, ""), 16);
+        assert_eq!(ctp_error_id(4004, ""), 15);
+        assert_eq!(ctp_error_id(4001, "Insufficient funds: available=1"), 31);
+        assert_eq!(ctp_error_id(4001, "可平持仓不足"), 30);
+        assert_eq!(ctp_error_id(1005, "self trade"), 91);
+        assert_eq!(ctp_error_prompt(26), "CTP:报单已全成交或已撤销，不能再撤");
+    }
+}
+
+#[cfg(test)]
+mod tests_support {
+    use super::*;
+    use crate::core::account_ext::{AccountType, OpenAccountRequest};
+    use crate::protocol::diff::snapshot::SnapshotManager;
+
+    /// `tests::create_test_router` 同款夹具 + 第二个账户 + 接上 SnapshotManager
+    pub fn router_with_snapshots() -> (OrderRouter, Arc<SnapshotManager>) {
+        let router = super::tests::create_test_router();
+        router
+            .account_mgr
+            .open_account(OpenAccountRequest {
+                user_id: "test_user2".to_string(),
+                account_id: Some("test_user2".to_string()),
+                account_name: "Counterparty".to_string(),
+                init_cash: 1_000_000.0,
+                account_type: AccountType::Individual,
+            })
+            .unwrap();
+        let sm = Arc::new(SnapshotManager::new());
+        router.trade_gateway.set_snapshot_manager(sm.clone());
+        // 回报只推给有连接在听的主题 —— 测试里模拟两个账户各有一条连接(连接 ID = 主题)
+        sm.register_connection("test_user", "test_user");
+        sm.register_connection("test_user2", "test_user2");
+        (router, sm)
+    }
+}
+
+/// ✨ 平仓冻结(hft_maker C2,2026-11-08):挂着的平仓单必须冻结可平量,
+/// 再发超量平仓单应被拒(CTP 30「平仓量超过持仓量」)。@yutiansut @quantaxis
+#[cfg(test)]
+mod close_freeze_tests {
+    use super::tests_support::*;
+    use super::*;
+
+    fn req(acc: &str, dir: &str, off: &str, vol: f64, px: f64) -> SubmitOrderRequest {
+        SubmitOrderRequest {
+            account_id: acc.to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: dir.to_string(),
+            offset: off.to_string(),
+            volume: vol,
+            price: px,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        }
+    }
+
+    #[test]
+    fn pending_close_freezes_and_over_close_is_rejected() {
+        let (router, _sm) = router_with_snapshots();
+        // 建 1 手多头
+        assert!(router.submit_order(req("test_user2", "SELL", "OPEN", 1.0, 120.0)).success);
+        let b = router.submit_order(req("test_user", "BUY", "OPEN", 1.0, 120.0));
+        assert!(b.success, "{:?}", b);
+        // 挂 1 手平仓(远离市价,不会成交)
+        let c1 = router.submit_order(req("test_user", "SELL", "CLOSE", 1.0, 130.0));
+        assert!(c1.success, "首张平仓单应被接受: {:?}", c1);
+        // 再平 1 手:可平量已被冻结 → 必须拒
+        let c2 = router.submit_order(req("test_user", "SELL", "CLOSE", 1.0, 131.0));
+        assert!(!c2.success, "超量平仓应被拒,实际: {:?}", c2);
+        let eid = ctp_error_id(c2.error_code.unwrap_or(0), c2.error_message.as_deref().unwrap_or(""));
+        assert_eq!(eid, 30, "应映射为 CTP 30 平仓量超过持仓量: {:?}", c2);
+    }
+}
+
+/// ✨ 重启后客户端编号与交易所单号都还在(2026-11-08)@yutiansut @quantaxis
+///
+/// 修复前:恢复出来的挂单以 qars UUID 为单号、客户端编号映射只在内存 ——
+/// 实测部署重启后 `cancel(client_id)` 与 `cancel(O…原单号)` 都报 Order not found。
+#[cfg(test)]
+mod restart_id_tests {
+    use super::tests_support::*;
+    use super::*;
+    use crate::exchange::instrument_registry::InstrumentInfo;
+
+    fn req(dir: &str, px: f64) -> SubmitOrderRequest {
+        SubmitOrderRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: dir.to_string(),
+            offset: "OPEN".to_string(),
+            volume: 1.0,
+            price: px,
+            order_type: "LIMIT".to_string(),
+            time_condition: None,
+            volume_condition: None,
+        }
+    }
+
+    /// 与 `tests::create_test_router` 同款合约夹具,但复用给定的账户管理器(模拟「快照读回后」)
+    fn router_on(account_mgr: Arc<AccountManager>) -> OrderRouter {
+        let engine = Arc::new(ExchangeMatchingEngine::new());
+        engine.register_instrument("IX2301".to_string(), 120.0).unwrap();
+        let registry = Arc::new(InstrumentRegistry::new());
+        registry
+            .register(InstrumentInfo {
+                instrument_id: "IX2301".to_string(),
+                instrument_name: "IX2301".to_string(),
+                instrument_type: crate::exchange::instrument_registry::InstrumentType::CommodityFuture,
+                exchange: "SHFE".to_string(),
+                contract_multiplier: 1,
+                price_tick: 0.01,
+                margin_rate: 0.1,
+                commission_rate: 0.0005,
+                limit_up_rate: 0.1,
+                limit_down_rate: 0.1,
+                status: crate::exchange::instrument_registry::InstrumentStatus::Active,
+                list_date: None,
+                expire_date: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+            })
+            .unwrap();
+        let gw = Arc::new(
+            TradeGateway::new(account_mgr.clone()).with_wal_root("./output/testexchange/wal_restart_ids"),
+        );
+        OrderRouter::new(account_mgr, engine, registry, gw)
+    }
+
+    #[test]
+    fn client_and_exchange_ids_survive_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("client_order_ids.jsonl").to_str().unwrap().to_string();
+        let (r1, _sm) = router_with_snapshots();
+        r1.set_client_order_id_file(file.clone());
+        let a = r1.submit_order_with_client_id(req("BUY", 100.0), Some("keep_1".into()));
+        let b = r1.submit_order_with_client_id(req("BUY", 99.0), Some("keep_2".into()));
+        assert!(a.success && b.success);
+        let xid_b = b.order_id.clone().unwrap();
+
+        // 「重启」:新撮合引擎 / 新网关 / 新路由,账户状态沿用(= 快照读回后的内存态)
+        let r2 = router_on(r1.account_mgr.clone());
+        r2.set_client_order_id_file(file);
+        r2.restore_orders_from_accounts();
+        assert_eq!(r2.load_client_order_ids(), 2);
+
+        // 按客户端编号撤
+        r2.cancel_order(CancelOrderRequest { account_id: "test_user".into(), order_id: "keep_1".into() })
+            .expect("重启后应能按客户端编号撤单");
+        // 按原交易所单号撤
+        r2.cancel_order(CancelOrderRequest { account_id: "test_user".into(), order_id: xid_b.clone() })
+            .expect("重启后应能按原交易所单号撤单");
+        assert!(r2.orders.contains_key(&xid_b), "恢复后的单号应是原交易所单号 {}", xid_b);
     }
 }

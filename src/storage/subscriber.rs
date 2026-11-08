@@ -207,7 +207,7 @@ impl StorageSubscriber {
         stats.total_persisted += total_persisted as u64;
         stats.total_batches += 1;
 
-        log::info!(
+        log::debug!(
             "Batch flush: {} records in {:?} (total: {} received, {} persisted, {} errors)",
             total_persisted,
             start.elapsed(),
@@ -302,7 +302,9 @@ impl StorageSubscriber {
                     user_id: user_id_bytes,
                     instrument_id: instrument_id_bytes,
                     direction: if order.direction == "BUY" { 0 } else { 1 },
-                    offset: if order.offset == "OPEN" { 0 } else { 1 },
+                    // 统一走 WalRecord::encode_offset —— 原写法把 CLOSETODAY/CLOSEYESTERDAY
+                    // 都压成 CLOSE(1),与 trade_gateway 的编码不一致。@yutiansut @quantaxis
+                    offset: crate::storage::wal::record::WalRecord::encode_offset(&order.offset),
                     price: order.price,
                     volume: order.volume,
                     timestamp: order.timestamp,

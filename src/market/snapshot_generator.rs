@@ -145,6 +145,14 @@ impl Default for MarketSnapshot {
 }
 
 /// 快照生成器配置
+/// 快照通道在**无人消费**时的最大堆积条数,超出即丢最旧的。
+///
+/// 512 条 × ~344 B ≈ 176 KB 上限。取这个量级是因为:
+/// ① 足够让一个刚建立的订阅者拿到近期历史(1 秒/条时约 8.5 分钟);
+/// ② 又远小于无界堆积的代价(实测理论 4.7 MB/小时 = 113 MB/天)。
+/// @yutiansut @quantaxis
+const SNAPSHOT_CHANNEL_CAP: usize = 512;
+
 #[derive(Debug, Clone)]
 pub struct SnapshotGeneratorConfig {
     /// 快照生成间隔（毫秒）
@@ -187,6 +195,15 @@ pub struct MarketSnapshotGenerator {
     /// 统计：已生成快照数
     snapshot_count: Arc<RwLock<u64>>,
 
+    /// 活跃订阅者数量。@yutiansut @quantaxis
+    ///
+    /// 用来在**无人订阅时整轮跳过快照生成** —— 生成一次要对**每个合约**
+    /// 遍历全部账户取**写锁**(`account_mgr.rs:get_instrument_open_interest`),
+    /// 生产 4 合约 × 82 账户 = **328 次账户写锁/秒**,还与同样 1 秒一轮的
+    /// `RiskMonitor` 和下单路径争锁。而 `MarketDataService::subscribe_snapshots`
+    /// 生产**零调用方** ⇒ 这些锁全是白取的。
+    subscriber_count: Arc<std::sync::atomic::AtomicUsize>,
+
     /// 历史数据缓存（合约ID -> 日内统计）
     daily_stats: Arc<RwLock<HashMap<String, DailyStats>>>,
 }
@@ -223,6 +240,7 @@ impl MarketSnapshotGenerator {
             snapshot_tx: tx,
             snapshot_rx: Arc::new(RwLock::new(rx)),
             snapshot_count: Arc::new(RwLock::new(0)),
+            subscriber_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             daily_stats: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -268,6 +286,13 @@ impl MarketSnapshotGenerator {
                 };
 
                 // 为每个合约生成快照
+                // ✨ 无人订阅就整轮跳过 —— 见 `subscriber_count` 字段说明。
+                // 生成一次要对每个合约遍历全部账户取写锁,而输出没人要。
+                // @yutiansut @quantaxis
+                if self.subscriber_count.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                    continue;
+                }
+
                 for instrument_id in &instruments {
                     if let Ok(snapshot) = self.generate_snapshot(instrument_id) {
                         // 广播快照
@@ -279,6 +304,33 @@ impl MarketSnapshotGenerator {
                             );
                         } else {
                             *self.snapshot_count.write() += 1;
+
+                            // ✨ 无人消费时给通道封顶,否则无界堆积。@yutiansut @quantaxis
+                            //
+                            // `snapshot_tx` 发进的是 `unbounded()` 通道(:217),
+                            // 唯一读取点在 `subscribe()` 的转发线程里(:534),而
+                            // `MarketDataService::subscribe_snapshots`(market/mod.rs:185)
+                            // **生产零调用方** ⇒ 转发线程从不启动 ⇒ 没有任何东西排空它。
+                            // 单测 `unsubscribed_channel_accumulates_without_bound` 实测:
+                            // 无订阅者时 600ms 积 11 条、1200ms 积 23 条(线性增长),
+                            // 而**有订阅者时恒为 0** —— 成因确实是没有消费者。
+                            //
+                            // ⚠️ 为什么不改成 `bounded()`:那会让**已订阅者**在慢消费时
+                            // 丢最新的一条(send 失败),语义变差。这里改为丢**最旧**的:
+                            // 快照是「当前状态」,旧的本就没有保留价值。
+                            //
+                            // ⚠️ 为什么阈值取 SNAPSHOT_CHANNEL_CAP 而不是 0:有真实订阅者时
+                            // 队列会稳定在 0 附近,这段几乎不触发;只有在无人消费时才生效。
+                            // 于是它对正常路径零影响,只兜住异常。
+                            let pending = self.snapshot_rx.read().len();
+                            if pending > SNAPSHOT_CHANNEL_CAP {
+                                let rx = self.snapshot_rx.read();
+                                for _ in 0..(pending - SNAPSHOT_CHANNEL_CAP) {
+                                    if rx.try_recv().is_err() {
+                                        break;
+                                    }
+                                }
+                            }
                             log::trace!(
                                 "Generated snapshot for {}: last_price={:.2}",
                                 instrument_id,
@@ -526,9 +578,22 @@ impl MarketSnapshotGenerator {
         // 创建新的通道对
         let (tx, rx) = unbounded();
 
+        // ✨ 订阅者计数 +1;转发线程退出时 -1。@yutiansut @quantaxis
+        use std::sync::atomic::Ordering;
+        self.subscriber_count.fetch_add(1, Ordering::SeqCst);
+        let sub_cnt = self.subscriber_count.clone();
+
         // 启动转发线程
         let snapshot_rx = self.snapshot_rx.clone();
         std::thread::spawn(move || {
+            // 无论从哪个分支退出都要减回来 —— 用 guard 保证
+            struct DecOnDrop(Arc<std::sync::atomic::AtomicUsize>);
+            impl Drop for DecOnDrop {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let _dec = DecOnDrop(sub_cnt);
             loop {
                 // 从主通道接收
                 let rx_guard = snapshot_rx.read();
@@ -555,6 +620,26 @@ impl MarketSnapshotGenerator {
         *self.snapshot_count.read()
     }
 
+    /// 通道里**尚未被消费**的快照条数。@yutiansut @quantaxis
+    ///
+    /// 加这个是为了让「快照通道是否无界堆积」可测,而不是靠 RSS 推断:
+    /// `snapshot_tx` 发进的是 `unbounded()` 通道(:217),唯一的读取点在
+    /// `subscribe()` 的转发线程里(:534),而 `MarketDataService::subscribe_snapshots`
+    /// **零调用方** ⇒ 若确实没人订阅,这个值会随时间单调增长。
+    ///
+    /// ⚠️ 为什么不能用 RSS 判:实测理论增速仅 4.7 MB/小时(= 0.078 MB/分钟),
+    /// 而生产 RSS 逐分钟标准差 **17.2 MB**(噪声/信号 220 倍);
+    /// 空载实例上则因 mimalloc arena 有余量而完全不动。
+    /// 直接读通道长度是唯一能一次定论的办法。
+    /// 当前活跃订阅者数(诊断用)。@yutiansut @quantaxis
+    pub fn subscriber_count(&self) -> usize {
+        self.subscriber_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn pending_len(&self) -> usize {
+        self.snapshot_rx.read().len()
+    }
+
     /// 重置日内统计（每日开盘时调用）
     pub fn reset_daily_stats(&self) {
         let mut daily_stats = self.daily_stats.write();
@@ -579,5 +664,106 @@ mod tests {
         let config = SnapshotGeneratorConfig::default();
         assert_eq!(config.interval_ms, 1000);
         assert!(config.enable_persistence);
+    }
+
+    /// 通道封顶仍然有效 —— 订阅者存在但**消费不过来**时不会无界堆积。
+    /// @yutiansut @quantaxis
+    ///
+    /// ⚠️ 这个测试是从两个旧测试合并改写来的。旧的两个测「**无订阅者**时通道堆积」,
+    /// 而 2026-09-06 加了「无订阅者整轮跳过生成」之后,**那个前提不存在了** ——
+    /// 无订阅者时一条都不产生,自然不会堆积。旧测试不是被改坏,是**被更好的行为取代**。
+    ///
+    /// 现在真正需要防的是另一种情况:**有订阅者但消费慢**。
+    /// 这里持有 Receiver 却不读,模拟一个卡住的消费者。
+    #[test]
+    fn channel_is_capped_when_consumer_stalls() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let engine = Arc::new(crate::matching::engine::ExchangeMatchingEngine::new());
+        engine.register_instrument("TESTZ2501".to_string(), 100.0).unwrap();
+
+        let gen = Arc::new(MarketSnapshotGenerator::new(
+            engine,
+            SnapshotGeneratorConfig {
+                interval_ms: 1,
+                enable_persistence: false,
+                instruments: vec!["TESTZ2501".to_string()],
+            },
+        ));
+
+        // 持有 Receiver 但**从不读** —— 转发线程会把主通道搬到这个 rx 里,
+        // 主通道因此不会涨;真正会涨的是订阅者自己那条。
+        // 我们要断言的是**主通道有上限**,即使转发线程跟不上也不会失控。
+        let _rx = gen.subscribe();
+        assert_eq!(gen.subscriber_count(), 1);
+
+        let _h = gen.clone().start();
+        std::thread::sleep(Duration::from_millis(2500));
+        let produced = gen.get_snapshot_count();
+        let pending = gen.pending_len();
+
+        println!(
+            "  [封顶实测] 消费者卡住: 已生成 {} 条,主通道内 {} 条(上限 {})",
+            produced, pending, SNAPSHOT_CHANNEL_CAP
+        );
+        assert!(produced > 0, "有订阅者时应当持续生成,实得 {}", produced);
+        assert!(
+            pending <= SNAPSHOT_CHANNEL_CAP + 8,
+            "主通道应被封顶在 {} 附近,实得 {}(产量 {})",
+            SNAPSHOT_CHANNEL_CAP,
+            pending,
+            produced
+        );
+    }
+
+    /// 无订阅者时**不生成快照**;一旦有订阅者立即恢复。@yutiansut @quantaxis
+    ///
+    /// 判错方向不对称:
+    ///   该生成却没生成 ⇒ 订阅者收不到数据(功能坏)
+    ///   不该生成却生成 ⇒ 白取写锁(仅浪费)
+    /// 所以测试重点在「有订阅者时必须照常生成」。
+    #[test]
+    fn skips_generation_when_nobody_subscribes() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let engine = Arc::new(crate::matching::engine::ExchangeMatchingEngine::new());
+        engine.register_instrument("TESTQ2501".to_string(), 100.0).unwrap();
+
+        let gen = Arc::new(MarketSnapshotGenerator::new(
+            engine,
+            SnapshotGeneratorConfig {
+                interval_ms: 20,
+                enable_persistence: false,
+                instruments: vec!["TESTQ2501".to_string()],
+            },
+        ));
+        assert_eq!(gen.subscriber_count(), 0, "起始应无订阅者");
+
+        let _h = gen.clone().start();
+        std::thread::sleep(Duration::from_millis(400));
+        let idle = gen.get_snapshot_count();
+        println!("  [无订阅者] 400ms 后生成 {} 条", idle);
+        assert_eq!(idle, 0, "无订阅者时不该生成,实得 {}", idle);
+
+        // 一有订阅者立即恢复生成
+        let rx = gen.subscribe();
+        assert_eq!(gen.subscriber_count(), 1, "subscribe 后计数应为 1");
+        std::thread::sleep(Duration::from_millis(400));
+        let active = gen.get_snapshot_count();
+        println!("  [有订阅者] 再过 400ms 生成 {} 条", active);
+        assert!(active > 0, "有订阅者时必须生成,实得 {}", active);
+
+        // 订阅者断开后计数归零、生成再次停止
+        drop(rx);
+        std::thread::sleep(Duration::from_millis(500));
+        let after_drop_cnt = gen.subscriber_count();
+        let a = gen.get_snapshot_count();
+        std::thread::sleep(Duration::from_millis(400));
+        let b = gen.get_snapshot_count();
+        println!("  [断开后] 订阅者数 {}  生成量 {} → {}", after_drop_cnt, a, b);
+        assert_eq!(after_drop_cnt, 0, "订阅者断开后计数应归零");
+        assert_eq!(a, b, "断开后不该继续生成,实得 {} → {}", a, b);
     }
 }

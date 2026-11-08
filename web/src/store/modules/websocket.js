@@ -6,6 +6,7 @@
  */
 
 import WebSocketManager from '@/websocket'
+import { Message } from 'element-ui'   // 与 api/request.js 同一写法
 import request from '@/api/request'
 
 const state = {
@@ -172,7 +173,20 @@ const actions = {
     if (wsKey !== userId) {
       console.log('[WebSocket] 使用 account_id 作为订阅键:', wsKey)
     } else {
+      // ⚠️ 这条回退**不是理论风险,是可达路径** —— 上方 `fetchUserAccounts` 失败时
+      // 被 catch 掉并「继续初始化」(:158),此时 currentAccountId 仍为 null。
+      // 2026-09-06 后端实测(订阅期间下真单,对比两种订阅键收到的 patch 顶层键):
+      //   user_id(UUID)订阅 → ['factors','ins_list','klines','notify','quotes'] —— **无业务推送**
+      //   account_id 订阅   → 上述 + ['accounts','orders','positions','trades']
+      // 即回退后成交/委托/账户三类**全部收不到**,页面只能靠 HTTP 轮询兜底,
+      // 而纯 WS 驱动的区域会恒空 —— 用户看到的是「行情在动,但我的委托不更新」。
+      // 光打 console.warn 用户看不见,必须给一条可见提示。@yutiansut @quantaxis
       console.warn('[WebSocket] 无 currentAccountId,回退 user_id —— 将收不到成交/委托/账户推送')
+      Message({
+        type: 'warning',
+        duration: 6000,
+        message: '账户信息未就绪,实时委托/成交推送暂不可用(行情不受影响)。请刷新页面重试。'
+      })
     }
 
     // 创建 WebSocket 管理器
@@ -577,6 +591,11 @@ const actions = {
   }
 }
 
+// 稳定身份的空兜底 —— 见下方 positions getter 的说明。@yutiansut @quantaxis
+// 全部 snapshot 段的 getter 都用它:目前只有 positions 被 watch,
+// 但字面量兜底是个「等着被踩」的陷阱,一并收敛。
+const EMPTY_OBJ = Object.freeze({})
+
 const getters = {
   // WebSocket 实例
   ws: state => state.ws,
@@ -605,36 +624,67 @@ const getters = {
         account_id: acc.user_id || state.snapshot.user_id || 'default',
         account_name: `${acc.user_id || '交易账户'} (${currency})`,
         currency: currency,
-        balance: acc.balance || 0,
-        available: acc.available || 0,
-        margin: acc.margin || 0,
-        risk_ratio: acc.risk_ratio || 0,
-        ...acc
+        // ⚠️ `...acc` 必须放在守卫**之前** @yutiansut @quantaxis
+        //
+        // 原来展开在守卫之后:字段**缺席**时守卫有效,字段**存在且为 null** 时
+        // 展开会把 0 冲掉,守卫等于没写。而 `currentAccount` 直接喂
+        // `OrderForm.vue:16/37` 的 `Math.round(currentAccount.available)` —— null 即崩。
+        ...acc,
+        balance: Number(acc.balance) || 0,
+        available: Number(acc.available) || 0,
+        margin: Number(acc.margin) || 0,
+        risk_ratio: Number(acc.risk_ratio) || 0
       }))
     }
     return []
   },
 
+  // 数值字段统一走 `Number(x) || 0` @yutiansut @quantaxis
+  //
+  // 两个坑,两个分支各中一个:
+  // ① **主路径**(state.userAccounts,HTTP 原始数组)原本**完全没有守卫** ——
+  //    只修下面的 CNY 兜底分支根本覆盖不到它,而这才是常走的那条。
+  // ② CNY 分支的 `...cnyAccount` 展开在守卫**之后**:字段缺席时守卫有效,
+  //    字段存在且为 `null` 时展开把 0 冲掉,守卫等于没写。
+  //
+  // 与 `userAccounts` getter 不同,本 getter **有活消费者**
+  // (`AccountSelector.vue:76`,挂在 trade/batch、trade/conditional、trade/transfer 三页)。
   currentAccount: state => {
+    // ⚠️ 这里**不再**把 null 兜成 0。@yutiansut @quantaxis
+    //
+    // 原守卫是 `Number(acc.balance) || 0` 等四行,目的是防
+    // `OrderForm.vue:16` 的 `Math.round(...)` 遇到 undefined 崩溃。
+    // 但它同时**抹掉了「未加载」信号** —— `AccountSelector.vue:39/43/47`
+    // 拿到的永远是 0,那三行于是显示 `¥0.00`,用户分不清
+    // 「还没加载」与「账户没钱」;在下单页上这个误读代价很直接。
+    // (回验代理实测:改了 formatNumber 的 `--` 分支后,三行明细在
+    //  null 与 0 两种场景下**逐字相同** —— `--` 分支成了死代码。)
+    //
+    // 去掉守卫是安全的:实测**所有数值消费者都自带兜底** ——
+    //   · OrderForm.vue:16/37    `Math.round(Number(x) || 0)`
+    //   · AccountSelector.vue:52 `(Number(x) || 0) * 100`
+    //   · admin/risk.vue:245     `(Number(x) || 0) * 100`
+    //   · my-accounts.vue 用的是**自己的局部 data**(:351),不走本 getter
+    // 即守卫是**冗余**的,而它的副作用(编造 0)是实打实的。
+    //
+    // 原则:**兜底放在数值消费点,不放在数据源** ——
+    // 放在数据源会让所有展示层都失去区分"缺失"与"零"的能力。
+    const guard = acc => ({ ...acc })
     // 先从 userAccounts 查找
     if (state.currentAccountId && state.userAccounts && state.userAccounts.length > 0) {
       const found = state.userAccounts.find(acc => acc.account_id === state.currentAccountId)
-      if (found) return found
+      if (found) return guard(found)
     }
     // 否则从 snapshot.accounts 获取（默认 CNY）
     if (state.snapshot.accounts) {
       const cnyAccount = state.snapshot.accounts['CNY']
       if (cnyAccount) {
-        return {
+        return guard({
           account_id: cnyAccount.user_id || state.snapshot.user_id || 'default',
           account_name: `${cnyAccount.user_id || '交易账户'} (CNY)`,
           currency: 'CNY',
-          balance: cnyAccount.balance || 0,
-          available: cnyAccount.available || 0,
-          margin: cnyAccount.margin || 0,
-          risk_ratio: cnyAccount.risk_ratio || 0,
           ...cnyAccount
-        }
+        })
       }
     }
     return null
@@ -660,7 +710,30 @@ const getters = {
   },
 
   // 所有持仓
-  positions: state => state.snapshot.positions || {},
+  // ⚠️ 这个 getter 早就存在,但生产页面里**没有一个消费它** @yutiansut @quantaxis
+  //
+  // 完整链路只差最后一环:
+  //   trade_gateway.rs:1662  产出 positions patch     ✓(本次会话补的,此前一条不发)
+  //   SnapshotManager.js:305 getPositions() 能取      ✓
+  //   websocket.js:446/450   每条 WS 消息提交整个 snapshot ✓
+  //   本 getter                                       ✓
+  //   ── 页面消费 ──                                   ✗ 只有 WebSocketTest.vue(测试页)
+  // 于是补了后端推送仍是**空转**:持仓页 mounted 加载一次,之后永不刷新。
+  // 持仓/订单/成交/我的账户四页**无轮询**,成交后一直显示陈旧数据,直到手动切页。
+  // (监控页与管理页有 10s 轮询,trade 页有 5s —— 不是「全仓为 0」,是**用户数据页为 0**。)
+  //
+  // 我一度在此另加了一个 `snapshotPositions`,与本行逐字节相同 —— 已删。
+  // **加 getter 前先读完这个 getters 块**。
+  // ⚠️ `|| {}` 不能写成字面量 —— 那是每次重算都产生**新对象**。@yutiansut @quantaxis
+  //
+  // `SET_SNAPSHOT` 在**每条** WS 消息上整体替换 `state.snapshot`,于是本 computed
+  // 每次都脏、每次都重算;若兜底是 `|| {}` 字面量,身份每次都变,
+  // 任何 `watch` 都会认为「变了」。
+  // 实测(回验 agent,30 秒):66 次 snapshot 提交里 **0 次带 positions、
+  // 0 次内容变化**,却触发了 **15 次** `/position/user` 请求(间隔全是 2000ms,
+  // 节流被打满),每次 reload 还附带 N 个 getTick —— 13 个合约约 7 req/s/标签页。
+  // 用模块级冻结常量兜底,身份稳定。
+  positions: state => state.snapshot.positions || EMPTY_OBJ,
 
   // 获取特定持仓
   position: state => (instrumentId) => {
@@ -668,7 +741,7 @@ const getters = {
   },
 
   // 所有订单
-  orders: state => state.snapshot.orders || {},
+  orders: state => state.snapshot.orders || EMPTY_OBJ,
 
   // 获取特定订单
   order: state => (orderId) => {
@@ -686,10 +759,10 @@ const getters = {
   },
 
   // 所有成交记录
-  trades: state => state.snapshot.trades || {},
+  trades: state => state.snapshot.trades || EMPTY_OBJ,
 
   // 所有行情
-  quotes: state => state.snapshot.quotes || {},
+  quotes: state => state.snapshot.quotes || EMPTY_OBJ,
 
   // 获取特定行情
   quote: state => (instrumentId) => {
@@ -700,14 +773,14 @@ const getters = {
   subscribedInstruments: state => state.subscribedInstruments,
 
   // 通知信息
-  notifications: state => state.snapshot.notify || {},
+  notifications: state => state.snapshot.notify || EMPTY_OBJ,
 
   // ============================================================================
   // ✨ 因子数据 Getters @yutiansut @quantaxis
   // ============================================================================
 
   // 所有因子数据
-  factors: state => state.snapshot.factors || {},
+  factors: state => state.snapshot.factors || EMPTY_OBJ,
 
   // 获取特定合约的因子数据
   factor: state => (instrumentId) => {
@@ -726,7 +799,7 @@ const getters = {
   // 获取合约的所有因子值（便捷访问）
   factorValues: state => (instrumentId) => {
     const factors = state.snapshot.factors && state.snapshot.factors[instrumentId]
-    return (factors && factors.values) || {}
+    return (factors && factors.values) || EMPTY_OBJ
   },
 
   // 获取因子更新时间戳

@@ -477,6 +477,17 @@ impl KLineManager {
             .and_then(|agg| agg.get_current_kline(period))
             .cloned()
     }
+
+    /// 最近一根**已完成**的K线(不含当前未完成那根)。@yutiansut @quantaxis
+    ///
+    /// `get_klines` 返回「历史 + 当前」,取不出「上一根」—— DIFF 行情的昨收
+    /// (`MarketDataService::quote_snapshot`)要的正是上一根日 K 的收盘价。
+    pub fn get_last_finished_kline(&self, instrument_id: &str, period: KLinePeriod) -> Option<KLine> {
+        let aggregators = self.aggregators.read();
+        aggregators
+            .get(instrument_id)
+            .and_then(|agg| agg.get_history_klines(period, 1).pop())
+    }
 }
 
 impl Default for KLineManager {
@@ -774,5 +785,48 @@ mod tests {
             assert_eq!(kline.close, 3800.0);
             assert_eq!(kline.volume, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod carry_forward_tests {
+    use super::*;
+
+    /// `on_timer` 的平推依赖 `last_price`;没有它就一根都不生成。@yutiansut @quantaxis
+    ///
+    /// 这正是线上 IH2501 的处境:WAL 恢复只填 `history_klines`、不设 `last_price`,
+    /// 于是重启后**没有立刻成交的合约图表永久冻结**
+    /// (实测最新 bar 距今 33 小时,而进程只跑了 26 小时)。
+    #[test]
+    fn no_seed_means_no_bars() {
+        let mut agg = KLineAggregator::new("IH2501".to_string());
+        assert!(agg.last_price.is_none(), "前提:新建的聚合器没有价格");
+        let out = agg.on_timer(1_788_600_000_000);
+        assert!(out.is_empty(), "没有 last_price 时不应生成任何 K 线");
+    }
+
+    /// **正对照**:播种之后,定时器就能平推出 K 线 —— 否则「永远不生成」
+    /// 的实现也能让上面那个测试通过。
+    #[test]
+    fn seeded_price_enables_carry_forward() {
+        let mut agg = KLineAggregator::new("IH2501".to_string());
+        agg.last_price = Some(1512.8);
+        // 先建立当前周期,再跨到下一个周期,才会有「完成的」K 线
+        let t0 = 1_788_600_000_000_i64;
+        agg.on_timer(t0);
+        let out = agg.on_timer(t0 + 120_000); // 跨过 1 分钟边界
+        assert!(!out.is_empty(), "播种后应能平推出 K 线");
+        let (_, k) = &out[0];
+        assert_eq!(k.close, 1512.8, "平推 K 线的 OHLC 应等于 last_price");
+        assert_eq!(k.volume, 0, "平推 K 线成交量为 0");
+    }
+
+    /// 真实 tick 必须能覆盖种子值 —— 种子只是启动时的兜底,不能粘住。
+    #[test]
+    fn real_tick_overrides_seed() {
+        let mut agg = KLineAggregator::new("IH2501".to_string());
+        agg.last_price = Some(1512.8);
+        agg.on_tick(1911.4, 10, 1_788_600_000_000);
+        assert_eq!(agg.last_price, Some(1911.4), "tick 应覆盖种子价");
     }
 }

@@ -21,7 +21,14 @@
       <el-row :gutter="20">
         <el-col :xs="24" :sm="12" :md="8" :lg="6">
           <el-form-item label="选择账户">
-            <el-select v-model="selectedAccountId" placeholder="请选择账户" style="width: 200px" @change="loadSummary">
+            <!-- 200px 装不下 `ACC_` + 32 位 hex(实测需 305px,硬切 107px 且**无省略号**),
+                 用户无法分辨当前选的是哪个账户。
+                 ⚠️ 必须用**定值**:本表单是 `<el-form :inline="true">`,
+                 `.el-form-item` 与 `.el-form-item__content` 都是 inline-block
+                 (shrink-to-fit),`width:100%` 只等于父级收缩后的 196px,
+                 `max-width` 永远不触发 —— 实测比改前还窄 4px。
+                 @yutiansut @quantaxis -->
+            <el-select v-model="selectedAccountId" placeholder="请选择账户" style="width: 380px" @change="loadSummary">
               <el-option
                 v-for="account in accounts"
                 :key="account.account_id"
@@ -37,32 +44,32 @@
         <el-col :xs="12" :sm="8" :lg="4">
           <div class="stat-item">
             <div class="stat-label">占用保证金</div>
-            <div class="stat-value primary">{{ summary.total_margin.toFixed(2) }}</div>
+            <div class="stat-value primary">{{ $num(summary.total_margin, 2) }}</div>
           </div>
         </el-col>
         <el-col :xs="12" :sm="8" :lg="4">
           <div class="stat-item">
             <div class="stat-label">冻结保证金</div>
-            <div class="stat-value warning">{{ summary.frozen_margin.toFixed(2) }}</div>
+            <div class="stat-value warning">{{ $num(summary.frozen_margin, 2) }}</div>
           </div>
         </el-col>
         <el-col :xs="12" :sm="8" :lg="4">
           <div class="stat-item">
             <div class="stat-label">可用保证金</div>
-            <div class="stat-value success">{{ summary.available_margin.toFixed(2) }}</div>
+            <div class="stat-value success">{{ $num(summary.available_margin, 2) }}</div>
           </div>
         </el-col>
         <el-col :xs="12" :sm="8" :lg="4">
           <div class="stat-item">
             <div class="stat-label">保证金占比</div>
-            <div class="stat-value">{{ (summary.margin_ratio * 100).toFixed(2) }}%</div>
+            <div class="stat-value">{{ $pct(summary.margin_ratio, 2) }}</div>
           </div>
         </el-col>
         <el-col :xs="12" :sm="8" :lg="4">
           <div class="stat-item">
             <div class="stat-label">风险度</div>
             <div :class="['stat-value', getRiskClass(summary.risk_degree)]">
-              {{ (summary.risk_degree * 100).toFixed(2) }}%
+              {{ $pct(summary.risk_degree, 2) }}
             </div>
           </div>
         </el-col>
@@ -81,12 +88,12 @@
           <el-table-column prop="volume_long" label="持仓" width="80"></el-table-column>
           <el-table-column prop="margin_long" label="保证金" min-width="120">
             <template slot-scope="scope">
-              {{ scope.row.margin_long.toFixed(2) }}
+              {{ $num(scope.row.margin_long, 2) }}
             </template>
           </el-table-column>
           <el-table-column prop="margin_rate_long" label="保证金率" min-width="100">
             <template slot-scope="scope">
-              {{ (scope.row.margin_rate_long * 100).toFixed(2) }}%
+              {{ $pct(scope.row.margin_rate_long, 2) }}
             </template>
           </el-table-column>
         </el-table-column>
@@ -94,18 +101,18 @@
           <el-table-column prop="volume_short" label="持仓" width="80"></el-table-column>
           <el-table-column prop="margin_short" label="保证金" min-width="120">
             <template slot-scope="scope">
-              {{ scope.row.margin_short.toFixed(2) }}
+              {{ $num(scope.row.margin_short, 2) }}
             </template>
           </el-table-column>
           <el-table-column prop="margin_rate_short" label="保证金率" min-width="100">
             <template slot-scope="scope">
-              {{ (scope.row.margin_rate_short * 100).toFixed(2) }}%
+              {{ $pct(scope.row.margin_rate_short, 2) }}
             </template>
           </el-table-column>
         </el-table-column>
         <el-table-column prop="last_price" label="最新价" min-width="100">
           <template slot-scope="scope">
-            {{ scope.row.last_price.toFixed(2) }}
+            {{ $num(scope.row.last_price, 2) }}
           </template>
         </el-table-column>
       </el-table>
@@ -124,6 +131,7 @@
         ></el-input>
       </div>
       <el-table
+        :empty-text="$emptyText(loadError)"
         :data="filteredRates"
         v-loading="loading"
         stripe
@@ -132,27 +140,35 @@
         max-height="400"
       >
         <el-table-column prop="instrument_id" label="合约" min-width="120" show-overflow-tooltip></el-table-column>
+        <!-- 本表绑的是 `filteredRates`(来自 `/account-admin/margin/rates`),
+             它返回的正是 `long_margin_ratio_by_money` / `_by_volume` 这套字段名。
+             ⚠️ **不要**把这里换成 `margin_rate_long` / `margin_rate_short` ——
+             那是**另一个端点** `/account-admin/margin/summary` 的 `positions[]` 字段,
+             对应本页上方那张「持仓保证金明细」表(:81 `:data="summary.positions"`)。
+             两张表数据源不同、字段名不同,曾被误当成同一套而改错。@yutiansut @quantaxis
+             `*_by_volume` 在后端 `init_default_margin_rates` 里恒填 0.0
+             (按手数计的保证金率本就不适用于这些品种),所以那两列显示 `-` 是正确的。 -->
         <el-table-column label="多头保证金率" align="center">
           <el-table-column prop="long_margin_ratio_by_money" label="按金额" min-width="70">
             <template slot-scope="scope">
-              {{ (scope.row.long_margin_ratio_by_money * 100).toFixed(2) }}%
+              {{ $pct(scope.row.long_margin_ratio_by_money, 2) }}
             </template>
           </el-table-column>
           <el-table-column prop="long_margin_ratio_by_volume" label="按手数" min-width="120">
             <template slot-scope="scope">
-              {{ scope.row.long_margin_ratio_by_volume > 0 ? scope.row.long_margin_ratio_by_volume.toFixed(2) + '元/手' : '-' }}
+              {{ (Number(scope.row.long_margin_ratio_by_volume) || 0) > 0 ? $num(scope.row.long_margin_ratio_by_volume, 2) + '元/手' : '-' }}
             </template>
           </el-table-column>
         </el-table-column>
         <el-table-column label="空头保证金率" align="center">
           <el-table-column prop="short_margin_ratio_by_money" label="按金额" min-width="120">
             <template slot-scope="scope">
-              {{ (scope.row.short_margin_ratio_by_money * 100).toFixed(2) }}%
+              {{ $pct(scope.row.short_margin_ratio_by_money, 2) }}
             </template>
           </el-table-column>
           <el-table-column prop="short_margin_ratio_by_volume" label="按手数" min-width="120">
             <template slot-scope="scope">
-              {{ scope.row.short_margin_ratio_by_volume > 0 ? scope.row.short_margin_ratio_by_volume.toFixed(2) + '元/手' : '-' }}
+              {{ (Number(scope.row.short_margin_ratio_by_volume) || 0) > 0 ? $num(scope.row.short_margin_ratio_by_volume, 2) + '元/手' : '-' }}
             </template>
           </el-table-column>
         </el-table-column>
@@ -173,6 +189,9 @@ export default {
 
   data() {
     return {
+      // 加载失败原因 —— 与「真的没数据」区分开,交给 $emptyText 渲染
+      // @yutiansut @quantaxis
+      loadError: null,
       loading: false,
       accounts: [],
       selectedAccountId: '',
@@ -220,17 +239,19 @@ export default {
           this.loadSummary()
         }
       } catch (err) {
+        this.loadError = (err && err.message) || '加载失败'
         console.error('加载账户列表失败:', err)
       }
     },
 
     async loadRates() {
-      this.loading = true
+      this.loading = true; this.loadError = null
       try {
         // request 拦截器已解包，直接拿到保证金率数组
         const rates = await getMarginRates()
         this.rates = rates || []
       } catch (err) {
+        this.loadError = (err && err.message) || '加载失败'
         console.error('加载保证金率失败:', err)
         this.$message.error('加载保证金率失败')
       } finally {
@@ -244,6 +265,7 @@ export default {
         // request 拦截器已解包，直接拿到保证金汇总对象
         this.summary = await getAccountMarginSummary(this.selectedAccountId)
       } catch (err) {
+        this.loadError = (err && err.message) || '加载失败'
         console.error('加载保证金汇总失败:', err)
       }
     },

@@ -3,6 +3,7 @@
 //! @yutiansut @quantaxis
 
 use actix_web::{web, HttpResponse};
+use crate::core::account_ext::AccountExt;   // safe_risk_ratio @yutiansut @quantaxis
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -99,6 +100,45 @@ pub(crate) fn verify_account_password(
         // 未设置过密码的账户沿用默认值,与 change_password(:232) 的判定保持一致
         None => password == "123456",
     }
+}
+
+/// 查账户状态的小写字符串形式 @yutiansut @quantaxis
+///
+/// `ACCOUNT_STATUS`(:37)只在冻结/解冻时写入,从未冻结过的账户**没有条目** ——
+/// 那是隐含的 Active,不是"未知"。管理端列表要按状态筛选就得走这里。
+pub fn account_status_str(account_id: &str) -> &'static str {
+    match ACCOUNT_STATUS.get(account_id).map(|s| s.status.clone()) {
+        Some(AccountStatus::Frozen) => "frozen",
+        Some(AccountStatus::Suspended) => "suspended",
+        Some(AccountStatus::Closed) => "closed",
+        Some(AccountStatus::Active) | None => "active",
+    }
+}
+
+/// 开户时把密码写入校验表 @yutiansut @quantaxis
+///
+/// ⚠️ 此前**没有任何地方在开户时写这张表** —— `ACCOUNT_PASSWORDS`(:20)只被
+/// `change_password`(:270)和 `reset_password`(:303)写入。于是所有新账户在
+/// `verify_account_password` 里都落到 `None => password == "123456"` 分支:
+///   · 用户拿开户时自己设的密码改密码 → 恒定 400「原密码错误」
+///   · 银期转账的资金密码 → 只有 "123456" 被接受
+/// `OpenAccountRequest.password`(models.rs:45)被 HTTP 层收下后**直接丢弃**,
+/// 因为 `CoreOpenAccountRequest` 根本没有这个字段。
+///
+/// 交易密码与资金密码初始设为同一个值(开户请求只提供一个密码);
+/// 用户之后可分别通过 `password_type=TRADING/FUND` 修改。
+///
+/// 注:`/api/user/{id}/account/create` 走的 `CreateAccountRequest`(models.rs:195)
+/// **没有密码字段**,那条路径仍沿用默认值 —— 要改需先给请求体加字段。
+pub fn seed_account_password(account_id: &str, password: &str) {
+    if password.is_empty() {
+        return;
+    }
+    ACCOUNT_PASSWORDS.insert(
+        account_id.to_string(),
+        (password.to_string(), password.to_string()),
+    );
+    log::info!("账户 {} 的交易/资金密码已初始化", account_id);
 }
 
 fn current_timestamp() -> i64 {
@@ -423,7 +463,7 @@ pub async fn get_margin_summary(
             // @yutiansut @quantaxis
             let balance = account_write.get_balance();
             let frozen_margin = account_write.get_frozen_margin();
-            let risk_ratio = account_write.get_riskratio();
+            let risk_ratio = account_write.safe_risk_ratio();
             let available = account_write.money;
 
             // 收集持仓数据
@@ -441,6 +481,18 @@ pub async fn get_margin_summary(
 
                 total_margin += pos.margin_long + pos.margin_short;
 
+                // ✨ 跳过零手空壳 —— 与 handlers.rs 的两个持仓端点保持一致
+                // @yutiansut @quantaxis
+                //
+                // qars 的 `retain` 清理只活在 `settle()` 里,而本系统**从不结算**
+                // (见 DECISIONS-PENDING「从不结算」一节),所以 `hold` 里会留下
+                // 已平干净的合约。实测线上某账户本端点返回 5 条,其中 1 条是
+                // 探针留下的 `NOSUCH0`(多 0 空 0)。
+                // `handlers.rs:967 / :1027` 早已过滤,这里**漏了**。
+                if volume_long == 0.0 && volume_short == 0.0 {
+                    continue;
+                }
+
                 position_details.push(PositionMarginDetail {
                     instrument_id: instrument_id.clone(),
                     volume_long,
@@ -450,7 +502,13 @@ pub async fn get_margin_summary(
                     margin_rate_long: margin_rate,
                     margin_rate_short: margin_rate,
                     last_price: pos.lastest_price,
-                    multiplier: 1.0,  // 实际应从合约信息中获取
+                    // ✨ 乘数取自持仓自带的 preset,不再硬编码 1.0
+                    //
+                    // 原值是 `1.0` 且注释写着「实际应从合约信息中获取」。
+                    // IF 合约乘数是 300 —— 前端拿 1.0 去算名义金额会小 300 倍。
+                    // `QA_Position` 自带 `preset.unit_table`(qars
+                    // `account.rs:342` 自己算保证金时用的就是它),无需改本函数签名。
+                    multiplier: pos.preset.unit_table as f64,
                 });
             }
 
@@ -477,12 +535,30 @@ pub async fn get_margin_summary(
 /// 冻结账户
 pub async fn freeze_account(
     req: web::Json<FreezeAccountRequest>,
+    account_mgr: web::Data<Arc<AccountManager>>,
 ) -> HttpResponse {
     if !verify_admin_token(&req.admin_token) {
         return HttpResponse::Unauthorized().json(ApiResponse::<()>::error(4010, "管理员认证失败".to_string()));
     }
 
     let account_id = &req.account_id;
+
+    // ✨ 冻结前必须确认账户存在。@yutiansut @quantaxis
+    //
+    // 原来没有这一步:`ACCOUNT_STATUS` 是个独立的 DashMap,冻结只是往里 insert 一条,
+    // 完全不问这个 account_id 是不是真账户。实测(2026-09-06)对一个凭空编的
+    // `NOSUCH_PROBE_ZZ` 调用本接口,返回 `success:true` 且状态变 FROZEN,
+    // 审计日志也照记一条 —— 一条指向不存在账户的冻结记录。
+    //
+    // 危害:① 打错一个字符就会产生一条永远不会生效、也永远不会被发现的「冻结」,
+    // 而操作员以为已经冻住了;② 审计日志被这类幽灵记录污染
+    // (实测生产至今仅有的 2 条审计记录全是这么来的)。
+    if account_mgr.get_account(account_id).is_err() {
+        return HttpResponse::NotFound().json(ApiResponse::<()>::error(
+            404,
+            format!("账户不存在:{}", account_id),
+        ));
+    }
     let now = current_timestamp();
 
     // 计算 can_trade 和 can_withdraw @yutiansut @quantaxis
@@ -522,12 +598,22 @@ pub async fn freeze_account(
 /// 解冻账户
 pub async fn unfreeze_account(
     req: web::Json<UnfreezeAccountRequest>,
+    account_mgr: web::Data<Arc<AccountManager>>,
 ) -> HttpResponse {
     if !verify_admin_token(&req.admin_token) {
         return HttpResponse::Unauthorized().json(ApiResponse::<()>::error(4010, "管理员认证失败".to_string()));
     }
 
     let account_id = &req.account_id;
+
+    // 同 freeze_account:解冻前也要确认账户存在,否则会给幽灵账户记一条解冻审计。
+    // @yutiansut @quantaxis
+    if account_mgr.get_account(account_id).is_err() {
+        return HttpResponse::NotFound().json(ApiResponse::<()>::error(
+            404,
+            format!("账户不存在:{}", account_id),
+        ));
+    }
 
     let status_info = AccountStatusInfo {
         account_id: account_id.clone(),
@@ -744,7 +830,8 @@ pub async fn create_announcement(
         content: req.content.clone(),
         announcement_type: req.announcement_type.clone(),
         priority: req.priority.clone(),
-        publish_time: now,
+        // 用请求里的生效时间;不传才落到当前时间 @yutiansut @quantaxis
+        publish_time: req.publish_time.unwrap_or(now),
         expire_time: req.expire_time,
         is_active: true,
         author: "admin".to_string(),

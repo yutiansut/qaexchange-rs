@@ -40,8 +40,16 @@ pub struct TradeStatisticsQuery {
 /// 数据导出请求
 #[derive(Debug, Deserialize)]
 pub struct DataExportRequest {
-    pub account_id: String,
-    pub data_type: String,  // orders, trades, positions, transactions
+    // ⚠️ 这两个字段原本是必填 `String`,缺任一个时 actix 的 Query 提取器会把
+    //    **原始 serde 错误**直抛给用户:
+    //        400 Query deserialize error: missing field `account_id`
+    //    这既不说明该传什么,也没有本仓统一的 `{success,data,error}` 信封。
+    //    改为 Option + handler 内显式校验,给出能照做的消息。
+    //    (全仓扫过:20 个 Query 结构体里,真正会因缺参数抛原始 serde 错误的
+    //     **只有这一处** —— 其余要么全可选,要么带 `#[serde(default)]`。)
+    //    @yutiansut @quantaxis
+    pub account_id: Option<String>,
+    pub data_type: Option<String>,  // orders, trades, positions, transactions
     pub format: Option<String>,  // csv, json
     pub start_date: Option<String>,
     pub end_date: Option<String>,
@@ -345,7 +353,13 @@ pub async fn query_history_ticks(
         // 回放WAL获取TickData记录
         let wal_mgr = storage.get_wal_manager();
 
-        let _ = wal_mgr.replay(|entry: WalEntry| {
+        // ✨ 回放失败必须可见 @yutiansut @quantaxis
+        //
+        // 原写法 `let _ = wal_mgr.replay(..)` 把 `Result<(), String>` 整个丢弃 ——
+        // WAL 文件损坏、I/O 错误、或某条记录解码失败时,这个查询接口会带着
+        // **残缺数据返回 HTTP 200**,调用方完全无从判断拿到的是全量还是半截。
+        // 对一个历史数据查询接口来说,静默返回错数据比报错危险得多。
+        let replay_result = wal_mgr.replay(|entry: WalEntry| {
             // 检查时间范围
             if entry.timestamp < start_time || entry.timestamp > end_time {
                 return Ok(());
@@ -378,6 +392,17 @@ pub async fn query_history_ticks(
             }
             Ok(())
         });
+        if let Err(e) = replay_result {
+            log::error!(
+                "❌ 查询历史Tick: WAL 回放失败,返回的数据可能不完整: {}",
+                e
+            );
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "data": null,
+                "error": { "code": 500, "message": format!("历史数据读取失败: {}", e) }
+            }));
+        }
     }
 
     // 按时间排序（最新在前）
@@ -414,7 +439,13 @@ pub async fn query_batch_klines(
 
     // 从 kline_wal_manager WAL 读取真实数据
     if let Some(ref wal_mgr) = state.kline_wal_manager {
-        let _ = wal_mgr.replay(|entry: WalEntry| {
+        // ✨ 回放失败必须可见 @yutiansut @quantaxis
+        //
+        // 原写法 `let _ = wal_mgr.replay(..)` 把 `Result<(), String>` 整个丢弃 ——
+        // WAL 文件损坏、I/O 错误、或某条记录解码失败时,这个查询接口会带着
+        // **残缺数据返回 HTTP 200**,调用方完全无从判断拿到的是全量还是半截。
+        // 对一个历史数据查询接口来说,静默返回错数据比报错危险得多。
+        let replay_result = wal_mgr.replay(|entry: WalEntry| {
             // 只处理KLineFinished记录
             if let WalRecord::KLineFinished {
                 instrument_id,
@@ -485,6 +516,17 @@ pub async fn query_batch_klines(
             }
             Ok(())
         });
+        if let Err(e) = replay_result {
+            log::error!(
+                "❌ 查询历史K线: WAL 回放失败,返回的数据可能不完整: {}",
+                e
+            );
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "data": null,
+                "error": { "code": 500, "message": format!("历史数据读取失败: {}", e) }
+            }));
+        }
     }
 
     // 排序（按时间升序）
@@ -987,14 +1029,44 @@ pub async fn export_data(
     query: web::Query<DataExportRequest>,
     state: web::Data<Arc<AppState>>,
 ) -> HttpResponse {
-    let account_id = &query.account_id;
-    let data_type = &query.data_type;
+    // 显式校验,给出能照做的消息(替代原始 serde 错误)@yutiansut @quantaxis
+    const VALID_TYPES: &[&str] = &["orders", "trades", "positions", "transactions"];
+    let account_id = match query.account_id.as_deref().filter(|v| !v.is_empty()) {
+        Some(v) => v,
+        None => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "success": false,
+                "data": null,
+                "error": { "code": 400, "message": format!(
+                    "缺少 account_id 参数。用法: /api/data/export?account_id=ACC_xxx&data_type={}",
+                    VALID_TYPES.join("|")
+                ) }
+            }));
+        }
+    };
+    let data_type = match query.data_type.as_deref().filter(|v| !v.is_empty()) {
+        Some(v) if VALID_TYPES.contains(&v) => v,
+        Some(v) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "success": false,
+                "data": null,
+                "error": { "code": 400, "message": format!("不支持的 data_type: {}(可用: {})", v, VALID_TYPES.join(", ")) }
+            }));
+        }
+        None => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "success": false,
+                "data": null,
+                "error": { "code": 400, "message": format!("缺少 data_type 参数(可用: {})", VALID_TYPES.join(", ")) }
+            }));
+        }
+    };
     let format = query.format.clone().unwrap_or_else(|| "json".to_string());
 
     if let Ok(account) = state.account_mgr.get_account(account_id) {
         let account_read = account.read();
 
-        match data_type.as_str() {
+        match data_type {   // 已是 &str(上面校验时解包过)@yutiansut @quantaxis
             "orders" => {
                 let orders: Vec<serde_json::Value> = account_read.dailyorders.values()
                     .map(|o| serde_json::json!({
@@ -1187,8 +1259,13 @@ pub async fn get_risk_statistics(
         let position_margin = acc.get_margin();
         let frozen_margin = acc.get_frozen_margin();
         let margin = position_margin + frozen_margin;
-        total_margin += margin;
-        total_balance += acc.get_balance();
+        // ✨ 非有限/超界防护(1e15 与 management.rs MONEY_MAX 一致):测试账户 T1e300
+        // 的 1e300 会把合计吸成 1e300。@yutiansut @quantaxis
+        let bal = acc.get_balance();
+        if bal.is_finite() && bal.abs() < 1e15 && margin.is_finite() && margin.abs() < 1e15 {
+            total_margin += margin;
+            total_balance += bal;
+        }
 
         let risk = acc.get_riskratio();
         let risk_level;
@@ -1239,6 +1316,35 @@ pub async fn get_risk_statistics(
 
 /// 获取交易排行（真实数据）
 /// @yutiansut @quantaxis
+/// 账户收益率(%)= (balance − static_balance) / static_balance × 100。@yutiansut @quantaxis
+///
+/// QIFI 定义 `static_balance = pre_balance + deposit − withdraw`,且
+/// `balance = static_balance + close_profit + Σposition_profit − commission + premium`,
+/// 所以分子 `balance − static_balance` 恰是**交易净损益**,分母是**实际投入本金**。
+///
+/// 原实现 `(balance − pre_balance) / pre_balance × 100` 有两个缺陷:
+///
+/// ① **`pre_balance == 0` 时走 `else { 0.0 }`** —— 而**靠入金注资**的账户
+///    `pre_balance` 就是 0。线上实测 `ACC_5e770190…`:`pre_balance = 0`、
+///    `deposit = 2000 万`、实际盈利 14,914,收益率却报 **0.0000**。
+///    这类账户无论业绩如何都进不了 `rank_by=pnl_ratio` 的排行榜,
+///    而且界面上「有盈利 / 收益率 0」自相矛盾,看不出是缺陷还是真的没赚。
+///
+/// ② **分子含入金** —— 期间入金被当成盈利。`pre_balance = 2000 万` 的账户
+///    再入金 1000 万,不做任何交易也会显示 +50% 收益。
+///
+/// 回归验证(三个线上真实账户,`static_balance` 与 `pre_balance+deposit−withdraw`
+/// 逐个核对一致):`pre_balance > 0` 且无入金时**两式完全相等**
+/// (0.4316 → 0.4316、56.5118 → 56.5118),只有 `pre_balance == 0` 那个
+/// 从 0.0000 变成 0.0746 —— 即**只修好了坏的那一类,没动对的**。
+fn account_return_pct(balance: f64, static_balance: f64) -> f64 {
+    if static_balance > 0.0 {
+        (balance - static_balance) / static_balance * 100.0
+    } else {
+        0.0
+    }
+}
+
 pub async fn get_trade_rankings(
     query: web::Query<TradeRankingQuery>,
     state: web::Data<Arc<AppState>>,
@@ -1254,11 +1360,7 @@ pub async fn get_trade_rankings(
         let acc = &account_read.accounts;
 
         let pnl = acc.close_profit + acc.position_profit;
-        let pnl_ratio = if acc.pre_balance > 0.0 {
-            (acc.balance - acc.pre_balance) / acc.pre_balance * 100.0
-        } else {
-            0.0
-        };
+        let pnl_ratio = account_return_pct(acc.balance, acc.static_balance);
         let trade_count = account_read.dailytrades.len();
         let volume: f64 = account_read.dailytrades.values().map(|t| t.volume).sum();
 
@@ -1340,9 +1442,16 @@ pub async fn get_market_overview(
         let frozen_margin = acc.get_frozen_margin();
         let margin = position_margin + frozen_margin;
 
-        total_balance += acc.get_balance();
-        total_margin += margin;
-        total_pnl += acc.accounts.close_profit + acc.get_positionprofit();
+        // ✨ 非有限/超界防护(1e15 同 management.rs):剔除 T1e300 这类 1e300 毒值。@yutiansut @quantaxis
+        let bal = acc.get_balance();
+        let pnl = acc.accounts.close_profit + acc.get_positionprofit();
+        if bal.is_finite() && bal.abs() < 1e15 && margin.is_finite() && margin.abs() < 1e15 {
+            total_balance += bal;
+            total_margin += margin;
+            if pnl.is_finite() && pnl.abs() < 1e15 {
+                total_pnl += pnl;
+            }
+        }
         total_orders += acc.dailyorders.len();
         total_trades += acc.dailytrades.len();
         total_positions += acc.hold.len();
@@ -1782,5 +1891,57 @@ mod tests {
         assert_eq!(string_to_period("1m"), 4);
         assert_eq!(string_to_period("5min"), 5);
         assert_eq!(string_to_period("1h"), 8);
+    }
+}
+
+#[cfg(test)]
+mod return_pct_tests {
+    use super::account_return_pct;
+
+    /// 用**线上三个真实账户**的实测值锁住:修好坏的、不动对的。@yutiansut @quantaxis
+    #[test]
+    fn matches_production_accounts() {
+        // ACC_5e770190…:pre_balance=0、deposit=2000 万 ⇒ static_balance=2000 万。
+        // 旧式 `(balance-pre_balance)/pre_balance` 走 else 分支报 0.0000,
+        // 而它**确实有 14,914 的盈利**。
+        let r = account_return_pct(20_014_914.0, 20_000_000.0);
+        assert!((r - 0.074_57).abs() < 1e-4, "靠入金注资的账户必须算出非零收益率,实得 {}", r);
+
+        // ACC_02e85ebc…:pre_balance=2000 万、deposit=0 ⇒ 与旧式**必须完全一致**
+        let r = account_return_pct(20_086_318.4451968, 20_000_000.0);
+        assert!((r - 0.431_592).abs() < 1e-5, "无入金账户不应有任何变化,实得 {}", r);
+
+        // ACC_7a15f8c2…:pre_balance=15 亿、deposit=0 ⇒ 同样必须一致
+        let r = account_return_pct(2_347_677_104.156_78, 1_500_000_000.0);
+        assert!((r - 56.511_806).abs() < 1e-5, "大额账户不应有任何变化,实得 {}", r);
+    }
+
+    /// 入金不得被算成盈利 —— 这是原公式的第二个缺陷。
+    #[test]
+    fn deposits_are_not_profit() {
+        // 本金 2000 万,又入金 1000 万,一笔交易都没做:
+        // static_balance = 3000 万,balance = 3000 万 ⇒ 收益率必须是 0。
+        assert_eq!(account_return_pct(30_000_000.0, 30_000_000.0), 0.0);
+        // 旧式会算成 (3000万-2000万)/2000万 = +50%
+        let old = (30_000_000.0f64 - 20_000_000.0) / 20_000_000.0 * 100.0;
+        assert!((old - 50.0).abs() < 1e-9, "对照:旧式确实会把入金算成 +50% 收益");
+    }
+
+    /// **负对照**:分母非正时仍返回 0,不能返回 NaN/Inf ——
+    /// 否则 serde_json 会把它静默写成 `null`,前端渲染成空白单元格。
+    #[test]
+    fn non_positive_base_yields_zero_not_nan() {
+        for base in [0.0, -1.0, -1e9] {
+            let r = account_return_pct(1_000.0, base);
+            assert_eq!(r, 0.0, "static_balance={} 应返回 0", base);
+            assert!(r.is_finite());
+        }
+    }
+
+    /// 亏损必须是负数(防止有人把分子写成 abs)。
+    #[test]
+    fn losses_are_negative() {
+        let r = account_return_pct(9_000_000.0, 10_000_000.0);
+        assert!((r + 10.0).abs() < 1e-9, "亏 10% 应得 -10,实得 {}", r);
     }
 }

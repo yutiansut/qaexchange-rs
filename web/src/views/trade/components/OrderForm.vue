@@ -13,7 +13,7 @@
         {{ direction === 'BUY' ? '买入' : '卖出' }}{{ offset === 'OPEN' ? '开仓' : '平仓' }}
       </span>
       <span class="of-avail" v-if="currentAccount">
-        可用 ¥{{ Math.round(currentAccount.available).toLocaleString() }}
+        可用 ¥{{ $money(currentAccount.available, 0) }}
       </span>
     </div>
 
@@ -34,7 +34,7 @@
               :value="account.account_id"
             >
               <span>{{ account.account_name }}</span>
-              <span class="of-opt-avail">¥{{ Math.round(account.available).toLocaleString() }}</span>
+              <span class="of-opt-avail">¥{{ $money(account.available, 0) }}</span>
             </el-option>
           </el-select>
         </el-form-item>
@@ -100,21 +100,27 @@
       <div class="of-estimate">
         <div class="of-est-item">
           <span class="est-label">预估金额</span>
-          <span class="est-value">¥{{ estimatedAmount.toLocaleString() }}</span>
+          <span class="est-value" v-if="estimatedAmount === null">—</span>
+          <span class="est-value" v-else>¥{{ estimatedAmount.toLocaleString() }}</span>
         </div>
         <div class="of-est-item">
           <span class="est-label">预估保证金</span>
-          <span class="est-value">¥{{ estimatedMargin.toLocaleString() }}</span>
+          <span class="est-value" v-if="estimatedMargin === null">—</span>
+          <span class="est-value" v-else>¥{{ estimatedMargin.toLocaleString() }}</span>
         </div>
       </div>
 
-      <!-- ⑤ 提交按钮吸底 -->
+      <!-- ⑤ 提交按钮吸底
+           :disabled="!contractMultiplier" —— 规格拿不到时禁止下单:
+           用户看不到可信的预估金额/保证金,不该在这种状态下让他提交。
+           @yutiansut @quantaxis -->
       <el-button
         type="primary"
         class="of-submit"
         :class="direction === 'BUY' ? 'buy-button' : 'sell-button'"
         @click="handleSubmit"
         :loading="submitting"
+        :disabled="!contractMultiplier"
       >
         {{ direction === 'BUY' ? '买入' : '卖出' }}{{ offset === 'OPEN' ? '开仓' : '平仓' }}
       </el-button>
@@ -123,7 +129,7 @@
 </template>
 
 <script>
-import { getUserAccounts } from '@/api'
+import { getUserAccounts, getInstrumentSpecs } from '@/api'
 import { mapGetters } from 'vuex'
 
 export default {
@@ -153,6 +159,7 @@ export default {
       submitting: false,
       accounts: [],
       selectedAccount: null,
+      instrumentSpecs: {},   // instrument_id → {multiplier, margin_rate}
       form: {
         account_id: '',
         order_type: 'LIMIT',
@@ -177,18 +184,39 @@ export default {
     },
 
     ...mapGetters(['currentUser']),
+    // ✨ 乘数与保证金率从后端取,不要硬编码 @yutiansut @quantaxis
+    //
+    // 原实现写死 `× 300` 与 `× 0.15`,两个都错:
+    //   · IC2501 的合约乘数是 **200**(main.rs:542),不是 300;
+    //   · 实测真实保证金率 IF=10% / IH=5%,不是 15%。
+    // 叠加后预估保证金偏差 +50% ~ +200% ——
+    // 而这是用户**下单前**看到的数字,会直接误导仓位决策。
+    // 同一个病后端也犯过三次(monitoring / models / 周期报告),见 lessons.md L45。
+    contractMultiplier() {
+      const spec = this.instrumentSpecs[this.instrumentId]
+      // ⚠️ 拿不到规格就返回 null,**不要**编一个数字。@yutiansut @quantaxis
+      // 实测:IC2501 价 6000 × 1 手,真值(mult=200/rate=0.12)预估金额
+      // ¥1,200,000、保证金 ¥144,000;规格接口 500 时回退到 300/0.15 变成
+      // ¥1,800,000、¥270,000 —— **+50% / +87.5%**,而这是用户**下单前**
+      // 用来决定仓位的数字,唯一提示还是一条与之无关的红条。
+      return (spec && spec.multiplier) || null
+    },
+    marginRate() {
+      const spec = this.instrumentSpecs[this.instrumentId]
+      return (spec && spec.margin_rate) || null
+    },
     estimatedAmount() {
-      if (this.form.order_type === 'LIMIT') {
-        return this.form.price * this.form.volume * 300
-      } else {
-        return this.currentPrice * this.form.volume * 300
-      }
+      const px = this.form.order_type === 'LIMIT' ? this.form.price : this.currentPrice
+      if (!this.contractMultiplier) return null
+      return px * this.form.volume * this.contractMultiplier
     },
     estimatedMargin() {
-      return this.estimatedAmount * 0.15  // 15% 保证金率
+      if (this.estimatedAmount === null || !this.marginRate) return null
+      return this.estimatedAmount * this.marginRate
     }
   },
   mounted() {
+    this.loadContractSpecs()
     this.loadAccounts()
   },
   watch: {
@@ -202,6 +230,25 @@ export default {
     }
   },
   methods: {
+    // 取合约规格(乘数/保证金率) @yutiansut @quantaxis
+    async loadContractSpecs() {
+      try {
+        const res = await getInstrumentSpecs()
+        const list = Array.isArray(res) ? res : (res && res.data) || []
+        const map = {}
+        list.forEach(x => {
+          map[x.instrument_id] = {
+            multiplier: x.contract_multiplier,
+            margin_rate: x.margin_rate
+          }
+        })
+        this.instrumentSpecs = map
+      } catch (e) {
+        this.instrumentSpecs = {}
+        this.$message.error('合约规格加载失败,预估金额与保证金暂不可用')
+        console.warn('[OrderForm] 合约规格加载失败:', e && e.message)
+      }
+    },
     async loadAccounts() {
       if (!this.currentUser) {
         this.$message.warning('请先登录')
@@ -220,7 +267,7 @@ export default {
           this.$emit('account-change', this.form.account_id)
         }
       } catch (error) {
-        this.$message.error('加载账户列表失败: ' + (error.message || '未知错误'))
+        this.$message.error('加载账户列表失败: ' + (this.$errMsg(error, '未知错误')))
       }
     },
 
@@ -265,11 +312,22 @@ export default {
             volume: this.form.volume
           }
 
-          this.$emit('submit', orderData)
-
-          setTimeout(() => {
+          // ⚠️ 复位必须由**父组件在请求结束后**触发,不能用固定定时器。
+          // @yutiansut @quantaxis
+          //
+          // 原写法是 `setTimeout(… , 1000)` —— 与真实请求毫无关系:
+          // 请求慢于 1s 时按钮提前恢复(实测能重复提交),快于 1s 时白转。
+          // 回验代理实测:loading 在点击后 443ms 亮起、**1444ms 熄灭**
+          // (正好 1001ms),而请求 **3000ms 才发出**;
+          // 两次点击间隔 1.5s 产生了 **2 个 XHR**,都被后端接受。
+          // ⇒ 后端只要慢过 1 秒,主买卖按钮就有重复下单窗口。
+          //
+          // 改为把 `done` 回调随事件传出,父组件在 `finally` 里调它 ——
+          // 守卫与请求生命周期严格绑定。父组件若忘了调,按钮会一直转,
+          // 那是**明显可见**的故障,比静默重复下单安全。
+          this.$emit('submit', orderData, () => {
             this.submitting = false
-          }, 1000)
+          })
         }
       })
     }

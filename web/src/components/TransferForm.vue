@@ -126,7 +126,7 @@
               {{ record.amount > 0 ? '入金' : '出金' }}
             </td>
             <td :class="record.amount > 0 ? 'amount-positive' : 'amount-negative'">
-              {{ record.amount > 0 ? '+' : '' }}{{ record.amount.toFixed(2) }}
+              {{ record.amount > 0 ? '+' : '' }}{{ (Number(record.amount) || 0).toFixed(2) }}
             </td>
             <td :class="record.error_id === 0 ? 'status-success' : 'status-failed'">
               {{ record.error_id === 0 ? '成功' : record.error_msg }}
@@ -295,7 +295,7 @@ export default {
         this.form.future_password = ''
       } catch (error) {
         console.error('[TransferForm] Transfer failed:', error)
-        this.errorMessage = `转账失败: ${error.message || '未知错误'}`
+        this.errorMessage = `转账失败: ${this.$errMsg(error, '未知错误')}`
       } finally {
         this.submitting = false
       }

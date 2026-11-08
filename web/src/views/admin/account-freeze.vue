@@ -8,6 +8,18 @@
       </div>
     </div>
 
+    <!-- 空态说明 —— 原来页面在未查询时完全空白(仅 16 个字符文本),
+         留下 631–799px 空白,用户无从知道该做什么。@yutiansut @quantaxis -->
+    <el-alert
+      v-if="!accountStatus"
+      type="info"
+      :closable="false"
+      show-icon
+      title="按账户ID查询"
+      description="本页用于查询与变更单个账户的状态(正常 / 冻结 / 禁止开仓)。请在下方输入账户ID后点击查询。"
+      style="margin-bottom: 16px"
+    />
+
     <!-- 搜索栏 -->
     <el-card class="search-card">
       <el-form :inline="true" :model="searchForm">
@@ -188,9 +200,17 @@ export default {
   },
 
   methods: {
+    // ⚠️ 原实现:未填账户ID 时**什么也不做** —— 用户点「刷新」毫无反应,
+    //    页面又是空的,看起来就像「加载不出来」。@yutiansut @quantaxis
+    //
+    // 本页定位是「按 ID 查单个账户的冻结状态」,不是列表页
+    //(后端 getAccountStatus 就是单账户接口),所以不改成列表 ——
+    // 但**必须给出反馈**,让用户知道该做什么。
     loadAccounts() {
       if (this.searchForm.account_id) {
         this.searchAccount()
+      } else {
+        this.$message.info('请先输入账户ID再查询;本页按账户ID查询单个账户的状态')
       }
     },
 
@@ -211,7 +231,7 @@ export default {
       } catch (err) {
         console.error('查询账户状态失败:', err)
         this.accountStatus = null
-        this.$message.error(err.message || '查询账户状态失败')
+        this.$message.error(this.$errMsg(err, '查询账户状态失败'))
       } finally {
         this.loading = false
       }
@@ -262,7 +282,7 @@ export default {
           this.searchAccount() // 刷新状态
         } catch (err) {
           console.error('冻结账户失败:', err)
-          this.$message.error(err.message || '冻结账户失败')
+          this.$message.error(this.$errMsg(err, '冻结账户失败'))
         } finally {
           this.submitting = false
         }
@@ -287,7 +307,7 @@ export default {
           this.searchAccount() // 刷新状态
         } catch (err) {
           console.error('解冻账户失败:', err)
-          this.$message.error(err.message || '解冻账户失败')
+          this.$message.error(this.$errMsg(err, '解冻账户失败'))
         } finally {
           this.submitting = false
         }

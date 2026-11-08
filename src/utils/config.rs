@@ -11,6 +11,40 @@ pub struct ExchangeConfig {
     pub websocket: WebSocketConfig,
     pub storage: StorageConfig,
     pub instruments: Vec<InstrumentConfig>,
+    /// `[settlement]` 日终结算(缺省 = 每自然日北京 00:00 自动结算)
+    #[serde(default)]
+    pub settlement: SettlementSettings,
+}
+
+/// `[settlement]` —— 日终结算调度 @yutiansut @quantaxis
+///
+/// 用户拍板:**每个自然日做日终结算**(仿真 7×24 运行,不按交易日历)。
+/// 流程见 `SettlementEngine::run_end_of_day`:闭市 → 撤活单 → 归档 → 结算 → 开市。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettlementSettings {
+    /// 是否按 `time` 每天自动结算
+    #[serde(default = "default_settlement_auto_daily")]
+    pub auto_daily: bool,
+    /// 北京时间 `HH:MM`。结算的是这一时刻之前的那个自然日(00:00 → 刚结束的前一天)
+    #[serde(default = "default_settlement_time")]
+    pub time: String,
+}
+
+impl Default for SettlementSettings {
+    fn default() -> Self {
+        Self {
+            auto_daily: default_settlement_auto_daily(),
+            time: default_settlement_time(),
+        }
+    }
+}
+
+fn default_settlement_auto_daily() -> bool {
+    true
+}
+
+fn default_settlement_time() -> String {
+    "00:00".to_string()
 }
 
 /// 性能优化配置
@@ -249,6 +283,47 @@ pub struct StorageConfig {
     pub enabled: bool,
     pub base_path: String,
     pub subscriber: SubscriberConfig,
+    /// `[storage.wal]` —— 此前整段被 serde **静默丢弃**(结构体里没有这个字段),
+    /// 配置写着 `sync_mode = "async"`,实际热路径逐条 fsync。@yutiansut @quantaxis
+    /// 缺省 = 同步(保持未配置时的旧行为)。同段里的 `directory` / `max_file_size`
+    /// 仍未接线(WAL 目录与 1GB 滚动阈值由代码决定)。
+    #[serde(default)]
+    pub wal: WalSettings,
+}
+
+/// `[storage.wal]` 落盘模式
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalSettings {
+    /// `"sync"`:每条记录 fsync;`"async"`:组提交,后台线程按 `sync_interval_ms` 刷盘
+    #[serde(default = "default_wal_sync_mode")]
+    pub sync_mode: String,
+    /// async 模式的刷盘间隔(毫秒)= 崩溃时最多丢失的时间窗
+    #[serde(default = "default_wal_sync_interval_ms")]
+    pub sync_interval_ms: u64,
+}
+
+impl Default for WalSettings {
+    fn default() -> Self {
+        Self {
+            sync_mode: default_wal_sync_mode(),
+            sync_interval_ms: default_wal_sync_interval_ms(),
+        }
+    }
+}
+
+impl WalSettings {
+    /// 是否异步(组提交)模式;非法取值按同步处理并由调用方告警
+    pub fn is_async(&self) -> bool {
+        self.sync_mode.eq_ignore_ascii_case("async")
+    }
+}
+
+fn default_wal_sync_mode() -> String {
+    "sync".to_string()
+}
+
+fn default_wal_sync_interval_ms() -> u64 {
+    5
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,10 +341,22 @@ pub struct InstrumentConfig {
     pub product_type: String,
     pub init_price: f64,
     pub is_trading: bool,
-    #[serde(default = "default_multiplier")]
+    /// 合约乘数。`exchange.toml` 里一直写的是 `contract_multiplier`,而字段名是 `multiplier` ——
+    /// 没有别名时 serde 静默丢弃、一律回落成 300(FG/SA 真实是 20)。两种写法都认。@yutiansut @quantaxis
+    #[serde(default = "default_multiplier", alias = "contract_multiplier")]
     pub multiplier: f64,
     #[serde(default = "default_tick_size")]
     pub tick_size: f64,
+    /// ✨ 按合约覆盖 qars MarketPreset 的费率(不改共享库;见 `core::account_ext::preset_overrides`)。
+    /// 每手手续费(元;开仓 / 平仓 / 平今同价)。设了就不再按成交额收。@yutiansut @quantaxis
+    #[serde(default)]
+    pub commission_per_lot: Option<f64>,
+    /// 按成交额的手续费率(开仓 / 平仓 / 平今同率)。设了就不再按手收。
+    #[serde(default)]
+    pub commission_rate: Option<f64>,
+    /// 保证金率(多空同)。
+    #[serde(default)]
+    pub margin_rate: Option<f64>,
 }
 
 fn default_multiplier() -> f64 {
@@ -281,9 +368,72 @@ fn default_tick_size() -> f64 {
 }
 
 impl ExchangeConfig {
+    /// 本结构体实际解析的顶层配置段
+    ///
+    /// 用于在启动时把「写了但从不被读」的配置段告警出来 —— 见
+    /// `warn_unparsed_sections` 的说明。@yutiansut @quantaxis
+    const KNOWN_SECTIONS: &'static [&'static str] =
+        &["server", "http", "websocket", "storage", "instruments", "settlement"];
+
+    /// 对配置文件里**存在但本程序从不解析**的顶层段发出告警
+    ///
+    /// ⚠️ `ExchangeConfig` 没有 `deny_unknown_fields`,serde 会**静默丢弃**
+    /// 未知段。实测 `config/exchange.toml` 里有三整段从不被解析:
+    ///
+    /// | 段 | 典型内容 | 代码实际生效值 |
+    /// |---|---|---|
+    /// | `[risk]` | `max_order_amount = 1000.0` | **10_000_000**(差 1 万倍) |
+    /// |          | `max_position_ratio = 80.0`(百分数) | **0.5**(比率,单位都不一致) |
+    /// | `[matching]` | `max_order_volume = 1000.0` 等 | 未接线 |
+    /// | `[account]` | `margin_rate = 0.15` | registry 0.12 / qars preset 0.05~0.12 |
+    ///
+    /// 运维在这里调风控限额得不到任何效果、也没有任何提示 —— 这是最危险的一种
+    /// 「配置陷阱」。这里只**告警不阻断**:直接加 `deny_unknown_fields` 会让
+    /// 现有配置文件启动失败;真正的修法是把这些段接线(需要先统一单位)。
+    fn warn_unparsed_sections(content: &str) {
+        let parsed: toml::Value = match toml::from_str(content) {
+            Ok(v) => v,
+            Err(_) => return, // 解析失败会由调用方报错,这里不重复
+        };
+        if let Some(table) = parsed.as_table() {
+            let unknown: Vec<&str> = table
+                .keys()
+                .map(|k| k.as_str())
+                .filter(|k| !Self::KNOWN_SECTIONS.contains(k))
+                .collect();
+            if !unknown.is_empty() {
+                log::warn!(
+                    "⚠️ 配置文件中有 {} 个段**从不被解析**,其中的设置全部无效: {:?}。\
+                     本程序只读取 {:?}。若要让这些设置生效,需要在 ExchangeConfig 里接线。",
+                    unknown.len(),
+                    unknown,
+                    Self::KNOWN_SECTIONS
+                );
+            }
+            // ✨ 子表同样会被静默丢弃:`[storage.wal]` 就是这样埋了很久的死配置 @yutiansut @quantaxis
+            if let Some(storage) = table.get("storage").and_then(|v| v.as_table()) {
+                const KNOWN_STORAGE: &[&str] = &["enabled", "base_path", "subscriber", "wal"];
+                let unknown: Vec<&str> = storage
+                    .keys()
+                    .map(|k| k.as_str())
+                    .filter(|k| !KNOWN_STORAGE.contains(k))
+                    .collect();
+                if !unknown.is_empty() {
+                    log::warn!(
+                        "⚠️ [storage] 下有 {} 个子项**从不被解析**,其中的设置全部无效: {:?}(只读取 {:?})",
+                        unknown.len(),
+                        unknown,
+                        KNOWN_STORAGE
+                    );
+                }
+            }
+        }
+    }
+
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let content = fs::read_to_string(path.as_ref())
             .map_err(|e| format!("Failed to read config file: {}", e))?;
+        Self::warn_unparsed_sections(&content);
         toml::from_str(&content).map_err(|e| format!("Failed to parse config file: {}", e))
     }
 

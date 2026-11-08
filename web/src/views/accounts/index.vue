@@ -22,40 +22,58 @@
            实测 1366x768: 表格上沿距内容区顶部 161px
            var(--qa-content-h) 由 layout/index.vue 统一定义 = 100vh - 56(顶栏) - 40(padding),
            有公告条时自动再减 40px; max(260px, ...) 是极短视口下的兜底 -->
+      <!-- 刷新失败但表里还留着上一次的数据 —— 必须持久提示,不能只弹一条 3 秒的 toast。
+           交易系统里「陈旧余额 + 无提示」比空表更危险:用户会照着过期数字做决策。
+           清空列表也不对(那等于丢掉唯一能看的数据),所以保留数据 + 明示状态。
+           @yutiansut @quantaxis -->
+      <el-alert
+        v-if="loadError && accountList.length > 0"
+        :title="'刷新失败，下方为上次成功加载的数据：' + loadError"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px;"
+      />
       <el-table
+        :empty-text="$emptyText(loadError, '暂无账户')"
         :data="accountList"
         border
         stripe
-        :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 161px))'"
+        :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 202px))'"
         v-loading="loading"
         style="width: 100%"
       >
         <el-table-column prop="account_id" label="账户ID" min-width="200" show-overflow-tooltip />
         <el-table-column prop="account_name" label="账户名称" min-width="150" />
-        <el-table-column prop="account_type" label="账户类型" min-width="100" />
-        <el-table-column prop="balance" label="总权益" min-width="120" align="right">
+        <el-table-column prop="account_type" label="账户类型" min-width="100">
+          <template slot-scope="{ row }">{{ getAccountTypeLabel(row.account_type) }}</template>
+        </el-table-column>
+        <!-- show-overflow-tooltip:该列实测被 ellipsis 截断且无提示,hover 也弹不出全文。
+             不加宽是因为这张表在 1280 下已横向溢出,加宽会加剧;
+             tooltip 让内容 hover 可达而不增加列宽。@yutiansut @quantaxis -->
+        <el-table-column prop="balance" label="总权益" min-width="120" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
             ¥{{ formatNumber(scope.row.balance) }}
           </template>
         </el-table-column>
-        <el-table-column prop="available" label="可用资金" min-width="120" align="right">
+        <el-table-column prop="available" label="可用资金" min-width="120" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
             ¥{{ formatNumber(scope.row.available) }}
           </template>
         </el-table-column>
-        <el-table-column prop="margin" label="保证金" min-width="120" align="right">
+        <el-table-column prop="margin" label="保证金" min-width="120" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
             ¥{{ formatNumber(scope.row.margin) }}
           </template>
         </el-table-column>
-        <el-table-column prop="risk_ratio" label="风险率" min-width="100" align="right">
+        <el-table-column prop="risk_ratio" label="风险率" min-width="100" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
             <el-tag :type="getRiskType(scope.row.risk_ratio)" size="mini">
-              {{ (scope.row.risk_ratio * 100).toFixed(1) }}%
+              {{ $pct(scope.row.risk_ratio, 1) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="200">
           <template slot-scope="scope">
             <el-button type="text" size="small" @click="handleDeposit(scope.row)">
               存款
@@ -133,7 +151,7 @@
 
     <!-- 存款对话框 -->
     <el-dialog title="存款" :visible.sync="depositDialogVisible" width="400px">
-      <el-form :model="depositForm" ref="depositForm" label-width="80px">
+      <el-form :model="depositForm" :rules="depositRules" ref="depositForm" label-width="80px">
         <el-form-item label="账户ID">
           <el-input v-model="depositForm.user_id" disabled />
         </el-form-item>
@@ -156,7 +174,7 @@
 
     <!-- 取款对话框 -->
     <el-dialog title="取款" :visible.sync="withdrawDialogVisible" width="400px">
-      <el-form :model="withdrawForm" ref="withdrawForm" label-width="80px">
+      <el-form :model="withdrawForm" :rules="withdrawRules" ref="withdrawForm" label-width="80px">
         <el-form-item label="账户ID">
           <el-input v-model="withdrawForm.user_id" disabled />
         </el-form-item>
@@ -181,6 +199,7 @@
 
 <script>
 import { openAccount, queryAccount, deposit, withdraw, listUsers, getUserAccounts } from '@/api'
+import { extractErrorMessage } from '@/api/request'
 import { mapGetters } from 'vuex'
 
 export default {
@@ -190,6 +209,8 @@ export default {
   },
   data() {
     return {
+      // 加载失败原因(null = 未失败)
+      loadError: null,
       loading: false,
       submitting: false,
       accountList: [],
@@ -216,10 +237,18 @@ export default {
         user_id: '',
         amount: 0
       },
+      // ✨ 补前端校验：清空金额框时 el-input-number 会写 undefined，JSON 丢键 → 后端 400
+      // `missing field amount`。与管理端 admin/accounts.vue 的 depositRules 同构。@yutiansut @quantaxis
+      depositRules: {
+        amount: [{ required: true, message: '请输入存款金额', trigger: 'blur' }]
+      },
       withdrawDialogVisible: false,
       withdrawForm: {
         user_id: '',
         amount: 0
+      },
+      withdrawRules: {
+        amount: [{ required: true, message: '请输入取款金额', trigger: 'blur' }]
       },
       userList: []  // 用户列表（管理员使用）
     }
@@ -228,8 +257,12 @@ export default {
     this.loadAccounts()
   },
   methods: {
+      // ✨ 委托全局 `$money`(main.js):判空 → isFinite → **量级上限 1e15**。
+      // 全仓曾有 13 个各写各的金额格式化器,**没有一个带量级闸**,
+      // 于是 `balance = 1e300` 的污染账户在 6 个页面渲染成 404 个字符
+      // (`Number.isFinite(1e300)` 为真,只判 isFinite 挡不住)。@yutiansut @quantaxis
     formatNumber(num) {
-      return (num || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+      return this.$money(num)
     },
 
     getRiskType(ratio) {
@@ -246,11 +279,15 @@ export default {
 
       this.loading = true
       try {
+        this.loadError = null   // 重试先清除上次失败标记
         const res = await getUserAccounts(this.currentUser)
         this.accountList = res.accounts || []
         this.loading = false
       } catch (error) {
-        this.$message.error('加载账户信息失败: ' + ((error.response && error.response.data && error.response.data.error) || error.message))
+        // ✨ 区分「加载失败」与「真的没数据」—— 两者原先在界面上完全同形,
+        //    这是「无法显示」反馈的结构性来源。@yutiansut @quantaxis
+        this.loadError = this.$errMsg(error, '加载失败')
+        this.$message.error('加载账户信息失败: ' + extractErrorMessage(error))
         this.loading = false
       }
     },
@@ -262,8 +299,13 @@ export default {
           .then(res => {
             this.accountList = res.accounts || []
           })
-          .catch(() => {
-            this.$message.error('查询失败')
+          .catch(err => {
+            // ⚠️ 同 orders/index.vue:417 —— 只弹 toast,不置 loadError。
+            // 本页 :30 已有「刷新失败,下方为上次成功加载的数据」横幅,
+            // 正是为这种情况准备的,但这条路径从不触发它。@yutiansut @quantaxis
+            // 保留 accountList(横幅会说明数据是旧的),比清空更有用。
+            this.loadError = extractErrorMessage(err)
+            this.$message.error('查询失败: ' + this.loadError)
           })
           .finally(() => {
             this.loading = false
@@ -288,7 +330,7 @@ export default {
           const data = await listUsers()
           this.userList = (data && data.users) || []
         } catch (error) {
-          this.$message.error('加载用户列表失败: ' + (error.message || '未知错误'))
+          this.$message.error('加载用户列表失败: ' + (this.$errMsg(error, '未知错误')))
         }
       } else {
         // 普通用户自动填充当前用户ID
@@ -339,20 +381,30 @@ export default {
       this.depositDialogVisible = true
     },
 
+    // ✨ 账户类型本地化(与 my-accounts:516 同一映射,/accounts 原来直出裸英文枚举)。@yutiansut @quantaxis
+    getAccountTypeLabel(type) {
+      const labels = { 'Individual': '个人', 'Institutional': '机构', 'MarketMaker': '做市商' }
+      return labels[type] || type
+    },
+
     handleDepositSubmit() {
-      this.submitting = true
-      deposit(this.depositForm)
-        .then(() => {
-          this.$message.success('存款成功')
-          this.depositDialogVisible = false
-          this.loadAccounts()
-        })
-        .catch(() => {
-          this.$message.error('存款失败')
-        })
-        .finally(() => {
-          this.submitting = false
-        })
+      this.$refs.depositForm.validate(valid => {
+        if (!valid) return
+        this.submitting = true
+        deposit(this.depositForm)
+          .then(() => {
+            this.$message.success('存款成功')
+            this.depositDialogVisible = false
+            this.loadAccounts()
+          })
+          .catch(err => {
+            // ✨ 透出后端原因（如「金额必须大于 0」），别再吞成光秃秃的「存款失败」。@yutiansut @quantaxis
+            this.$message.error(extractErrorMessage(err, '存款失败'))
+          })
+          .finally(() => {
+            this.submitting = false
+          })
+      })
     },
 
     handleWithdraw(row) {
@@ -363,24 +415,53 @@ export default {
     },
 
     handleWithdrawSubmit() {
-      this.submitting = true
-      withdraw(this.withdrawForm)
-        .then(() => {
-          this.$message.success('取款成功')
-          this.withdrawDialogVisible = false
-          this.loadAccounts()
-        })
-        .catch(() => {
-          this.$message.error('取款失败')
-        })
-        .finally(() => {
-          this.submitting = false
-        })
+      this.$refs.withdrawForm.validate(valid => {
+        if (!valid) return
+        this.submitting = true
+        withdraw(this.withdrawForm)
+          .then(() => {
+            this.$message.success('取款成功')
+            this.withdrawDialogVisible = false
+            this.loadAccounts()
+          })
+          .catch(err => {
+            this.$message.error(extractErrorMessage(err, '取款失败'))
+          })
+          .finally(() => {
+            this.submitting = false
+          })
+      })
     },
 
+    // 详情弹窗:用 <pre> 保留缩进 + 限高滚动。@yutiansut @quantaxis
+    //
+    // 原写法 `this.$alert(JSON.stringify(row, null, 2), ...)` 有两个问题:
+    // ① `\n` 与缩进空格在 HTML 里被折叠 —— 精心生成的两空格缩进**完全丢失**,
+    //    渲染成一整段跑马文(实测截图 r_positions_detail-row0 / d_accounts_detail-alert)。
+    // ② element-ui 的 `.el-message-box{overflow:hidden}`,而
+    //    `.el-message-box__wrapper` 的 overflow-y 实测是 **visible** 不是 auto,
+    //    且 styles/index.scss 全文 `max-height` 出现次数为 0 ——
+    //    内容一旦超高既不能滚动也不会截断,**确定按钮会被挤出视口**。
+    //    当前消息体约 340 字符尚有约 4 倍余量,属潜在风险,这里一并兜掉。
+    //
+    // 用 `dangerouslyUseHTMLString` 就必须自己转义 —— 字段值来自后端,
+    // 直接插 HTML 等于把接口数据当模板执行。escapeHtml 覆盖 & < > " ' 五个字符。
     handleViewDetail(row) {
-      this.$alert(JSON.stringify(row, null, 2), '账户详情', {
-        confirmButtonText: '确定'
+      const esc = s => String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+      const pre = '<pre style="max-height:60vh;overflow:auto;margin:0;' +
+                  'white-space:pre-wrap;word-break:break-all;font-size:12px;' +
+                  'line-height:1.5;text-align:left">' +
+                  esc(JSON.stringify(row, null, 2)) + '</pre>'
+      this.$alert(pre, '账户详情', {
+        confirmButtonText: '确定',
+        dangerouslyUseHTMLString: true,
+        customClass: 'qa-detail-alert'
+      }).catch(() => {
+        // $alert 在点 X / Esc 关闭时会 reject('cancel'),不接就产生一条未捕获的
+        // unhandledrejection console 错误(点「确定」不会)。回验代理用旧代码
+        // 复现过 —— 这是改动前就存在的,顺手补上。@yutiansut @quantaxis
       })
     }
   }

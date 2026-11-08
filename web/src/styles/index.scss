@@ -27,10 +27,28 @@ html, body {
   background-color: $dark-bg-primary;
 }
 
+:root {
+  // ⚠️ 全仓 scrollbar 宽度的**唯一来源**。@yutiansut @quantaxis
+  //
+  // 这句注释我写错过两次:声称「同源」而下方仍是硬编码 8px,
+  // 两次都是回验 agent 用剂量-反应测出来的(改 --qa-sbw 到 14/20,
+  // 普通滚动条纹丝不动停在 8)。**改完必须读回验证,不能只看脚本说成功**。
+  //
+  // 现在真正走它的:本文件 ::-webkit-scrollbar、App.vue:91(那里的 <style>
+  // **没写 scoped**,是第二条全局规则,只改本文件盖不住它)、
+  // positions/trades/orders/admin-transactions 四处 .el-table__body-wrapper。
+  //
+  // 故意不走它的:trade/index.vue:1144 的 .trades-list(4px)与
+  // admin/market-overview.vue:817 的 .order-flow-chart(6px)——
+  // 二者是自定义容器而非 el-table body wrapper,不影响冻结列对齐。
+  // qa-flex-table 的冻结列要按它做偏移(见文件末尾)。@yutiansut @quantaxis
+  --qa-sbw: 8px;
+}
+
 // ============= 滚动条美化 - 深色主题 @yutiansut @quantaxis =============
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: var(--qa-sbw, 8px);
+  height: var(--qa-sbw, 8px);
 }
 
 ::-webkit-scrollbar-track {
@@ -1048,7 +1066,25 @@ $tag-tints: (
 @media (max-width: $bp-lg-max) {
   .el-table .el-table__body-wrapper {
     &::-webkit-scrollbar {
-      height: 10px;
+      // ⚠️ 必须与 Element 的 `gutterWidth` 一致。@yutiansut @quantaxis
+      //
+      // Element 在 `scrollbar-width.js` 里**全局测一次**滚动条宽度并缓存为
+      // `layout.gutterWidth`,用它做冻结列的高度/偏移补偿。这里写 10px 与那个
+      // 缓存值(8)对不上,差值直接变成**冻结列滚动滞后**。
+      // 剂量-反应实测(admin-accounts,1440/992):
+      //   本处 10px ⇒ 滞后 2px;强制 8px ⇒ 滞后 0;强制 14px ⇒ 滞后 6。
+      //   即 `rowOff = 本处高度 - gutterWidth`。
+      // 受影响的是所有**有 fixed 列且无自己 scoped 覆盖**的页面,实测共 **10 处**:
+      //   accounts / admin-accounts / admin-announcements / admin-audit-logs /
+      //   admin-instruments / admin-risk / my-accounts / WebSocketTest /
+      //   admin-market-overview(其 scoped 覆盖只作用于 .order-flow-chart,表格走全局) /
+      //   components/FactorDashboard(由 views/factors 渲染)
+      //   全部已随本处修复归零。剂量-反应验证:8→0、14→6、20→12,严格线性。
+      // ⚠️ `views/trade/index.vue` 曾是**例外**:它 scoped 写的是 **6px**,
+      //    按同一公式 rowOff = 6-8 = -2,方向相反 ⇒ 不产生滞后,
+      //    但冻结列底边会比正文可视区低 2px。已一并改用 --qa-sbw。
+      // 统一走 --qa-sbw,与本文件 ::-webkit-scrollbar 的定义同源。
+      height: var(--qa-sbw, 8px);
     }
 
     &::-webkit-scrollbar-thumb {
@@ -1243,32 +1279,61 @@ $tag-tints: (
 // (:3335 / :8787 / :8815 / :8848 / :8876 / :8904 / :8933 / :8962)。
 // 库只设 className 与定位(left/top/width/display),外观全交给 CSS,
 // 所以这里补齐即可,不必改 node_modules。
+// ✨ 补充(第二轮):版式 + 遗漏的两个类 @yutiansut @quantaxis
+//
+// 第一轮只补了**颜色**没补**版式**,实测暴露三个残留:
+//  ① 标题未 display:block → 「开」字被吸到标题行、「盘:」另起一行;
+//  ② line-height 用了无单位 1.7(≈20px),而库按 `LineCount*25` 算盒高,
+//     8 行算出 200px 而文字仅约 163px → 底部大片留白;
+//  ③ .tooltip-num 少了 inline-block/定宽/右对齐 → 数值不再成列。
+// 另外库实际有 **9 个** tooltip 容器类,第一轮漏了两个:
+//  · jchart-chartdrawsvg-tooltip
+//  · UMyChart_Toolbar_Tooltip_Div —— 它的 Show()(umychart.js:107068)
+//    只设 visibility/top/left,`position:absolute` 本该由 tools.css:2100 提供;
+//    缺失后变成 position:static,top/left 失效,实测以 width:1318 height:0
+//    躺在文档流里。
 .jschart-tooltip,
 .jchart-klineinfo-tooltip,
 .jchart-klinetrade-tooltip,
 .jchart-minuteinfo-tooltip,
 .jchart-iconinfo-tooltip,
 .jchart-chartox-tooltip,
-.jchart-charscatterplot-tooltip {
+.jchart-charscatterplot-tooltip,
+.jchart-chartdrawsvg-tooltip,
+.UMyChart_Toolbar_Tooltip_Div {
   background: rgba(22, 27, 34, 0.96) !important;
   border: 1px solid rgba(240, 246, 252, 0.18) !important;
   border-radius: 4px !important;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55) !important;
   color: $dark-text-primary !important;
   box-sizing: border-box;
-  padding: 8px 10px;
+  padding: 0 10px;   // 上下留 0 —— 见下方 line-height 的说明
   font-size: 12px;
-  line-height: 1.7;
+  // ⚠️ 必须与库的行高**完全一致**:库按 `LineCount * 25` 算盒高
+  //    (`PCTooltip.LineHeight = 25`)。
+  //    · 无单位的 1.7(≈20px) → 文字总高不足,底部大片留白;
+  //    · 24px → 8 行 192px,减去 border-box 的 1px 边框 + 8px 内边距
+  //      只剩 182px 可用 → **反向溢出 10px**,下内边距被吃光(实测末行底比盒底低 1px)。
+  //    取 25px 并把上下 padding 归零,让内容高度严格等于盒高。
+  line-height: 25px;
+  position: absolute;
   // 数字用等宽,避免逐帧跳动(与 .el-table 数字列同一处理)
   font-variant-numeric: tabular-nums;
   pointer-events: none;   // 不要挡住鼠标在图上的取值
 
-  span,
-  div,
-  td,
-  th {
+  // 只对**没写内联色**的元素继承 —— 库的涨跌红绿是内联的,
+  // 不能被这条覆盖(它无 !important 本就压不过内联,这里再显式排除,
+  // 免得后人误加 !important)。 @yutiansut @quantaxis
+  span:not([style*="color"]),
+  div:not([style*="color"]),
+  td:not([style*="color"]),
+  th:not([style*="color"]) {
     color: inherit;
   }
+
+  // 库那个**始终为空**的 UMyChart_Toolbar_Tooltip_Div 在加了
+  // position/背景/边框后会变成一个 22×18 的可见小暗块(原先 static/1318×0 不可见)。
+  &:empty { display: none; }
 }
 
 // 库内层类:标题/正文/数值。原 tools.css 里是 #2b3645 深色字,
@@ -1276,10 +1341,344 @@ $tag-tints: (
 .tooltip-title {
   color: $dark-text-primary !important;
   font-weight: 600;
+  // 库把标题与首行数据放在同一段 innerHTML 里,不 block 就会串行
+  display: block;
+  text-align: center;
+  line-height: 25px;   // 与容器一致,见上方说明
 }
 .tooltip-con {
   color: rgba(240, 246, 252, 0.72) !important;
 }
 .tooltip-num {
   font-variant-numeric: tabular-nums;
+  // 恢复 tools.css 的定宽右对齐,否则数值不成列
+  display: inline-block;
+  width: 90px;
+  text-align: right;
 }
+
+// ✨ 涨跌色:只提亮,不通吃 @yutiansut @quantaxis
+//
+// ⚠️ 上一版在这里犯了两个错,把红绿**全抹成白色**(本会话自造的回退):
+//   ① 色值猜错 —— 我从截图取色读到 rgb(221,21,21)/rgb(25,147,2),
+//      那是经 opacity 混合后的渲染值;库里实际发的是
+//      **rgb(238,21,21) / rgb(25,158,0) / rgb(190,190,190)**
+//      (`grep -c` 于 umychart.js 各 10/10/8 次);
+//   ② 容器类搞错 —— OHLC tooltip 的类是 **`jschart-tooltip`**
+//      (umychart.js:8787),而我写的 `jchart-klineinfo-tooltip`
+//      是 Type 1「信息地雷」的容器,永远不会包住 OHLC。
+// 两个选择器都不命中,于是兜底那条 `color: inherit !important` 通吃,
+// 涨跌红绿和中性灰全没了。
+//
+// 现在只覆盖**确实存在**的三个色值,且不加通吃规则。
+.jschart-tooltip span[style*="rgb(238,21,21)"],
+.jchart-klineinfo-tooltip span[style*="rgb(238,21,21)"] {
+  color: #f85149 !important;   // 暗底上 CR 5.16(原 rgb(238,21,21) 约 3.9)
+}
+.jschart-tooltip span[style*="rgb(25,158,0)"],
+.jchart-klineinfo-tooltip span[style*="rgb(25,158,0)"] {
+  color: #3fb950 !important;   // CR 6.81
+}
+.jschart-tooltip span[style*="rgb(190,190,190)"],
+.jchart-klineinfo-tooltip span[style*="rgb(190,190,190)"] {
+  color: rgba(240, 246, 252, 0.72) !important;   // 中性灰,与 .tooltip-con 同调
+}
+
+// ============= 表格页弹性高度 —— 替代硬编码的 `calc(--qa-content-h - N)` =============
+// @yutiansut @quantaxis
+//
+// ⚠️⚠️ 本文件是 `main.js:8` 直接 import 的**全局**样式表,**绝不能写 `::v-deep`**。
+//   vue-loader 只在 `<style scoped>` 里转换 `::v-deep`;全局表里它原样送到浏览器,
+//   被当作**未知伪元素 ⇒ 选择器非法 ⇒ 整个选择器组被丢弃**(含组内那条合法的)。
+//   实测(把 webpack 发出的 CSS 文本与浏览器 CSSOM 保留的规则并排比对):
+//   我第一版写的 7 条规则里 **4 条被整条丢弃**,CSSOM 里只剩 3 条。
+//   后果比原缺陷严重得多:删掉 `:height` 后表格是自然高度,而 `.el-card` 是
+//   `overflow:hidden` ⇒ **1600~1900px 内容被静默吞掉,无滚动条、滚轮无效,
+//   40 行里 31 行永久不可达**。而 `scrollHeight-clientHeight` 七档全是 0 ——
+//   **这个指标在这里是瞎的**,必须同时看「有 slack 的 overflow:hidden 祖先」
+//   和真实滚轮事件。
+//
+// ⚠️ 常数 N 的做法也是错的(这是本方案存在的理由):受控实测显示
+//   所需 N 随**宽度**跳变(表格上方统计卡换行),只有 accounts / admin-instruments
+//   两页表头永不换行,常数才成立。
+//
+// 用法:页面根加 `qa-flex-page`,表格加 `qa-flex-table` 并**删掉 `:height` 绑定**。
+.qa-flex-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.qa-flex-page > .el-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.qa-flex-page > .el-card > .el-card__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.qa-flex-table {
+  flex: 1;
+  min-height: 0;
+
+  &.el-table {
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+// ⚠️ 表头默认 `flex:0 1 auto` **可被压缩** —— 实测 admin-risk 曾被压成 8.3px。
+.qa-flex-table .el-table__header-wrapper {
+  flex: 0 0 auto;
+}
+
+.qa-flex-table .el-table__body-wrapper {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+// ⚠️ 坑五(**已撤回**):固定操作列在窄屏吞掉大半表宽 —— 想收窄,但收窄会让按钮点不到。
+//    @yutiansut @quantaxis
+//
+// 现象是真的:全站 13 个 `fixed` 操作列全部写死 width(4 个 200px)。实测 /admin-accounts:
+//   1366px 视口:表宽 1024,固定列 200 → 占 **20%**,正常
+//    375px 视口:表宽  269,固定列 200 → 占 **74%**,数据列只剩 69px
+//
+// 但**收窄到 132px 会让「详情」按钮点不到**。反事实对照(运行期把该 media 规则
+// 改成 `(max-width:1px)` 关掉)决定性地证明是收窄造成的:
+//   375×667  收窄 132px → 可点=False,命中自身=False,顶层是 `cell el-tooltip`
+//   375×667  还原 200px → 可点=True, 命中自身=True, 顶层是 SPAN
+//   414×896 两种情况同上
+//
+// 机制(**经子代理实测订正** —— 我原先记成「tooltip popper 盖住按钮」,那是错的):
+// 真因是**几何裁剪**:我只改了 `.el-table__fixed-right` 容器的宽(200→132),
+// **没动列本身的 `width="200"`**。按钮 rect 落在 left=125,而冻结层盒子是
+// 189–321(`overflow:hidden`),按钮被整段裁到盒外;`elementFromPoint` 返回的
+// `div.cell.el-tooltip` 其祖先链在 `.el-table__body-wrapper` 下 ——
+// 是**主体表格的单元格从底下透上来**,不是 popper。
+// 附带伤害:`.el-table__fixed-right .cell{padding:4px}` 命中了克隆表的**全部 10 列**,
+// 令克隆行 45px 与主体 63px 错行,累计漂移 −54px,
+// 实测 **15/20 行的「出金」按钮画在了错误账户那一行旁边**。
+//
+// ⚠️ 这条订正很重要:照原先的错误因果去「取消操作列 tooltip」会踩同一个坑。
+// 真正要做的是**列宽与冻结层宽必须一起改**(或改图标按钮/折叠成「更多」)——
+// 那是另一个决定,记入 DECISIONS-PENDING。
+// 在此之前**保持原样**:74% 占比是观感问题,按钮点不到是功能问题,后者更严重。
+
+// ⚠️ 坑四:写死宽度的表单控件会冲出卡片被**裁掉**(父级 el-card 是 overflow:hidden)
+//    @yutiansut @quantaxis
+//
+// Element 的 `el-date-picker[type=daterange]` 默认宽 **400px**(不写在 style 里,
+// 找不到就以为没设),`el-select` 有几处写死 `width:380px`。而卡片在窄屏只有 218–289px:
+//
+//   /admin-audit-logs @375  时间范围 400px / 槽 289px → 溢出 111px(「结束时间」整个不见)
+//   /commission @1024       选择账户 380px / 槽 218px → 溢出 162px
+//   /margin     @1366       选择账户 380px / 槽 261px → 溢出 129px
+//   /trades     @375        日期范围 350px / 槽 275px → 溢出 75px
+//
+// 关键在于父级 `.el-card` 是 `overflow:hidden` —— 溢出部分**直接消失**,
+// 既没有滚动条也没有任何提示,用户不知道那里还有个「结束时间」输入框。
+//
+// 用一条全局规则收口,而不是逐个改内联 style:内联宽度仍是设计意图(宽屏下就该那么宽),
+// `max-width:100%` 只在放不下时才生效。
+// ⚠️ **`.el-form-item__content` 这一层必须一起收口** —— 否则上面那条形同虚设。
+// 它是 `display:inline-block` 且**宽度由子元素撑出来**(shrink-to-fit),
+// 实测 375 视口:`.el-form-item` 已被收到 289px,而它里面的 `__content` 仍是 380px,
+// 于是 `.el-select` 的 `max-width:100%` = 380px 的 100% = 380px,**等于没设**。
+// 这是「包含块被子元素撑大」的经典陷阱:只给叶子加 max-width 抓不住。
+.el-card .el-form-item__content {
+  max-width: 100%;
+}
+
+.el-card .el-select,
+.el-card .el-input,
+.el-card .el-date-editor,
+.el-card .el-cascader,
+.el-card .el-autocomplete {
+  max-width: 100%;
+}
+
+// daterange 内部是两个 input + 一个分隔符的 flex,外层收窄后要让 input 跟着缩,
+// 否则外层缩了、内部照样按 min-content 撑开,等于没修。
+.el-card .el-date-editor.el-range-editor {
+  box-sizing: border-box;
+
+  .el-range-input {
+    min-width: 0;
+  }
+}
+
+// ⚠️ 坑三:容器不够高时,这套「钉死高度 + 表内滚动」会把表体压成 0px,
+//    而且整页也滚不动 —— 用户彻底看不到数据。@yutiansut @quantaxis
+//
+// 机制:`.qa-flex-page{height:100%}` 把页面钉在 `.content-wrapper` 高度内;
+// 筛选栏与统计卡换行吃光高度后,`.el-table__body-wrapper{flex:1;min-height:0}`
+// 分到 0。又因为页面高度**恒等于**容器高度,`scrollHeight - clientHeight = 0`,
+// 用户用任何手势都滚不出来。
+//
+// 实测(375×667,修前):
+//   /trades          表体 0px,DOM 1 行、画出 0 行,可滚量 0
+//   /admin-accounts  表体 0px,DOM 20 行、画出 0 行,底部仍写「共 82 条」
+//   /positions       表体 18px,行高 58px → 只露 31% 的一行
+//   /orders          243px(幸存 —— 它筛选栏恰好少占一行,四页配置完全一致)
+//
+// ✨ **不用 media query,改成内容驱动** —— 这是第二版。
+//
+// 第一版用了 `@media (max-width:768px), (max-height:700px)`,子代理实测证伪:
+// CSS 的 `height` 指**视口**高度,真实 1366×768 笔记本减去浏览器 UI 后
+// `innerHeight` 只有 ~600–660px,**照样命中**。后果是这类用户(占比不小)
+// 失去「表头固定」:实测 1366×625 下 admin-accounts 表头上移 954px,
+// 滚到底看不到任何列标题。用视口高度当阈值本身就是错的抽象 ——
+// 真正的条件是「这个容器装不下表格」,与视口尺寸无关。
+//
+// 内容驱动的做法:只给表体一个 `min-height` 下限。
+//   · 容器够高时 `flex:1` 给出的高度 > 下限,**行为与改动前逐位一致**
+//     (表内滚动 + 表头固定,已实测 1920×1080 / 1366×768 数值全等)
+//   · 容器不够时下限生效,页面自然超出 `.content-wrapper` 而整页可滚
+//     (`.content-wrapper` 本身可滚,实测 /monitoring@375 可滚 845px)
+// 没有阈值,也就没有「阈值定错」的问题。
+//
+// ⚠️ 不要在这里写 `overflow-y: visible` —— 该元素 `overflow-x` 是 `auto`,
+// 按 CSS 规范另一轴的 `visible` 会被计算成 `auto`,那行是空转(子代理实测计算值确为 auto)。
+.qa-flex-table .el-table__body-wrapper {
+  min-height: 240px;
+}
+
+// Element 在设了 `height` prop 时会给这些元素内联高度,容器不够时必须让位,
+// 否则内联的 `height:0px` 会盖过上面的 min-height。
+// ⚠️ `.el-table` 自己要**多装一个表头**,不能与表体同为 240。@yutiansut @quantaxis
+//
+// 子代理实测 `/positions@375×667`:
+//   .el-table              height 240、clientHeight 238、scrollHeight 292、overflow:hidden
+//   .el-table__header-wrapper  52
+//   52 + 240 = 292 − 238 = **底部 54px 被裁掉,任何手势都滚不到**
+//   `.el-table__fixed-right` 内联 height:238 —— 冻结的「操作」列在同一处被裁
+// 所以 `.el-table` 应是 240 + 52 = 292,表体与冻结体仍是 240。
+// ✨ 294 而不是 292:`.el-table` 是 `box-sizing: border-box`,上下各 1px 边框,
+// 所以 `min-height:292px` 给出的**内容盒只有 290**,内容仍是 52+240=292 ⇒ 还差 2px。
+// 子代理单调扫描(`/positions@375`,12 行)证明,tblCH 恒等于 minH − 2:
+//   292 → 裁 2px    293 → 裁 1px    294 → 裁 0    296 → 裁 0
+// 被裁的正是 `.el-table__fixed-right` 冻结操作列的底部(行高的 3~4%),观感级非功能级。
+// 取 294 = 240(表体) + 52(表头) + 2(上下边框);`/admin-accounts` 表头是 51,
+// 比其它页少 1px,294 一并覆盖。
+.qa-flex-page .qa-flex-table.el-table {
+  min-height: 294px;
+}
+
+.qa-flex-page .qa-flex-table .el-table__body-wrapper,
+.qa-flex-page .qa-flex-table .el-table__fixed-body-wrapper {
+  min-height: 240px;
+}
+
+// ⚠️ 光给表体设 min-height 还不够 —— **祖先容器也得跟着长**,否则表格溢出容器,
+//    而后面的兄弟元素(分页条)按容器的盒子定位,直接压在溢出的表行上。
+//    @yutiansut @quantaxis
+//
+// 子代理实测(375×667 /admin-accounts,滚到底):
+//   .table-container  高 184px、min-height:0   ← 容器没长
+//   .qa-flex-table    高 240px                  ← 表格溢出 56px
+//   .el-pagination    top 579(按容器底 482 之后的流位置)
+//   最后一行          566–611                   ← 被分页条压住 **32px / 45px = 71%**
+// 两个滚动条都到顶也够不着,而**修复前那一行是够得着的**(1366×625 反事实对照:
+// 修前表体 54px、遮挡 0px、末行可达;修后表体 240px、遮挡 32px、末行不可达)。
+// 即:min-height 治好了「表体 0px」,却换了个样子坏。
+//
+// 解法:凡是在 .qa-flex-page 里、包着 qa-flex-table 的直接容器,
+// 也给同样的下限 —— 容器和表格一起长,分页条自然被推到表格之后。
+//
+// ⚠️ **特异性坑**:第一版写成 `.qa-flex-page .table-container { min-height:240px }` 不生效。
+// 因为页面组件用的是 Vue scoped 样式,实际规则是
+// `.table-container[data-v-7c6cb440] { min-height:0; flex:1 1 0% }` ——
+// 属性选择器让它的特异性(0,2,0)高于我的 (0,2,0) 但**顺序在后**,于是赢。
+// 这类问题光看自己的选择器看不出来,得把 `document.styleSheets` 里
+// 所有命中该 class 的规则打出来才发现。
+// 用 `:not(#\9)` 提一级特异性,比 `!important` 温和(仍可被页面显式覆盖)。
+// ⚠️ 这里必须是**有界**下限,不能用 `min-content`。第三版曾用 min-content,
+//    被子代理证伪 —— 它让容器随内容无限长,表体拿到全部内容高度,
+//    `overflow-y:auto` 永远用不上 ⇒ **表内滚动被取消 ⇒ 表头固定消失**。
+//    而这正是第一版(media query)被否的**同一条罪状**,只是换了个入口。
+//    @yutiansut @quantaxis
+//
+// 子代理 A/B 实测(A=min-content 版,B=运行期关掉规则复现改前):
+//   1366×768 / 20 条:  A 表体内滚 **0**、页面滚 771、表头钉死**否**、滚到底表头 −364.7
+//                      B 表体内滚 811、页面滚 0、表头钉死**是**
+//   1366×768 / 100 条:A 容器 **4017px**、滚到底表头飞到 **−2915px**
+//   且分页条在任何 A 臂配置下都要先滚动才够得着。
+//
+// 正解:容器下限 = 表体 + 表头 + padding + **分页条**,是个定值。
+//
+// ⚠️ 分页条是**容器内部的 flex 兄弟**,不是容器之后的元素 ——
+// 这点是逐层量祖先链才看清的(`.el-pagination` < `.pagination-container`
+// < `.table-container[display:flex]`)。所以容器高度必须把它算进去,
+// 否则容器「装得下表格」但装不下分页条,分页条溢出照样压住末行。
+// 只给 332 时实测:容器 298–630、表格底 559、分页条 579–667(高 88),
+// 中间只剩 71px 空间 ⇒ 仍重叠 32px。
+//
+// 实测四页:表头 51–52、容器 padding 20+20、分页条 88 + margin-top 20
+// ⇒ 240(表体) + 52(表头) + 40(padding) + 88(分页) + 20(margin) = 440。
+// 表体仍受 240px 约束 ⇒ 内滚仍在 ⇒ 表头仍固定(这是与 min-content 版的本质差别)。
+// ⚠️ **必须是直接子代 `> .el-card`,不能写成后代 `.el-card`**。@yutiansut @quantaxis
+//
+// 第一版写成 `.qa-flex-page .el-card > .el-card__body`(后代匹配),
+// 于是页面里**每一张** `.el-card` 都命中 —— 包括统计行那 3–4 张小卡,
+// 各自被撑成 440px。子代理 A/B 实测(B 臂=运行期删掉该规则):
+//   1366×768 /trades      统计卡体 **440×4 → 110.5×4**,表格 top **709 → 380**
+//    375×667 /trades      表格 top **2125 → 807**(视口才 667,首屏看不到表格)
+//   1920×1080 /positions  表体 **363 → 693** —— 大屏可见行数**反而比修之前少**
+// `/orders` 没有统计卡,所以一直是「幸存者」—— 这也解释了最初那个疑问。
+//
+// 表格所在的卡片是 `.qa-flex-page` 的**直接子元素**(祖先链实测:
+// `.el-card__body < .el-card.is-always-shadow < trades-page.qa-flex-page`),
+// 统计卡则嵌在 row/col 里更深一层 —— 用 `>` 正好把它们分开。
+.qa-flex-page:not(#\9) .table-container,
+.qa-flex-page:not(#\9) > .el-card > .el-card__body {
+  min-height: 440px;
+}
+
+// ⚠️ `.el-card` 默认 `overflow:hidden`,会把上面 min-height 撑出的溢出**整段裁掉**,
+//    于是 `.content-wrapper` 看不到溢出、整页仍然滚不动 —— 等于前面白改。
+//    @yutiansut @quantaxis
+//
+// 这条是逐层量祖先链才定位到的。同为 375×667,两页表现相反:
+//   /trades          .el-card 层 h=585 sh=978 **slack=393 却 overflowY:hidden**
+//                    ⇒ 上一层 .qa-flex-page 看到的 sh == h,slack=0,页面不可滚
+//   /admin-accounts  没有 .el-card 包裹(用 .table-container,overflow:visible)
+//                    ⇒ 溢出一路传到 .content-wrapper,slack=153,页面可滚
+// 这也解释了先前「四页配置完全一致却只有一页幸存」的现象 —— 差别不在页面配置,
+// 在于**中间隔了几层裁剪容器**。
+.qa-flex-page > .el-card {
+  overflow: visible;
+}
+
+
+// ⚠️ 坑二(只有实测滚动同步才会发现):没有 `height` prop 时
+//   `.el-table__fixed-body-wrapper` 高度是 auto(clientH == scrollH),
+//   Element 的 `syncPostion` 把 scrollTop 写进去**推不动** ⇒
+//   主体滚到第 33 行,冻结的操作列还停在第 1 行,错位 1803px ——
+//   「平仓/详情」按钮会打到**错误的持仓**。必须让它有界。
+//   全仓 14 处 `fixed=` 全部是 `fixed="right"`,无左固定列。
+
+// ⚠️ 这里**不再**手写 fixed 列的高度/偏移补丁。@yutiansut @quantaxis
+//
+// 早先删掉 `:height` prop 后,Element 的 `layout.scrollY` 永久为 false
+// (`table-layout.js:44` 提前 return),于是它自己那套滚动条补偿全部失效,
+// 我们不得不手写三条:
+//   `.el-table__fixed(-right){height:100%!important}`
+//   `.el-table__fixed-body-wrapper{bottom:var(--qa-sbw);height:auto!important}`
+//   `.el-table__fixed-right{right:var(--qa-sbw)}`
+// 它们能压住冻结列错位与竖条被盖,但压不住**横向**的两个残留:
+//   · 宽屏凭空多一条 8px 横向滚动条(updateColumnsWidth 按完整 clientWidth 分列宽)
+//   · 滚到最右时表头比表体少滚 8px,所有列错开
+//
+// 改用 `:height="'100%'"` 后 `layout.height !== null`,Element 会自己做
+// `fixedBodyHeight = bodyHeight - gutterWidth`(:112)、渲染 th.gutter、
+// 并在 `updateColumnsWidth`(:150)里扣掉 gutter —— 四个问题一并消失,
+// 而 `flex:1` 让主轴尺寸仍由 flex 决定,`height:100%` 不参与布局(实测 tableH 不变)。

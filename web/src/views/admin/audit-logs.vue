@@ -56,6 +56,7 @@
     <!-- 日志列表 -->
     <el-card class="table-card">
       <el-table
+        :empty-text="$emptyText(loadError)"
         :data="logs"
         v-loading="loading"
         stripe
@@ -145,6 +146,9 @@ export default {
 
   data() {
     return {
+      // 加载失败原因 —— 与「真的没数据」区分开,交给 $emptyText 渲染
+      // @yutiansut @quantaxis
+      loadError: null,
       loading: false,
       logs: [],
       searchForm: {
@@ -190,7 +194,7 @@ export default {
       this.loadLogs()
     },
     async loadLogs() {
-      this.loading = true
+      this.loading = true; this.loadError = null
       try {
         const params = {
           page: this.pagination.page,
@@ -211,6 +215,7 @@ export default {
         this.logs = (res && res.logs) || []
         this.pagination.total = (res && res.total) || 0
       } catch (err) {
+        this.loadError = (err && err.message) || '加载失败'
         console.error('加载审计日志失败:', err)
         this.$message.error('加载审计日志失败')
       } finally {

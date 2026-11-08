@@ -31,7 +31,13 @@
       <div class="tb-quotes">
         <div class="tb-q"><span>买一</span><b class="bid">{{ bestBidPrice ? bestBidPrice.toFixed(2) : '--' }}</b></div>
         <div class="tb-q"><span>卖一</span><b class="ask">{{ bestAskPrice ? bestAskPrice.toFixed(2) : '--' }}</b></div>
-        <div class="tb-q"><span>成交量</span><b>{{ tickData.volume || 0 }}</b></div>
+        <!-- 与左边买一/卖一同口径:未加载显示 `--`。@yutiansut @quantaxis
+             原写法 `|| 0` 会把「行情还没到」渲染成「成交量 0」——
+             在报价区这会被读成「今日无成交」,而旁边两个值已经是 `--`,
+             同一行三个数字口径不一致。
+             ⚠️ 0 是**合法真值**(确实没成交),所以判空用 `== null` 而不是 falsy ——
+             `0 || x` 会把真的 0 也换掉。 -->
+        <div class="tb-q"><span>成交量</span><b>{{ tickData.volume == null ? '--' : tickData.volume }}</b></div>
       </div>
 
       <el-tooltip :content="wsEnabled ? '点击切换到 HTTP 轮询' : '点击切换到 WebSocket'" placement="top">
@@ -163,7 +169,7 @@
             v-if="activeTab !== 'close'"
             :key="activeTab"
             :instrument-id="selectedInstrument"
-            :current-price="tickData.last_price"
+            :current-price="tickData.last_price || 0"
             :direction="activeTab === 'buy' ? 'BUY' : 'SELL'"
             offset="OPEN"
             @submit="handleOrderSubmit"
@@ -173,7 +179,7 @@
             v-else
             ref="closeForm"
             :instrument-id="selectedInstrument"
-            :current-price="tickData.last_price"
+            :current-price="tickData.last_price || 0"
             @submit="handleOrderSubmit"
             @account-change="handleAccountChange"
           />
@@ -186,6 +192,7 @@
             <el-button size="mini" @click="loadPendingOrders">刷新</el-button>
           </div>
           <el-table
+            :empty-text="$emptyText(loadError, '暂无挂单')"
             :data="pendingOrders"
             border
             stripe
@@ -201,13 +208,13 @@
                 </span>
               </template>
             </el-table-column>
-            <el-table-column prop="price" label="价格" width="80" align="right">
+            <el-table-column prop="price" label="价格" width="80" align="right" show-overflow-tooltip>
               <template slot-scope="scope">
-                {{ scope.row.price.toFixed(2) }}
+                {{ $num(scope.row.price, 2) }}
               </template>
             </el-table-column>
-            <el-table-column prop="volume" label="数量" width="60" align="right" />
-            <el-table-column prop="filled_volume" label="成交" width="60" align="right" />
+            <el-table-column prop="volume" label="数量" width="60" align="right" show-overflow-tooltip/>
+            <el-table-column prop="filled_volume" label="成交" width="60" align="right" show-overflow-tooltip/>
             <el-table-column prop="status" label="状态" width="80" align="center">
               <template slot-scope="scope">
                 <el-tag size="mini" :type="getStatusType(scope.row.status)">
@@ -236,6 +243,7 @@
 
 <script>
 import { getInstruments, getOrderBook, getTick, getRecentTrades, submitOrder, cancelOrder, queryUserOrders } from '@/api'
+import { extractErrorMessage } from '@/api/request'
 import { mapGetters, mapActions } from 'vuex'
 import OrderForm from './components/OrderForm.vue'
 import CloseForm from './components/CloseForm.vue'
@@ -289,6 +297,9 @@ export default {
   },
   data() {
     return {
+      // 挂单表的加载失败原因 —— 只由 loadPendingOrders 维护,
+      // 不让下单/撤单的失败污染这张表 @yutiansut @quantaxis
+      loadError: null,
       instruments: [],
       selectedInstrument: 'IF2501',
       selectedAccountId: null,  // 当前选中的账户ID（用于查询委托）
@@ -298,11 +309,13 @@ export default {
         bids: [],
         asks: []
       },
+      // 初值用 null 而非 0 —— 首屏在行情到达前应显示 `--`,不是一个假的 0。
+      // 与 updateTickFromSnapshot 里改用 `??` 是同一件事的两头。@yutiansut @quantaxis
       tickData: {
-        last_price: 0,
-        bid_price: 0,
-        ask_price: 0,
-        volume: 0
+        last_price: null,
+        bid_price: null,
+        ask_price: null,
+        volume: null
       },
       recentTrades: [],
       pendingOrders: [],
@@ -406,12 +419,20 @@ export default {
 
     handleAccountChange(accountId) {
       // 当OrderForm中的账户选择变化时更新
+      const changed = this.selectedAccountId !== accountId
       this.selectedAccountId = accountId
       // 立即刷新该账户的委托
       this.loadPendingOrders()
+      // ✨ 账户变了必须重连 WS —— 后端按 account_id 分发 orders/trades/accounts,
+      //    不重连就还在收上一个账户(或压根没连)的流。@yutiansut @quantaxis
+      if (changed && this.wsEnabled) {
+        this.destroyWebSocket()
+        this.initWebSocket()
+      }
     },
 
     async loadPendingOrders() {
+      this.loadError = null   // 每轮自动刷新先清掉上次的失败标记
       // Phase 10: 使用 account_id 而非 user_id 查询委托
       if (!this.selectedAccountId) return
 
@@ -425,6 +446,7 @@ export default {
         })
       } catch (error) {
         console.error('Failed to load orders:', error)
+        this.loadError = this.$errMsg(error, '加载失败')
       }
     },
 
@@ -481,15 +503,22 @@ export default {
       })
     },
 
-    async handleOrderSubmit(orderData) {
+    // ⚠️ `done` 是子组件传来的**复位回调** —— 必须在所有返回路径上调到,
+    // 包括提前 return 的校验失败分支。@yutiansut @quantaxis
+    // 漏调会让按钮一直转;但那是**可见**故障,好过静默重复下单
+    // (原实现用固定 1 秒定时器复位,与请求无关,见 OrderForm 的说明)。
+    async handleOrderSubmit(orderData, done) {
+      const finish = () => { if (typeof done === 'function') done() }
       if (!this.currentUser) {
         this.$message.warning('请先登录')
+        finish()
         return
       }
 
       // 检查子组件是否已经提供了 user_id（实际是 account_id）
       if (!orderData.user_id) {
         this.$message.warning('请选择交易账户')
+        finish()
         return
       }
 
@@ -508,7 +537,11 @@ export default {
           this.$refs.closeForm.refresh()
         }
       } catch (error) {
-        this.$message.error('订单提交失败: ' + ((error.response && error.response.data && error.response.data.error) || error.message))
+        this.$message.error('订单提交失败: ' + extractErrorMessage(error))
+      } finally {
+        // 无论成功失败都复位 —— 放 finally 而不是只在成功路径,
+        // 否则一次失败后按钮永远卡住。@yutiansut @quantaxis
+        finish()
       }
     },
 
@@ -534,7 +567,7 @@ export default {
           }
         }
       } catch (error) {
-        this.$message.error('撤单失败: ' + ((error.response && error.response.data && error.response.data.error) || error.message))
+        this.$message.error('撤单失败: ' + extractErrorMessage(error))
       }
     },
 
@@ -607,7 +640,18 @@ export default {
       //
       // 原先 user_id 优先 → 本页的成交/委托/账户三类推送全部收不到,
       // 只能靠 5 秒 HTTP 轮询兜底。这里把顺序对调。
-      const userId = this.selectedAccountId || (this.currentUser && this.currentUser.user_id) || 'anonymous'
+      // ⚠️ `this.currentUser` 是**字符串**(store/index.js:142 存的就是 userId 本身),
+      //    对它取 `.user_id` 恒为 undefined —— 这半截兜底从来没生效过,已删。
+      //    而 mounted() 里 initWebSocket 先于 OrderForm 的 account-change 触发,
+      //    此时 selectedAccountId 还是 null → 整个表达式落到 'anonymous',
+      //    于是 orders/trades/accounts 三类推送全收不到(后端按 account_id 分发)。
+      //    修法:没有 account_id 就先不连,等 handleAccountChange 拿到再连。
+      //    @yutiansut @quantaxis
+      const userId = this.selectedAccountId
+      if (!userId) {
+        console.info('[trade] 尚未选定账户,WebSocket 暂不连接,待 account-change 后再连')
+        return
+      }
 
       this.ws = new WebSocketManager({
         autoConnect: false,
@@ -654,6 +698,11 @@ export default {
 
       // 委托单仍然使用 HTTP 轮询（频率降低到 5 秒）
       this.loadPendingOrders()
+      // 纵深防御:建之前先清旧的 —— 即使调用方忘了 destroy 也不会泄漏。
+      // @yutiansut @quantaxis
+      if (this.ordersRefreshTimer) {
+        clearInterval(this.ordersRefreshTimer)
+      }
       this.ordersRefreshTimer = setInterval(() => {
         this.loadPendingOrders()
       }, 5000)
@@ -663,6 +712,20 @@ export default {
      * 销毁 WebSocket 连接
      */
     destroyWebSocket() {
+      // ⚠️ 必须在这里清委托轮询定时器 —— 它是在 initWebSocket 里建的。
+      // @yutiansut @quantaxis
+      //
+      // 回验代理实测:`handleAccountChange`(:429)每次切账户都
+      // destroy + init,而 destroy **不清** `ordersRefreshTimer`
+      // (清理只写在 `stopAutoRefresh`,那是 beforeDestroy 才走的)。
+      // ⇒ **每切一次账户泄漏一个 5 秒轮询器**:12 次切换后活跃定时器
+      // 由 3 涨到 15(setInterval +2 / clearInterval +1,只清了 WS 心跳)。
+      // 更糟的是**离开页面后仍在跑** —— 在 /#/password 上 30 秒内
+      // 观察到 **72 个** `/api/order/user` 请求。
+      if (this.ordersRefreshTimer) {
+        clearInterval(this.ordersRefreshTimer)
+        this.ordersRefreshTimer = null
+      }
       if (this.snapshotUnsubscribe) {
         this.snapshotUnsubscribe()
         this.snapshotUnsubscribe = null
@@ -711,11 +774,29 @@ export default {
         }
 
         // 更新 tick 数据
+        // ⚠️ 用 `??` 而非 `|| 0` —— 后者把「字段缺失」变成一个**错的数**。
+        // @yutiansut @quantaxis
+        //
+        // 实测(2026-09-05,回验代理):默认 `wsEnabled: true`,活的写入方就是本函数。
+        // 而 DIFF 推来的 quote 对 IF2501 **既没有 volume 也没有 last_price**,
+        // `|| 0` 于是让 vm 变成 `{last_price: 0, volume: 0}`,页面显示 **成交量 0**;
+        // 同一时刻后端 `GET /api/market/tick/IF2501` 返回 `volume: 1`。
+        // **这是显示了一个错的数,不只是没显示** —— 比空白更坏。
+        // (点 WS 标签切到 HTTP 轮询立刻恢复成 1,证明数据本身是有的。)
+        //
+        // 改成 `??` 后缺失字段保持 null,交由模板的三态判断显示 `--`;
+        // 而真值 0(确实没成交)会原样保留 —— `0 ?? x` 是 0,`0 || x` 是 x。
+        // ⚠️ 不能用 `??` —— 本项目的 babel 配置不支持空值合并运算符,
+        // 会在 `vue&type=script` 阶段编译失败(实测 2026-09-05)。用显式判断等价实现。
+        const pick = (...vs) => {
+          for (const v of vs) if (v !== null && v !== undefined) return v
+          return null
+        }
         this.tickData = {
-          last_price: quote.last_price || 0,
-          bid_price: quote.bid_price1 || quote.bid_price || 0,
-          ask_price: quote.ask_price1 || quote.ask_price || 0,
-          volume: quote.volume || 0,
+          last_price: pick(quote.last_price),
+          bid_price: pick(quote.bid_price1, quote.bid_price),
+          ask_price: pick(quote.ask_price1, quote.ask_price),
+          volume: pick(quote.volume),
           // 额外字段
           open: quote.open,
           high: quote.highest || quote.high,
@@ -797,7 +878,7 @@ export default {
           direction: o.direction,
           price: o.limit_price || o.price || 0,
           volume: o.volume_orign || o.volume || 0,
-          filled_volume: (o.volume_orign || 0) - (o.volume_left || 0),
+          filled_volume: (Number(o.volume_orign) || 0) - (Number(o.volume_left) || 0),
           status: this.mapOrderStatus(o.status),
           user_id: o.user_id
         }))
@@ -858,7 +939,13 @@ $primary-color: #1890ff;
 .trade-page {
   padding: 16px;
   background: $dark-bg-primary;
-  min-height: calc(100vh - 56px);
+  // ⚠️ 用 --qa-content-h,不要手写 calc(100vh - N)。@yutiansut @quantaxis
+  //    原值 -56px 少算了 content-wrapper 的上下 padding(各 20px):
+  //    真实 chrome = top-header 56 + padding 40 = 96px(有公告条时再 +40)。
+  //    实测本页在无内容可滚时仍有 41px 的死滚动条
+  //    (.content-wrapper 的 scrollHeight - clientHeight = 41)。
+  //    `layout/index.vue:546` 早就写明「各页面请一律用 var(--qa-content-h)」。
+  min-height: var(--qa-content-h, calc(100vh - 96px));
 
   ::v-deep .el-card {
     background: $dark-bg-card;
@@ -1401,8 +1488,11 @@ $primary-color: #1890ff;
 
       // 滚动条
       .el-table__body-wrapper::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
+        // ⚠️ 必须与 Element 的 gutterWidth(8)一致,统一走 --qa-sbw。@yutiansut @quantaxis
+        //    原为 6px ⇒ rowOff = 6-8 = -2:方向相反故不产生滞后,
+        //    但冻结列底边会比正文可视区低 2px。
+        width: var(--qa-sbw, 8px);
+        height: var(--qa-sbw, 8px);
       }
 
       .el-table__body-wrapper::-webkit-scrollbar-thumb {
@@ -1497,7 +1587,9 @@ $primary-color: #1890ff;
   border: 1px solid $dark-border;
   border-radius: 4px;
 
-  .tb-inst { flex: 0 0 220px; max-width: 100%; }
+  /* 220px 装不下 `IF2501 - 沪深300股指期货2501`(实测需 226px,尾字被切)
+     @yutiansut @quantaxis */
+  .tb-inst { flex: 0 0 260px; max-width: 100%; }
 
   .tb-price {
     display: flex;

@@ -458,10 +458,25 @@ impl TradingStateMachine {
     }
 
     /// 验证订单是否允许提交
+    /// 用**当前时刻**校验下单。等价于 `validate_order_at(id, Local::now().time())`。
     pub fn validate_order(&self, instrument_id: &str) -> OrderValidation {
+        self.validate_order_at(instrument_id, Local::now().time())
+    }
+
+    /// 显式传入时刻的版本 —— **可测** @yutiansut @quantaxis
+    ///
+    /// 加这个变体的理由:`get_current_state`(:296)/`get_current_session`(:284)
+    /// 本来就**接受 time 参数**(设计是对的),只有 `validate_*` 和 `is_trading_time`
+    /// 自己去读 `Local::now()`,于是整条放行判定不可测 ——
+    /// 「依赖注入的形状已经具备,只是这里没用上」。
+    ///
+    /// 后果实测:2026-09-05 12:17(CFFEX 午休)跑单元测试,
+    /// `test_state_machine_validate_order/cancel` 双双失败 ——
+    /// 测试显式设了 `ContinuousTrading`,却被 :464 的时段检查抢先否决。
+    /// 这类失败**一天里大部分时间是绿的**,只在午休/收盘窗口变红。
+    pub fn validate_order_at(&self, instrument_id: &str, now: NaiveTime) -> OrderValidation {
         let state = self.get_instrument_state(instrument_id);
         let exchange = ExchangeType::from_instrument_id(instrument_id);
-        let now = Local::now().time();
 
         // 获取当前时段
         if let Some(ex) = exchange {
@@ -489,10 +504,15 @@ impl TradingStateMachine {
     }
 
     /// 验证撤单是否允许
+    /// 用**当前时刻**校验撤单。等价于 `validate_cancel_at(id, Local::now().time())`。
     pub fn validate_cancel(&self, instrument_id: &str) -> OrderValidation {
+        self.validate_cancel_at(instrument_id, Local::now().time())
+    }
+
+    /// 显式传入时刻的版本 —— 可测。理由见 `validate_order_at`。@yutiansut @quantaxis
+    pub fn validate_cancel_at(&self, instrument_id: &str, now: NaiveTime) -> OrderValidation {
         let state = self.get_instrument_state(instrument_id);
         let exchange = ExchangeType::from_instrument_id(instrument_id);
-        let now = Local::now().time();
 
         // 获取当前时段
         if let Some(ex) = exchange {
@@ -542,8 +562,13 @@ impl TradingStateMachine {
     }
 
     /// 检查当前是否为交易时间
+    /// 用当前时刻判断。等价于 `is_trading_time_at(exchange, Local::now().time())`。
     pub fn is_trading_time(&self, exchange: ExchangeType) -> bool {
-        let now = Local::now().time();
+        self.is_trading_time_at(exchange, Local::now().time())
+    }
+
+    /// 显式传入时刻的版本 —— 可测。理由见 `validate_order_at`。@yutiansut @quantaxis
+    pub fn is_trading_time_at(&self, exchange: ExchangeType, now: NaiveTime) -> bool {
         matches!(
             self.calendar.get_current_state(exchange, now),
             TradingState::ContinuousTrading | TradingState::AuctionOrder
@@ -631,40 +656,102 @@ mod tests {
         assert_eq!(state, TradingState::ContinuousTrading);
     }
 
+    // ⚠️ 合约名不能以交易所前缀开头 —— 否则测试**依赖运行时刻** @yutiansut @quantaxis
+    //
+    // 原来用的是 `TEST2401`,而 `from_instrument_id`(:107)按前缀推断:
+    // `T` 开头 ⇒ **CFFEX**(国债期货 T/TF/TL/TS)。于是 `validate_order:464` 会先读
+    // `Local::now().time()` 判时段,在**显式设置的状态之前**否决:
+    //   2026-09-05 12:17(周六午休,CFFEX 11:30-13:00)实测两个测试双双失败,
+    //   断言 `matches!(validate_order("TEST2401"), Allowed)` 不成立。
+    //
+    // 改用 `ZZTEST2401`:不匹配任何前缀 ⇒ 落到默认的 **SIM**,
+    // 而 SIM **全天开放**(见 :628 的既有测试),时段检查恒放行,
+    // 测试于是只验它真正要验的东西 —— 状态机本身。
     #[test]
     fn test_state_machine_validate_order() {
         let machine = TradingStateMachine::new();
 
         // 手动设置为连续交易状态
-        machine.set_instrument_state("TEST2401", TradingState::ContinuousTrading);
+        machine.set_instrument_state("ZZTEST2401", TradingState::ContinuousTrading);
         assert!(matches!(
-            machine.validate_order("TEST2401"),
+            machine.validate_order("ZZTEST2401"),
             OrderValidation::Allowed
         ));
 
         // 设置为闭市状态
-        machine.set_instrument_state("TEST2401", TradingState::Closed);
+        machine.set_instrument_state("ZZTEST2401", TradingState::Closed);
         assert!(matches!(
-            machine.validate_order("TEST2401"),
+            machine.validate_order("ZZTEST2401"),
             OrderValidation::Rejected(_)
         ));
     }
 
+    /// 时段检查本身的测试 —— 此前**没有任何测试覆盖它** @yutiansut @quantaxis
+    ///
+    /// `validate_order` 的时段分支(在状态检查**之前**否决)只能靠
+    /// 「恰好在午休时跑测试」才会被执行到 —— 那正是 2026-09-05 12:17
+    /// 两个测试意外失败的原因。有了 `_at` 变体就能显式覆盖。
+    #[test]
+    fn test_validate_order_respects_session_window() {
+        let machine = TradingStateMachine::new();
+        // 用 CFFEX 前缀(T = 国债期货),状态显式设为连续交易
+        machine.set_instrument_state("T2401", TradingState::ContinuousTrading);
+
+        // 盘中 10:00 —— 应放行
+        assert!(
+            matches!(
+                machine.validate_order_at("T2401", NaiveTime::from_hms_opt(10, 0, 0).unwrap()),
+                OrderValidation::Allowed
+            ),
+            "CFFEX 10:00 应允许下单"
+        );
+
+        // 午休 12:00 —— 应被时段分支拒绝,**即使状态是 ContinuousTrading**
+        assert!(
+            matches!(
+                machine.validate_order_at("T2401", NaiveTime::from_hms_opt(12, 0, 0).unwrap()),
+                OrderValidation::Rejected(_)
+            ),
+            "CFFEX 午休(11:30-13:00)应拒绝下单,即使状态机是连续交易"
+        );
+
+        // SIM 全天开放 —— 同一时刻应放行(证明拒绝来自时段而非状态)
+        machine.set_instrument_state("ZZSIM2401", TradingState::ContinuousTrading);
+        assert!(
+            matches!(
+                machine.validate_order_at("ZZSIM2401", NaiveTime::from_hms_opt(12, 0, 0).unwrap()),
+                OrderValidation::Allowed
+            ),
+            "SIM 全天开放,12:00 应允许"
+        );
+    }
+
+    // ⚠️ 合约名不能以交易所前缀开头 —— 否则测试**依赖运行时刻** @yutiansut @quantaxis
+    //
+    // 原来用的是 `TEST2401`,而 `from_instrument_id`(:107)按前缀推断:
+    // `T` 开头 ⇒ **CFFEX**(国债期货 T/TF/TL/TS)。于是 `validate_order:464` 会先读
+    // `Local::now().time()` 判时段,在**显式设置的状态之前**否决:
+    //   2026-09-05 12:17(周六午休,CFFEX 11:30-13:00)实测两个测试双双失败,
+    //   断言 `matches!(validate_order("TEST2401"), Allowed)` 不成立。
+    //
+    // 改用 `ZZTEST2401`:不匹配任何前缀 ⇒ 落到默认的 **SIM**,
+    // 而 SIM **全天开放**(见 :628 的既有测试),时段检查恒放行,
+    // 测试于是只验它真正要验的东西 —— 状态机本身。
     #[test]
     fn test_state_machine_validate_cancel() {
         let machine = TradingStateMachine::new();
 
         // 连续交易期可撤单
-        machine.set_instrument_state("TEST2401", TradingState::ContinuousTrading);
+        machine.set_instrument_state("ZZTEST2401", TradingState::ContinuousTrading);
         assert!(matches!(
-            machine.validate_cancel("TEST2401"),
+            machine.validate_cancel("ZZTEST2401"),
             OrderValidation::Allowed
         ));
 
         // 集合竞价申报期不可撤单
-        machine.set_instrument_state("TEST2401", TradingState::AuctionOrder);
+        machine.set_instrument_state("ZZTEST2401", TradingState::AuctionOrder);
         assert!(matches!(
-            machine.validate_cancel("TEST2401"),
+            machine.validate_cancel("ZZTEST2401"),
             OrderValidation::Rejected(_)
         ));
     }

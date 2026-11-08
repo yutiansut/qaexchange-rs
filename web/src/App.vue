@@ -89,8 +89,8 @@ body {
 
 // 全局滚动条样式
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: var(--qa-sbw, 8px);
+  height: var(--qa-sbw, 8px);
 }
 
 ::-webkit-scrollbar-thumb {

@@ -36,6 +36,31 @@ pub enum RiskLevel {
 impl RiskLevel {
     /// 根据风险率判断风险等级
     pub fn from_risk_ratio(ratio: f64) -> Self {
+        // ⚠️ 非有限值必须先拦掉,否则全部掉进最后的 else = Critical。
+        //    @yutiansut @quantaxis
+        //
+        // `risk_ratio = margin / balance`(qars `get_riskratio()`)。
+        // 自动创建的默认账户 `init_cash = 0` ⇒ `0.0 / 0.0 = NaN`。
+        // 而 NaN 参与 `<` 比较**恒为 false**,于是
+        //   NaN < 0.6 → false;NaN < 0.8 → false;NaN < 0.95 → false → else → Critical
+        // 实测线上 57 个账户里有 19 个是这种空账户,**全部被判为 Critical**,
+        // 与 `high_risk_count = critical_risk_count = 19` 精确吻合;
+        // 服务端日志里那批 `[RiskAlert] LevelEscalation` 也是它们发的。
+        // 33% 的风控告警是假的 —— 会把真正危险的账户淹掉。
+        //
+        // 两种非有限要分开对待,不能一律当 Low:
+        //   NaN  = 0/0    → 既无权益也无保证金,**没有风险敞口** → Low
+        //   +Inf = x/0    → 有保证金却零权益,**是真的危险**   → Critical
+        if ratio.is_nan() {
+            return RiskLevel::Low;
+        }
+        if ratio.is_infinite() {
+            return if ratio > 0.0 {
+                RiskLevel::Critical
+            } else {
+                RiskLevel::Low
+            };
+        }
         if ratio < 0.6 {
             RiskLevel::Low
         } else if ratio < 0.8 {
@@ -207,6 +232,19 @@ pub struct RiskMonitor {
     // ========== 盘中监控扩展 ==========
     /// 风险预警记录 (account_id -> Vec<RiskAlert>)
     risk_alerts: DashMap<String, Vec<RiskAlert>>,
+
+    /// 日志抑制:`(account_id, alert_type)` → 上次**打印**的时刻。@yutiansut @quantaxis
+    ///
+    /// 告警本身照常产生并入库(上限 `max_alerts_per_account`),这里只抑制**日志**。
+    /// 起因:实测日志里 **32,903 条 `[RiskAlert]`,全部来自同一个账户、同一种类型
+    /// (`NegativeAvailable`),占全部 WARN 的 94%**。风控哨兵每个周期重扫一遍,
+    /// 同一个未解决的状态就被反复打印,把「grep WARN 找问题」这条运维路径彻底淹掉。
+    ///
+    /// 只在**状态首次出现**或**冷却期满**时打印,并在打印时带上期间被抑制的条数,
+    /// 这样既不丢信息也不刷屏。
+    alert_log_last: DashMap<(String, String), std::time::Instant>,
+    /// 冷却期内被抑制的条数,打印时一并报出并清零。
+    alert_log_suppressed: DashMap<(String, String), u64>,
     /// 预警序列号
     alert_seq: AtomicU64,
     /// 监控配置
@@ -215,6 +253,11 @@ pub struct RiskMonitor {
     stats: RwLock<MonitorStats>,
     /// 上次各账户风险等级 (用于检测等级变化)
     last_risk_levels: DashMap<String, RiskLevel>,
+
+    /// 每账户上次记录的「现金-权益」缺口,用于只在缺口**变化**时告警。
+    /// 存量分叉每秒刷屏无意义;缺口变动才意味着刚刚又漏了一次。
+    /// @yutiansut @quantaxis
+    last_cash_gap: DashMap<String, f64>,
     /// 监控线程是否运行
     monitor_running: AtomicBool,
     /// 强平回调（可选，用于触发外部强平流程）
@@ -245,10 +288,13 @@ impl RiskMonitor {
             liquidation_records: DashMap::new(),
             liquidation_seq: AtomicU64::new(1),
             risk_alerts: DashMap::new(),
+            alert_log_last: DashMap::new(),
+            alert_log_suppressed: DashMap::new(),
             alert_seq: AtomicU64::new(1),
             config: RwLock::new(RiskMonitorConfig::default()),
             stats: RwLock::new(MonitorStats::default()),
             last_risk_levels: DashMap::new(),
+            last_cash_gap: DashMap::new(),
             monitor_running: AtomicBool::new(false),
             liquidation_callback: RwLock::new(None),
             price_source: RwLock::new(None),
@@ -426,6 +472,56 @@ impl RiskMonitor {
             acc.accounts.close_profit = live_close_profit;
             acc.accounts.frozen_margin = live_frozen_margin;
 
+            // ── 现金 ↔ 权益 对账 ──────────────────────────────────────
+            // @yutiansut @quantaxis
+            //
+            // 为什么必须做:`get_balance()`(qars2 account.rs:522)**一次都没碰
+            // `self.money`** —— 权益走 `accounts.*` 那组字段,现金走
+            // `money -= frozen` / `money -= margin - close_profit + commission`
+            // 那条路径。**两条账互相独立,任何一次不一致产生后没有任何机制会让它们
+            // 重新对上**;`new_from_qifi`(account.rs:191)恢复时又逐字段照抄,
+            // 于是分叉永久保留且永不显形。
+            //
+            // ⚠️ 注意「balance 恒等式」检查不出这个 —— 那条式子就是 `get_balance()`
+            // 的字面实现,是同义反复,78 个账户 0 违反也不构成正确性证据。
+            // **唯一独立的检验就是拿 `money` 对**。2026-09-05 实测:78 个生产账户里
+            // **13 个对不上,合计 ¥27,508,069**(一个账户 deposit 被重复计入 2000 万、
+            // 一个 deposit 为负 -1009 万、另外 10 个零成交零出入金却现金短少约 242 万)。
+            //
+            // 挂在这里的理由:本循环每秒已遍历全部账户、已持写锁、上面几行已经把
+            // 需要的值全算出来了 —— **零额外开销,不需要新线程也不需要新文件**。
+            //
+            // 只告警不改数:在弄清「钱是什么时候、因为什么少的」之前改数会掩盖证据。
+            let frozen_money: f64 = acc.frozen.values().map(|f| f.money).sum();
+            let expected_money = acc.accounts.static_balance + acc.accounts.deposit
+                - acc.accounts.withdraw + live_close_profit
+                - acc.accounts.commission - live_margin - frozen_money;
+            let cash_gap = acc.money - expected_money;
+            // 容差取相对值,避免大账户被浮点噪声刷屏;1e-6 相对 + 1 分钱绝对
+            if cash_gap.abs() > (expected_money.abs() * 1e-6).max(0.01) {
+                let prev = self.last_cash_gap.get(&account_id).map(|v| *v).unwrap_or(0.0);
+                // 只在**缺口发生变化**时告警 —— 存量分叉每秒刷屏没有意义,
+                // 而缺口变动意味着「就在刚才又漏了一次」,那才是要抓的时刻。
+                if (cash_gap - prev).abs() > 0.01 {
+                    log::error!(
+                        "💰 [CashReconcile] 现金与权益对不上: account={}, money={:.2}, \
+                         期望={:.2}, 缺口={:.2} (上次 {:.2}, 本次变动 {:.2}) | \
+                         static_balance={:.2} deposit={:.2} withdraw={:.2} \
+                         close_profit={:.2} commission={:.2} margin={:.2} frozen={:.2}",
+                        account_id, acc.money, expected_money, cash_gap, prev,
+                        cash_gap - prev,
+                        acc.accounts.static_balance, acc.accounts.deposit,
+                        acc.accounts.withdraw, live_close_profit,
+                        acc.accounts.commission, live_margin, frozen_money
+                    );
+                    self.last_cash_gap.insert(account_id.clone(), cash_gap);
+                }
+            } else if self.last_cash_gap.contains_key(&account_id) {
+                // 缺口消失了也值得记一笔
+                log::info!("💰 [CashReconcile] 账户 {} 的现金缺口已消除", account_id);
+                self.last_cash_gap.remove(&account_id);
+            }
+
             // 检测风险等级变化
             let last_level = self.last_risk_levels
                 .get(&account_id)
@@ -570,8 +666,34 @@ impl RiskMonitor {
             })
             .or_insert_with(|| vec![alert.clone()]);
 
-        log::warn!("[RiskAlert] {} - {} ({}): {}",
-            alert.alert_id, account_id, format!("{:?}", alert_type), alert.message);
+        // ✨ 同 (账户, 类型) 的重复告警按冷却期抑制日志。@yutiansut @quantaxis
+        // 冷却期 60 秒:够短,状态变化不会被埋太久;够长,能把每周期一条压成每分钟一条。
+        const ALERT_LOG_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+        let key = (account_id.to_string(), format!("{:?}", alert_type));
+        let now_i = std::time::Instant::now();
+        let should_log = match self.alert_log_last.get(&key) {
+            Some(last) => now_i.duration_since(*last.value()) >= ALERT_LOG_COOLDOWN,
+            None => true, // 首次出现必打
+        };
+        if should_log {
+            self.alert_log_last.insert(key.clone(), now_i);
+            let suppressed = self
+                .alert_log_suppressed
+                .remove(&key)
+                .map(|(_, n)| n)
+                .unwrap_or(0);
+            if suppressed > 0 {
+                log::warn!(
+                    "[RiskAlert] {} - {} ({}): {}(距上次打印期间另有 {} 条同类被抑制)",
+                    alert.alert_id, account_id, key.1, alert.message, suppressed
+                );
+            } else {
+                log::warn!("[RiskAlert] {} - {} ({}): {}",
+                    alert.alert_id, account_id, key.1, alert.message);
+            }
+        } else {
+            *self.alert_log_suppressed.entry(key).or_insert(0) += 1;
+        }
 
         alert
     }
@@ -628,9 +750,22 @@ impl RiskMonitor {
                 let frozen_margin = acc.get_frozen_margin();
                 let margin_used = position_margin + frozen_margin;
                 let unrealized_pnl = acc.get_positionprofit();
-                let risk_ratio = acc.get_riskratio();
+                let raw_risk_ratio = acc.get_riskratio();
                 let position_count = acc.hold.len();
-                let risk_level = RiskLevel::from_risk_ratio(risk_ratio);
+                // 等级用**原始值**判(需要区分 NaN 与 +Inf,见 from_risk_ratio)
+                let risk_level = RiskLevel::from_risk_ratio(raw_risk_ratio);
+                // ⚠️ 但对外**序列化**的值必须是有限数 —— serde_json 会把
+                //    NaN / Inf 静默写成 `null`,前端 `|| 0` 一兜就成了「0.0%」,
+                //    一个看不出来的错值。NaN(0/0,无敞口) → 0.0;
+                //    +Inf(有保证金零权益) → 用一个明确超阈的有限数表达。
+                //    @yutiansut @quantaxis
+                let risk_ratio = if raw_risk_ratio.is_nan() {
+                    0.0
+                } else if raw_risk_ratio.is_infinite() {
+                    if raw_risk_ratio > 0.0 { 999.0 } else { 0.0 }
+                } else {
+                    raw_risk_ratio
+                };
 
                 // 应用风险等级过滤
                 if let Some(filter) = risk_level_filter {
@@ -673,8 +808,20 @@ impl RiskMonitor {
         let total_accounts = risk_accounts.len();
         let total_margin_used: f64 = risk_accounts.iter().map(|acc| acc.margin_used).sum();
         let total_available: f64 = risk_accounts.iter().map(|acc| acc.available).sum();
-        let average_risk_ratio = if total_accounts > 0 {
-            risk_accounts.iter().map(|acc| acc.risk_ratio).sum::<f64>() / total_accounts as f64
+        // ⚠️ 平均值必须跳过非有限项 —— 一个 NaN 就会把整个和污染成 NaN,
+        //    而 serde_json 把非有限 f64 **静默序列化成 `null`**
+        //    (`value/ser.rs` → `Number::from_f64` 对非有限返回 None)。
+        //    前端 `risk.vue:409` 的 `|| 0` 再把 null 兜成 0 ⇒
+        //    「平均风险率」在**成功路径**上恒显示 0.0%。
+        //    实测:57 个账户里 19 个 NaN,真值应为 1.8% 而非 0.0%。
+        //    @yutiansut @quantaxis
+        let finite: Vec<f64> = risk_accounts
+            .iter()
+            .map(|acc| acc.risk_ratio)
+            .filter(|r| r.is_finite())
+            .collect();
+        let average_risk_ratio = if !finite.is_empty() {
+            finite.iter().sum::<f64>() / finite.len() as f64
         } else {
             0.0
         };
@@ -818,6 +965,25 @@ mod tests {
     fn test_risk_level_negative_ratio() {
         assert_eq!(RiskLevel::from_risk_ratio(-0.1), RiskLevel::Low);
         assert_eq!(RiskLevel::from_risk_ratio(-1.0), RiskLevel::Low);
+    }
+
+    /// 非有限风险率不得掉进 `else` 分支 —— 那会把空账户误判为 Critical
+    ///
+    /// 回归锁定:`risk_ratio = margin / balance`,自动创建的默认账户
+    /// `init_cash = 0` ⇒ `0.0/0.0 = NaN`。NaN 参与 `<` 恒为 false,
+    /// 旧实现里三个 `<` 全 false 后落到 else = Critical。
+    /// 实测线上 57 个账户里 19 个是这种空账户,全部被误报为最高危。
+    /// @yutiansut @quantaxis
+    #[test]
+    fn test_risk_level_non_finite_ratio() {
+        // 0/0:既无权益也无保证金,没有风险敞口
+        assert_eq!(RiskLevel::from_risk_ratio(f64::NAN), RiskLevel::Low);
+        assert_eq!(RiskLevel::from_risk_ratio(0.0 / 0.0), RiskLevel::Low);
+        // x/0:有保证金却零权益,是真的危险
+        assert_eq!(RiskLevel::from_risk_ratio(f64::INFINITY), RiskLevel::Critical);
+        assert_eq!(RiskLevel::from_risk_ratio(1.0 / 0.0), RiskLevel::Critical);
+        // 负无穷不是风险
+        assert_eq!(RiskLevel::from_risk_ratio(f64::NEG_INFINITY), RiskLevel::Low);
     }
 
     // ==================== RiskMonitorConfig 测试 @yutiansut @quantaxis ====================
@@ -1583,5 +1749,82 @@ mod tests {
         assert_eq!(summary.average_risk_ratio, 0.33);
         assert_eq!(summary.high_risk_count, 2);
         assert_eq!(summary.critical_risk_count, 1);
+    }
+}
+
+#[cfg(test)]
+mod alert_log_suppression_tests {
+    use dashmap::DashMap;
+    use std::time::{Duration, Instant};
+
+    /// 抑制判据的纯逻辑复刻 —— 与 `create_alert` 里那段保持同一形状。
+    /// @yutiansut @quantaxis
+    ///
+    /// 起因:实测日志 **32,903 条 `[RiskAlert]` 全部来自同一账户同一类型**,
+    /// 占全部 WARN 的 **94%** —— 风控哨兵每周期重扫,同一个未解决状态被反复打印。
+    fn should_log(
+        last: &DashMap<(String, String), Instant>,
+        key: &(String, String),
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        match last.get(key) {
+            Some(t) => now.duration_since(*t.value()) >= cooldown,
+            None => true,
+        }
+    }
+
+    #[test]
+    fn first_occurrence_always_logs() {
+        let last = DashMap::new();
+        let k = ("ACC_1".to_string(), "NegativeAvailable".to_string());
+        assert!(should_log(&last, &k, Instant::now(), Duration::from_secs(60)),
+                "首次出现必须打印 —— 抑制不能把新问题也埋掉");
+    }
+
+    #[test]
+    fn repeat_within_cooldown_is_suppressed() {
+        let last = DashMap::new();
+        let k = ("ACC_1".to_string(), "NegativeAvailable".to_string());
+        let t0 = Instant::now();
+        last.insert(k.clone(), t0);
+        assert!(!should_log(&last, &k, t0 + Duration::from_secs(1), Duration::from_secs(60)));
+        assert!(!should_log(&last, &k, t0 + Duration::from_secs(59), Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn logs_again_after_cooldown() {
+        let last = DashMap::new();
+        let k = ("ACC_1".to_string(), "NegativeAvailable".to_string());
+        let t0 = Instant::now();
+        last.insert(k.clone(), t0);
+        assert!(should_log(&last, &k, t0 + Duration::from_secs(60), Duration::from_secs(60)),
+                "冷却期满必须重新打印,否则问题会永久消失");
+    }
+
+    /// **负对照**:不同账户、不同类型互不影响 —— 否则一个刷屏账户会把
+    /// 其它账户的告警一起压掉,那比刷屏更危险。
+    #[test]
+    fn different_keys_are_independent() {
+        let last = DashMap::new();
+        let t0 = Instant::now();
+        last.insert(("ACC_1".to_string(), "NegativeAvailable".to_string()), t0);
+        let cd = Duration::from_secs(60);
+        assert!(should_log(&last, &("ACC_2".to_string(), "NegativeAvailable".to_string()), t0, cd),
+                "另一个账户的同类告警不受影响");
+        assert!(should_log(&last, &("ACC_1".to_string(), "HighRisk".to_string()), t0, cd),
+                "同一账户的另一种类型不受影响");
+    }
+
+    /// 被抑制的条数必须累计,打印时报出 —— 不能静默丢弃。
+    #[test]
+    fn suppressed_count_accumulates_and_resets() {
+        let sup: DashMap<(String, String), u64> = DashMap::new();
+        let k = ("ACC_1".to_string(), "NegativeAvailable".to_string());
+        for _ in 0..7 { *sup.entry(k.clone()).or_insert(0) += 1; }
+        assert_eq!(sup.get(&k).map(|v| *v.value()), Some(7));
+        let taken = sup.remove(&k).map(|(_, n)| n).unwrap_or(0);
+        assert_eq!(taken, 7, "打印时应取出全部抑制计数");
+        assert!(sup.get(&k).is_none(), "取出后必须清零,否则会重复计数");
     }
 }

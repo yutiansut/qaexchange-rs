@@ -238,10 +238,17 @@ impl AccountSystemCore {
             (1, 0) => -2, // SELL OPEN
             (0, 1) => 3,  // BUY CLOSE
             (1, 1) => -3, // SELL CLOSE
+            // ⚠️ 这里只覆盖 offset ∈ {0,1}。WAL 编码里 2=CLOSETODAY、3=CLOSEYESTERDAY
+            //    (见 WalRecord::encode_offset),落到这个兜底会被当成 **BUY OPEN** ——
+            //    平今/平昨会被记成买入开仓,方向与语义双错。
+            //    `AccountSystemCore` 目前**生产未构造**(全仓无 `AccountSystemCore::new`
+            //    调用),所以是埋着的雷而非现行缺陷。接线前必须先补全这两个分支。
+            //    @yutiansut @quantaxis
             _ => 1,
         };
 
-        let datetime = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        // 北京墙钟:qars `parse_dt_ns` 按 UTC+8 解析(同 trade_gateway::update_account)@yutiansut @quantaxis
+        let datetime = crate::core::account_ext::beijing_now_str();
 
         // 关键步骤1：更新订单的 exchange_order_id（交易所全局唯一ID）
         if let Some(order) = acc.dailyorders.get_mut(&order_id) {

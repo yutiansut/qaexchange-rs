@@ -380,21 +380,58 @@ pub async fn execute_settlement(
 ) -> Result<HttpResponse, actix_web::Error> {
     log::info!("POST /api/admin/settlement/execute");
 
-    match state.settlement_engine.daily_settlement() {
-        Ok(result) => Ok(HttpResponse::Ok().json(ApiResponse::success(result))),
-        Err(e) => {
+    // ⚠️ 必须走完整日终(闭市 → 撤活单 → 归档 → 结算 → 开市),不能直接 `daily_settlement()`:
+    // 后者清掉账户当日委托而挂单仍在撮合簿,之后一撤单/成交 qars 就 panic,panic=abort
+    // 整个进程退出(2026-11-08 隔离实例实测)。日终是阻塞调用 → web::block。
+    // 手动触发结算的是今天(北京时间)。响应仍以 SettlementResult 字段为顶层(flatten),
+    // 另带 sweep / archived_snapshots 等日终明细。@yutiansut @quantaxis
+    let engine = state.settlement_engine.clone();
+    let bj = chrono::FixedOffset::east_opt(8 * 3600).expect("UTC+8 offset");
+    let trading_day = chrono::Utc::now().with_timezone(&bj).format("%Y-%m-%d").to_string();
+    match web::block(move || engine.run_end_of_day(&trading_day)).await {
+        Ok(Ok(report)) => Ok(HttpResponse::Ok().json(ApiResponse::success(report))),
+        Ok(Err(e)) => {
             Ok(HttpResponse::InternalServerError().json(ApiResponse::<()>::error(e.to_string())))
         }
+        Err(e) => Ok(HttpResponse::InternalServerError()
+            .json(ApiResponse::<()>::error(format!("日终任务异常: {}", e)))),
     }
 }
 
 /// 获取结算历史
+/// 结算历史的日期区间参数
+///
+/// ⚠️ 前端 `admin/settlement.vue:387-389` **一直在发** `start_date`/`end_date`,
+/// 而此前这个 handler 连 `web::Query` 提取器都没有 —— 参数被静默丢弃,
+/// 无论选什么区间都返回全量。@yutiansut @quantaxis
+#[derive(Debug, serde::Deserialize)]
+pub struct SettlementHistoryQuery {
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+}
+
 pub async fn get_settlement_history(
+    query: web::Query<SettlementHistoryQuery>,
     state: web::Data<AdminAppState>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    log::debug!("GET /api/admin/settlement/history");
+    log::debug!(
+        "GET /api/admin/settlement/history start={:?} end={:?}",
+        query.start_date,
+        query.end_date
+    );
 
-    let history = state.settlement_engine.get_settlement_history();
+    let mut history = state.settlement_engine.get_settlement_history();
+
+    // settlement_date 是 `YYYY-MM-DD` 定长字符串,字典序即时间序,可直接比较
+    if let Some(start) = query.start_date.as_deref().filter(|s| !s.is_empty()) {
+        history.retain(|r| r.settlement_date.as_str() >= start);
+    }
+    if let Some(end) = query.end_date.as_deref().filter(|s| !s.is_empty()) {
+        history.retain(|r| r.settlement_date.as_str() <= end);
+    }
+
+    // ⚠️ 来源是 DashMap 迭代,顺序不定 —— 历史视图必须自己排序,否则每次刷新顺序都变
+    history.sort_by(|a, b| b.settlement_date.cmp(&a.settlement_date));
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(history)))
 }

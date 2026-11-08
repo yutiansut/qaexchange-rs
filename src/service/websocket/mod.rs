@@ -62,6 +62,8 @@ impl WebSocketServer {
         trade_gateway: Arc<TradeGateway>,
         market_broadcaster: Arc<MarketDataBroadcaster>,
         kline_actor: actix::Addr<crate::market::KLineActor>,
+        // ✨ 行情服务 —— 仅用于 DIFF 订阅时的初始快照。@yutiansut @quantaxis
+        market_data_service: Arc<crate::market::MarketDataService>,
     ) -> Self {
         let (handler, sender, sessions) = create_handler(order_router.clone(), account_mgr.clone());
 
@@ -73,10 +75,11 @@ impl WebSocketServer {
 
         // ✨ 关键修复：将 snapshot_mgr 设置到 trade_gateway，实现成交/订单实时推送 @yutiansut @quantaxis
         // 这样 TradeGateway 的 handle_filled/handle_cancel 等方法才能通过 SnapshotManager 推送数据
-        unsafe {
-            let trade_gateway_ptr = Arc::as_ptr(&trade_gateway) as *mut TradeGateway;
-            (*trade_gateway_ptr).set_snapshot_manager(snapshot_mgr.clone());
-        }
+        // ✨ 不再需要 unsafe —— `snapshot_mgr` 已是 `OnceLock`,`set` 只要 `&self`。
+        // 原写法 `Arc::as_ptr(&g) as *mut TradeGateway` 是 UB:`Arc<T>` 只给共享访问,
+        // 而此时 gateway 早已被 clone(`main.rs:364` 交给了 OrderRouter),
+        // 且该字段的读取点全在成交/撤单热路径上。@yutiansut @quantaxis
+        trade_gateway.set_snapshot_manager(snapshot_mgr.clone());
         log::info!("✅ SnapshotManager connected to TradeGateway for real-time order/trade push");
 
         // ✨ 设置全局 SnapshotManager，用于系统公告广播 @yutiansut @quantaxis
@@ -87,6 +90,8 @@ impl WebSocketServer {
                 .with_user_manager(user_manager.clone())
                 .with_order_router(order_router)
                 .with_market_broadcaster(market_broadcaster.clone())
+                // ✨ 用于 DIFF 订阅时补初始行情快照(见 diff_handler 里的说明)
+                .with_market_data_service(market_data_service)
                 .with_kline_actor(kline_actor), // ✨ 传递 K线Actor
         );
 
@@ -148,21 +153,35 @@ impl WebSocketServer {
         stream: web::Payload,
         user_id: Option<String>,
     ) -> Result<HttpResponse, Error> {
+        // ✨ 缺 user_id 直接拒绝,不要让它「连上却收不到任何东西」。@yutiansut @quantaxis
+        //
+        // 原来 user_id 是 Option,缺失时只是跳过 `initialize_user`,
+        // 但**握手照样返回 101**。实测(2026-09-06)不带 `?user_id=` 连接:
+        //   握手 → `HTTP/1.1 101 Switching Protocols`(看起来成功)
+        //   ping → **无 pong**
+        //   subscribe_quote + peek_message → **0 条消息**
+        // 带上 user_id 后同一探针立刻收到初始快照 + 增量行情 + factors/klines。
+        //
+        // 这个失败模式极具迷惑性:连接「成功」了,客户端会一直等下去,
+        // 既没有错误码也没有关闭帧,排查会往行情/订阅/序列化各个方向找。
+        // 明确拒绝比静默不工作好。
+        let user_id = match user_id {
+            Some(uid) if !uid.trim().is_empty() => uid,
+            _ => {
+                log::warn!("DIFF WebSocket 连接缺少 user_id 查询参数,已拒绝");
+                return Ok(HttpResponse::BadRequest()
+                    .body("missing required query parameter: user_id (use /ws/diff?user_id=<ID>)"));
+            }
+        };
+
         let session_id = Uuid::new_v4().to_string();
 
         // 创建 DIFF WebSocket 会话（零拷贝共享 DiffHandler）
         let mut session = DiffWebsocketSession::new(session_id.clone(), self.diff_handler.clone());
 
-        // 如果提供了 user_id，设置认证状态
-        if let Some(uid) = user_id {
-            session.user_id = Some(uid.clone());
-
-            // 初始化用户快照
-            let snapshot_mgr = self.diff_handler.snapshot_mgr.clone();
-            tokio::spawn(async move {
-                snapshot_mgr.initialize_user(&uid).await;
-            });
-        }
+        // user_id 在上面已保证非空。连接截面在 `DiffWebsocketSession::started()` 里登记
+        // (每条连接一份,绑定 `?user_id=` 主题)—— 不再按 user_id 共用一份。@yutiansut @quantaxis
+        session.user_id = Some(user_id);
 
         // 启动 DIFF WebSocket（低延迟异步架构）
         let resp = ws::start(session, &req, stream)?;
@@ -263,9 +282,17 @@ pub async fn ws_diff_route(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_websocket_server_creation() {
-        // 这里只测试基本的创建逻辑
-        // 完整的 WebSocket 测试需要 actix 运行时
-    }
+    // ❌ 已删除空的 `test_websocket_server_creation` @yutiansut @quantaxis
+    //
+    // 它的函数体是**空的**,只有两行注释。空测试「通过但零覆盖」——
+    // 在测试计数里占一格,让人以为这条路径有覆盖,比没有测试更坏。
+    //
+    // 与 `service/http/mod.rs` 那个不同,这里的理由**成立**:
+    // `WebSocketServer::new` 需要 `actix::Addr<KLineActor>`,
+    // 而 Addr 必须在 actix System 里创建 —— 不是「组装结构体」那么简单。
+    // 要补就得写 `#[actix_web::test]` 并起一个 System,
+    // 那已经是集成测试的范畴(`tests/notification_integration_test.rs`
+    // 的 7 个 `#[tokio::test]` 就是这么做的)。
+    //
+    // 所以:删掉假信号,不假装有覆盖。真要补,应加在 tests/ 下。
 }

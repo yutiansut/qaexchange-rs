@@ -84,7 +84,7 @@
 <script>
 import { mapGetters, mapActions } from 'vuex'
 import KLineChart from '@/components/KLineChart.vue'
-import { getKlineData } from '@/api'
+import { getInstruments, getKlineData } from '@/api'
 
 export default {
   name: 'ChartPage',
@@ -103,7 +103,10 @@ export default {
       historyLoaded: false,   // HTTP 历史是否已回来
       historyError: '',       // 历史加载失败原因(供页面提示)
 
-      // 可用合约列表（与后端 instrument_id 一致，不带交易所前缀）
+        // 可用合约列表 —— 启动时从 /api/market/instruments 动态填充。
+        // ✨ 原先硬编码,与后端注册表脱节:新增/下市合约都要改代码,
+        //    且与 VUE_APP_DEFAULT_INSTRUMENTS 是两份各自维护的清单。
+        //    下面的值仅作为**接口失败时的兜底**。 @yutiansut @quantaxis
       availableInstruments: [
         'IF2501',    // ✅ 默认有K线数据
         'IF2502',
@@ -191,6 +194,9 @@ export default {
   },
 
   mounted() {
+    // 合约表从后端动态取,失败则沿用 data 里的兜底值 @yutiansut @quantaxis
+    this.loadInstrumentList()
+
     // 先用 HTTP 把历史 K 线拉回来 —— 不依赖 WebSocket。
     // 改之前本页**只**监听 DIFF 的 snapshot.klines,WS 没推就永远停在
     // 「加载中」转圈。后端 /api/market/kline/{id} 一直是好的,
@@ -201,7 +207,19 @@ export default {
     if (!this.isConnected) {
       this.connect()
     } else {
-      // 已连接，直接订阅
+      // ✨ 已连接时也必须订阅**行情**,不能只订 K线 @yutiansut @quantaxis
+      //
+      // 原先这个分支只调 subscribeKLine()。而 WS 通常已被 App 级流程连上,
+      // 用户进本页时 connect() 根本不会跑 —— 此时生效的是 store 启动时下的
+      // 默认订阅 `VUE_APP_DEFAULT_INSTRUMENTS`
+      //   = CFFEX.IF2501, SHFE.cu2501, SHFE.ag2506, CFFEX.IH2501
+      // 与本页下拉 ['IF2501','IF2502','IH2501','IC2501'] 三重错配:
+      //   · 带 CFFEX./SHFE. 前缀,而后端实际 ID 不带前缀
+      //   · SHFE.cu2501 / SHFE.ag2506 在本部署根本不存在
+      //   · IC2501 / IF2502 不在默认订阅里
+      // 后果:选 IC2501 或 IF2502 时 K线图**只有 HTTP 历史、之后完全静止**
+      // (实测 75 秒收到 0 根增量,同期 IF2501 收 45 根)。
+      this.ensureQuoteSubscription()
       this.subscribeKLine()
     }
   },
@@ -213,13 +231,42 @@ export default {
       'setChart'
     ]),
 
+    // 从 /api/market/instruments 动态取合约表 @yutiansut @quantaxis
+    async loadInstrumentList() {
+      try {
+        const res = await getInstruments()
+        const list = Array.isArray(res) ? res : (res && res.data) || []
+        const ids = list.map(x => x.instrument_id).filter(Boolean)
+        if (ids.length) {
+          this.availableInstruments = ids
+          if (!ids.includes(this.selectedInstrument)) this.selectedInstrument = ids[0]
+        }
+      } catch (e) {
+        console.warn('[chart] 合约表加载失败,沿用兜底列表:', e && e.message)
+      }
+    },
+
+    // ✨ 把本页合约**并入**既有订阅集 @yutiansut @quantaxis
+    //
+    // ⚠️ store 的 subscribeQuote 是**整体替换**不是累加
+    //    (store/modules/websocket.js:313 直接 SET_SUBSCRIBED_INSTRUMENTS),
+    //    必须传并集,否则会顶掉其他页面正在用的行情订阅。
+    ensureQuoteSubscription() {
+      const st = this.$store.state.websocket || {}
+      const cur = st.subscribedInstruments || []
+      // 后端 instrument_id 不带交易所前缀,统一去前缀后合并去重
+      const strip = (x) => String(x).includes('.') ? String(x).split('.').pop() : String(x)
+      const merged = Array.from(new Set([...cur.map(strip), ...this.availableInstruments]))
+      this.subscribeQuote(merged)
+    },
+
     async connect() {
       try {
         await this.connectWebSocket()
         this.$message.success('WebSocket 连接成功')
 
         // 连接成功后订阅行情和K线
-        this.subscribeQuote(this.availableInstruments)
+        this.ensureQuoteSubscription()
         this.subscribeKLine()
       } catch (error) {
         this.$message.error('WebSocket 连接失败: ' + error.message)
@@ -231,6 +278,10 @@ export default {
     async loadHistory() {
       if (!this.selectedInstrument) return
       this.historyError = ''
+      // ✨ 每次拉取都要复位 —— 否则切合约/切周期期间遮罩会显示
+      //    「暂无K线数据」而不是「正在加载」。原先它只在 :272/:275 置 true,
+      //    首次加载完成后**永不复位**。 @yutiansut @quantaxis
+      this.historyLoaded = false
       const inst = this.selectedInstrument
       const per = this.klinePeriod
       try {

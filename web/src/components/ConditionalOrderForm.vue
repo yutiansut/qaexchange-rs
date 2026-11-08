@@ -369,7 +369,7 @@ export default {
         this.validUntilInput = ''
       } catch (error) {
         console.error('[ConditionalOrderForm] Create failed:', error)
-        this.errorMessage = `创建失败: ${error.message || '未知错误'}`
+        this.errorMessage = `创建失败: ${this.$errMsg(error, '未知错误')}`
       } finally {
         this.submitting = false
       }
@@ -385,7 +385,7 @@ export default {
         await this.loadConditionalOrders()
       } catch (error) {
         console.error('[ConditionalOrderForm] Cancel failed:', error)
-        this.errorMessage = `撤销失败: ${error.message || '未知错误'}`
+        this.errorMessage = `撤销失败: ${this.$errMsg(error, '未知错误')}`
       }
     },
 

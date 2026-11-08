@@ -25,7 +25,24 @@ pub fn create_olap_schema() -> Schema {
         // 主键字段
         Field::new("timestamp", DataType::Int64, false), // 纳秒时间戳
         Field::new("sequence", DataType::UInt64, false), // WAL 序列号
-        Field::new("record_type", DataType::UInt8, false), // 0=OrderInsert, 1=TradeExecuted, 2=AccountUpdate, 3=Checkpoint, 13=KLineFinished
+        // record_type 完整映射(与本文件下方 `record_type_builder.push` 处一一对应)。
+        // ⚠️ 原注释只列了 0/1/2/3/13,而代码实际分配到 13、真实数据里存在 4/5/6 ——
+        //    按残缺的注释读数据会把 1946 万行 TickData 当成未知类型。@yutiansut @quantaxis
+        //   0=OrderInsert          1=TradeExecuted        2=AccountUpdate
+        //   3=Checkpoint           4=AccountSnapshot      5=TickData
+        //   6=OrderBookSnapshot    7=OrderBookDelta       8=UserRegister
+        //   9=AccountBind         10=ExchangeOrderRecord 11=ExchangeTradeRecord
+        //  12=ExchangeResponseRecord                     13=KLineFinished
+        //
+        // 实测(2026-09-06,全部 358 个 parquet / 32,705,508 行):
+        //   出现的类型只有 {0, 1, 2, 4, 5, 6};**10/11/12 一行都没有**。
+        //   而 10/11/12 正是生产成交路径写的记录(trade_gateway.rs)——
+        //   它们进的是 `gateway_wal`(3.6G),那个目录**没有 olap 转换**
+        //   (详见 main.rs `start_periodic_checkpoint` 上方的说明)。
+        //   更进一步:类型 0/1 那 8,163,378 行的 `user_id` **全部是纯数字**
+        //   (全量扫描 6,032,021 条订单记录,`ACC_` 开头的 0 条),
+        //   即**列式存储里没有任何真实账户的成交数据**,只有旧路径/基准的合成数据。
+        Field::new("record_type", DataType::UInt8, false),
         // Order 字段
         Field::new("order_id", DataType::UInt64, true),
         // ⚠️ 必须与 `WalRecord` 里 user_id 的字节宽度一致(现为 [u8; 40])。

@@ -4,10 +4,23 @@
     <div class="page-header">
       <h2>账户资金曲线</h2>
       <div class="header-controls">
+        <!-- 240px 装不下 `名称 (ACC_32位hex)` —— 最长标签实测需文本 390.75px
+             + padding 45px + border 2px = 437.75px,440px 够用(余 2.25px)。
+             ⚠️ box-sizing 是 border-box,左右各 1px 边框要算进去 ——
+             我第一版漏了它,把余量写成了 4.25px(实际只有一半)。
+             ⚠️ 原先用**定值** 440px,理由是「父级 `.el-form-item__content` 是
+             shrink-to-fit 的 inline-block,百分比无效」—— 那个判断在桌面宽度下成立,
+             但在窄屏制造了**功能不可达**:实测 400px 视口下 `.header-controls`
+             溢出 176px,「今日/本周/本月/全部」的 el-radio-group 整体在屏外,
+             而 `.content-wrapper` 是 `overflow-x:hidden`,滚都滚不到;
+             页面标题还被挤成每行一个字的竖排。
+             改回 `width:100% + max-width:440px + min-width:0`,并给父容器加
+             `flex-wrap: wrap` —— 宽屏仍是 440px,窄屏能收缩换行。
+             @yutiansut @quantaxis -->
         <el-select
           v-model="selectedAccountId"
           placeholder="选择账户"
-          style="width: 240px;"
+          :style="{ flex: '1 1 440px', maxWidth: '440px', minWidth: 0 }"
           :disabled="accountOptions.length === 0"
         >
           <el-option
@@ -37,11 +50,11 @@
       <el-col :xs="24" :sm="12" :lg="6">
         <div class="stat-card">
           <div class="stat-label">累计收益</div>
-          <div class="stat-value" :style="{ color: statistics.totalProfit >= 0 ? '#F56C6C' : '#67C23A' }">
-            {{ statistics.totalProfit >= 0 ? '+' : '' }}{{ statistics.totalProfit.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+          <div class="stat-value" :style="{ color: (Number(statistics.totalProfit) || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
+            {{ (Number(statistics.totalProfit) || 0) >= 0 ? '+' : '' }}{{ $money(statistics.totalProfit) }}
           </div>
           <div class="stat-extra">
-            收益率: {{ statistics.totalProfitRate >= 0 ? '+' : '' }}{{ (statistics.totalProfitRate * 100).toFixed(2) }}%
+            收益率: {{ statistics.totalProfitRate >= 0 ? '+' : '' }}{{ $pct(statistics.totalProfitRate, 2) }}
           </div>
         </div>
       </el-col>
@@ -50,10 +63,10 @@
         <div class="stat-card">
           <div class="stat-label">最大回撤</div>
           <div class="stat-value" style="color: #67C23A">
-            -{{ statistics.maxDrawdown.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            -{{ statistics.maxDrawdown.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
           </div>
           <div class="stat-extra">
-            回撤率: -{{ (statistics.maxDrawdownRate * 100).toFixed(2) }}%
+            回撤率: -{{ $pct(statistics.maxDrawdownRate, 2) }}
           </div>
         </div>
       </el-col>
@@ -67,7 +80,7 @@
             <span style="color: #67C23A">{{ statistics.lossDays }}</span>
           </div>
           <div class="stat-extra">
-            胜率: {{ (statistics.winRate * 100).toFixed(1) }}%
+            胜率: {{ $pct(statistics.winRate, 1) }}
           </div>
         </div>
       </el-col>
@@ -75,8 +88,8 @@
       <el-col :xs="24" :sm="12" :lg="6">
         <div class="stat-card">
           <div class="stat-label">平均日收益</div>
-          <div class="stat-value" :style="{ color: statistics.avgDailyProfit >= 0 ? '#F56C6C' : '#67C23A' }">
-            {{ statistics.avgDailyProfit >= 0 ? '+' : '' }}{{ statistics.avgDailyProfit.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+          <div class="stat-value" :style="{ color: (Number(statistics.avgDailyProfit) || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
+            {{ (Number(statistics.avgDailyProfit) || 0) >= 0 ? '+' : '' }}{{ $money(statistics.avgDailyProfit) }}
           </div>
           <div class="stat-extra">
             夏普比率: {{ statistics.sharpeRatio.toFixed(2) }}
@@ -103,6 +116,8 @@
       </div>
 
       <el-table
+
+        :empty-text="$emptyText(loadError)"
         ref="dataTable"
         :data="curveData"
         border
@@ -110,39 +125,39 @@
         height="300"
       >
         <el-table-column prop="date" label="日期" min-width="120"></el-table-column>
-        <el-table-column prop="balance" label="权益" min-width="130" align="right">
+        <el-table-column prop="balance" label="权益" min-width="130" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            {{ scope.row.balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            {{ $money(scope.row.balance) }}
           </template>
         </el-table-column>
-        <el-table-column prop="available" label="可用资金" min-width="130" align="right">
+        <el-table-column prop="available" label="可用资金" min-width="130" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            {{ scope.row.available.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            {{ $money(scope.row.available) }}
           </template>
         </el-table-column>
-        <el-table-column prop="margin" label="保证金" min-width="130" align="right">
+        <el-table-column prop="margin" label="保证金" min-width="130" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            {{ scope.row.margin.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            {{ $money(scope.row.margin) }}
           </template>
         </el-table-column>
-        <el-table-column prop="daily_profit" label="日盈亏" min-width="130" align="right">
+        <el-table-column prop="daily_profit" label="日盈亏" min-width="130" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            <span :style="{ color: scope.row.daily_profit >= 0 ? '#F56C6C' : '#67C23A' }">
-              {{ scope.row.daily_profit >= 0 ? '+' : '' }}{{ scope.row.daily_profit.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            <span :style="{ color: (Number(scope.row.daily_profit) || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
+              {{ (Number(scope.row.daily_profit) || 0) >= 0 ? '+' : '' }}{{ $money(scope.row.daily_profit) }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="daily_profit_rate" label="日收益率" min-width="120" align="right">
+        <el-table-column prop="daily_profit_rate" label="日收益率" min-width="120" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            <span :style="{ color: scope.row.daily_profit_rate >= 0 ? '#F56C6C' : '#67C23A' }">
-              {{ scope.row.daily_profit_rate >= 0 ? '+' : '' }}{{ (scope.row.daily_profit_rate * 100).toFixed(2) }}%
+            <span :style="{ color: (Number(scope.row.daily_profit_rate) || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
+              {{ (Number(scope.row.daily_profit_rate) || 0) >= 0 ? '+' : '' }}{{ $pct(scope.row.daily_profit_rate, 2) }}
             </span>
           </template>
         </el-table-column>
         <el-table-column prop="trade_count" label="交易笔数" min-width="100" align="center"></el-table-column>
-        <el-table-column prop="commission" label="手续费" min-width="120" align="right">
+        <el-table-column prop="commission" label="手续费" min-width="120" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            {{ scope.row.commission.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            {{ $money(scope.row.commission) }}
           </template>
         </el-table-column>
       </el-table>
@@ -160,6 +175,9 @@ export default {
   name: 'AccountCurve',
   data() {
     return {
+      // 加载失败原因 —— 与「真的没数据」区分开,交给 $emptyText 渲染
+      // @yutiansut @quantaxis
+      loadError: null,
       timeRange: 'month',
       accountOptions: [],
       selectedAccountId: '',
@@ -242,6 +260,7 @@ export default {
           this.selectedAccountId = this.accountOptions[0].account_id
         }
       } catch (error) {
+        this.loadError = this.$errMsg(error, '加载失败')
         this.$message.error('获取账户列表失败')
         console.error(error)
       }
@@ -249,21 +268,23 @@ export default {
 
     async fetchEquityCurve() {
       if (!this.currentUser) return
-      this.loading = true
+      this.loading = true; this.loadError = null
       try {
         const res = await getEquityCurve(this.currentUser)
         this.allCurveData = {}
         this.accountStatistics = {}
         ;(res.accounts || []).forEach(account => {
           const id = account.accountId || account.account_id
-          this.allCurveData[id] = account.points || []
-          this.accountStatistics[id] = account.statistics || null
+          // Vue 2 新增属性需 $set,理由同 FactorDashboard.updateHistory。@yutiansut @quantaxis
+          this.$set(this.allCurveData, id, account.points || [])
+          this.$set(this.accountStatistics, id, account.statistics || null)
           if (!this.selectedAccountId) {
             this.selectedAccountId = id
           }
         })
         this.applyTimeFilter()
       } catch (error) {
+        this.loadError = this.$errMsg(error, '加载失败')
         this.$message.error('加载资金曲线失败')
         console.error(error)
       } finally {
@@ -319,15 +340,15 @@ export default {
 
     normalizeStatistics(stats) {
       return {
-        totalProfit: stats.totalProfit || 0,
-        totalProfitRate: stats.totalProfitRate || 0,
-        maxDrawdown: stats.maxDrawdown || 0,
-        maxDrawdownRate: stats.maxDrawdownRate || 0,
-        profitDays: stats.profitDays || 0,
-        lossDays: stats.lossDays || 0,
-        winRate: stats.winRate || 0,
-        avgDailyProfit: stats.avgDailyProfit || 0,
-        sharpeRatio: stats.sharpeRatio || 0
+        totalProfit: Number(stats.totalProfit) || 0,
+        totalProfitRate: Number(stats.totalProfitRate) || 0,
+        maxDrawdown: Number(stats.maxDrawdown) || 0,
+        maxDrawdownRate: Number(stats.maxDrawdownRate) || 0,
+        profitDays: Number(stats.profitDays) || 0,
+        lossDays: Number(stats.lossDays) || 0,
+        winRate: Number(stats.winRate) || 0,
+        avgDailyProfit: Number(stats.avgDailyProfit) || 0,
+        sharpeRatio: Number(stats.sharpeRatio) || 0
       }
     },
 
@@ -427,10 +448,10 @@ export default {
             const item = this.curveData[params[0].dataIndex]
             return `
               ${item.date}<br/>
-              权益: ${item.balance.toLocaleString()}<br/>
-              可用: ${item.available.toLocaleString()}<br/>
-              保证金: ${item.margin.toLocaleString()}<br/>
-              日盈亏: ${item.daily_profit >= 0 ? '+' : ''}${item.daily_profit.toLocaleString()}
+              权益: ${(Number(item.balance) || 0).toLocaleString()}<br/>
+              可用: ${(Number(item.available) || 0).toLocaleString()}<br/>
+              保证金: ${(Number(item.margin) || 0).toLocaleString()}<br/>
+              日盈亏: ${(Number(item.daily_profit) || 0) >= 0 ? '+' : ''}${(Number(item.daily_profit) || 0).toLocaleString()}
             `
           }
         },
@@ -502,7 +523,7 @@ export default {
         item.available.toFixed(2),
         item.margin.toFixed(2),
         item.daily_profit.toFixed(2),
-        (item.daily_profit_rate * 100).toFixed(2) + '%',
+        ((Number(item.daily_profit_rate) || 0) * 100).toFixed(2) + '%',
         item.commission.toFixed(2)
       ])
 
@@ -540,7 +561,13 @@ $sell-color: #52c41a;
 .account-curve-container {
   padding: 20px;
   background: $dark-bg-primary;
-  min-height: calc(100vh - 60px);
+  // ⚠️ 用 --qa-content-h,不要手写 calc(100vh - N)。@yutiansut @quantaxis
+  //    原值 -60px 少算了 content-wrapper 的上下 padding(各 20px):
+  //    真实 chrome = top-header 56 + padding 40 = 96px(有公告条时再 +40)。
+  //    实测本页在无内容可滚时仍有 41px 的死滚动条
+  //    (.content-wrapper 的 scrollHeight - clientHeight = 41)。
+  //    `layout/index.vue:546` 早就写明「各页面请一律用 var(--qa-content-h)」。
+  min-height: var(--qa-content-h, calc(100vh - 96px));
 }
 
 .page-header {
@@ -557,6 +584,33 @@ $sell-color: #52c41a;
 
 .header-controls {
   display: flex;
+  // ⚠️ 必须 `flex:1 1 auto` —— 否则子项的 flex-basis 根本不起作用。
+  //    @yutiansut @quantaxis
+  //
+  //    本容器是 `.page-header`(display:flex)里 `flex:0 1 auto` 的收缩项,
+  //    宽度取自身 max-content。而它自己是**多行 flex 容器**(flex-wrap:wrap),
+  //    Chrome 算多行容器的 max-content = 各项 max-content **直接求和**:
+  //      196(select) + 15(gap) + 221(radio) = 432
+  //    子项的 `flex-basis:440px` **完全不参与**这个求和 —— 所以无论写
+  //    `width:100%` 还是 `flex:1 1 440px`,容器都被定成 432,
+  //    单行需要 440+15+221=676 > 432 ⇒ 换行 ⇒ select 被 432 限住。
+  //    实测两种写法**逐像素相同**(432 / 2 行 / 79px),1920~768 全中招。
+  //    给容器 flex-grow 让它撑到父级剩余空间,basis 才起作用:
+  //    实测 ≥1366 变成 440 / 1 行 / 32px;≤1100 仍换行(那是**正确**的,
+  //    因为 126(标题)+676 确实超宽)。
+  //    ⚠️ 不要改用 `min-width: min(676px, 100%)` —— 768 档会把标题挤成 28px。
+  flex: 1 1 auto;
+  // ⚠️ 窄屏必须允许换行且子项可收缩,否则整行溢出且不可达。
+  //    @yutiansut @quantaxis
+  flex-wrap: wrap;
+  // ⚠️ select 用 `flex:1 1 440px` 而非 `width:100%`。@yutiansut @quantaxis
+  //    `width:100%` 在**固有尺寸阶段按 auto 算** —— el-select 的 max-content
+  //    贡献 196px,本容器是 shrink-to-fit 的 flex 项 ⇒ 宽度定为
+  //    196+15(gap)+221(radio)=432;布局阶段 `width:100%` 再取 432 ⇒
+  //    432+15+221=668 > 432 ⇒ radio 换行,容器由 1 行 32px 变 2 行 79px,
+  //    且 select 实际是 432 而非 440(max-width 永不生效)。1920~768 全中招。
+  //    明确的 flex-basis 不参与那个循环。
+  min-width: 0;
   align-items: center;
   gap: 15px;
 

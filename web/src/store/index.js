@@ -78,6 +78,11 @@ export default new Vuex.Store({
   },
 
   state: {
+    // 系统状态(/api/monitoring/status 的完整响应)@yutiansut @quantaxis
+    // 由 layout 的 15 秒健康检查写入,dashboard 直接读 ——
+    // 此前两处**各自请求同一接口**:layout 拿到 payload 只留一个布尔就丢弃,
+    // dashboard 又取一遍同样的东西(回验实测整页加载 2 次,相隔 1ms)。
+    sysStatus: null,
     // 当前用户 ID
     currentUser: localStorage.getItem('currentUser') || '',
 
@@ -95,6 +100,17 @@ export default new Vuex.Store({
 
     // RBAC: 用户权限列表 @yutiansut @quantaxis
     permissions: JSON.parse(localStorage.getItem('permissions') || '[]'),
+
+    // 监控数据是否已从后端取回一次。@yutiansut @quantaxis
+    //
+    // ⚠️ 存在的理由:`monitoring.accounts` 的初值是三个 `0`,而「尚未加载」
+    // 与「真实的零」在数值上**无法区分**。子代理实测的后果:
+    // dashboard 饼图在首屏画出一张 **33% / 33% / 33% 的等分资金分布** ——
+    // 信心十足但完全虚构。图表原本只有「可显示 / 超出范围」两态,
+    // 缺的正是这第三态。
+    // (为什么不把初值改成 `null`:`monitoring` 下还有 orders/trades/storage
+    //  十几个字段被多处直接参与算术,统一改 null 的波及面远大于加一个标志。)
+    monitoringLoaded: false,
 
     // 系统监控数据
     monitoring: {
@@ -138,6 +154,10 @@ export default new Vuex.Store({
   },
 
   mutations: {
+    SET_SYS_STATUS(state, v) {
+      state.sysStatus = v
+    },
+
     SET_CURRENT_USER(state, userId) {
       state.currentUser = userId
       localStorage.setItem('currentUser', userId)
@@ -163,6 +183,7 @@ export default new Vuex.Store({
     },
 
     SET_MONITORING(state, data) {
+      state.monitoringLoaded = true
       state.monitoring = data
     },
 
@@ -227,13 +248,22 @@ export default new Vuex.Store({
     },
 
     // 用户登出 @yutiansut @quantaxis
-    logout({ commit }) {
+    logout({ commit, dispatch }) {
       commit('SET_TOKEN', '')
       commit('SET_USER_INFO', null)
       commit('SET_CURRENT_USER', '')
       // 清除 RBAC 信息
       commit('SET_ROLES', [])
       commit('SET_PERMISSIONS', [])
+      // ✨ 断开 WebSocket —— 此前登出**不断连接**。@yutiansut @quantaxis
+      //
+      // `websocket/destroyWebSocket`(store/modules/websocket.js:297)一直存在,
+      // 但全仓只有 App.vue 的 `cleanupWebSocket` 会调,而那是组件销毁钩子 ——
+      // 登出走的是 SPA 路由跳转,组件没销毁,钩子不触发。
+      // 后果:登出后连接仍在推 accounts/orders/positions/trades,
+      // 子代理实测另一标签 87 秒内继续收到 196~208 条推送。
+      // 用已有 action,不新增销毁逻辑。
+      dispatch('websocket/destroyWebSocket')
       localStorage.clear()
     },
 
@@ -272,11 +302,22 @@ export default new Vuex.Store({
       }
 
       // 立即执行一次
-      dispatch('fetchMonitoring')
+      // ⚠️ **必须带 `.catch`** —— `fetchMonitoring` 的 catch 里是 `throw error`
+      // (store/index.js:292),所以它**会 reject**。裸 dispatch 丢弃返回值 ⇒
+      // 未捕获的 promise rejection。
+      // 实测(2026-09-06,全接口 500):`/dashboard` 与 `/market-overview` 各抛 1 条
+      // `pageerror: Request failed with status code 500`,栈里全是 axios 内部帧、
+      // 没有应用帧,所以从栈上看不出是这里发起的。
+      // 用户影响为零(拦截器已弹过服务端消息,main.js:162 的全局去重也正确跳过),
+      // 但它**污染错误通道** —— 盯 `pageerror` 的监控从此长期假阳性,
+      // 真正的未捕获错误反而更难被发现。
+      // 这里空 catch 是**有意**的:错误已经被拦截器提示过,这条轮询失败不需要额外动作。
+      // @yutiansut @quantaxis
+      dispatch('fetchMonitoring').catch(() => {})
 
       // 每10秒刷新一次
       const timer = setInterval(() => {
-        dispatch('fetchMonitoring')
+        dispatch('fetchMonitoring').catch(() => {})
       }, 10000)
 
       commit('SET_REFRESH_TIMER', timer)
@@ -292,6 +333,7 @@ export default new Vuex.Store({
   },
 
   getters: {
+    sysStatus: state => state.sysStatus,
     currentUser: state => state.currentUser,
     userInfo: state => state.userInfo,
     token: state => state.token,
@@ -299,11 +341,47 @@ export default new Vuex.Store({
     isAdmin: state => (state.userInfo && state.userInfo.is_admin) || false,
     monitoring: state => state.monitoring,
 
-    // 保证金占用率
+    // 保证金占用率 —— 这是**第二实现**(第一处在 `monitoring/index.vue:237`)
+    // @yutiansut @quantaxis
+    //
+    // 缺字段时原写法给 `NaN%`,而它同时喂 `dashboard/index.vue:51` 的文案
+    // 和 `:60` 的进度条宽度。`width: 'NaN%'` 是**非法 CSS,浏览器直接丢弃** ——
+    // 进度条不是归零,而是**静默冻结在上一个合法值**,比显示 0 更误导。
+    // ✨ 拆成三个:数值 / 显示 / 宽度 —— 三个消费点的正确表示各不相同。
+    // @yutiansut @quantaxis
+    //
+    // 原实现 `Number(x) || 0` 无任何闸,子代理实测两种错法:
+    //   · 真实数据(balance = 1e300)→ 徽标显示 **`0.0%`** —— 把「未知」说成「零」
+    //   · 注入 margin = 1e300 → `.toFixed(1)` 返回 `"1e+300"` → 渲染 **`1e+300%`**
+    // 本 getter 在 store 里(不在 .vue 中),所以那轮 80 处模板扫描没覆盖到。
+    //
+    // 为什么不能统一返回 `--`:`:60` 把它拼进 `width: X%`,
+    // 而 `width:'--%'` 与 `width:'NaN%'` 一样是**非法 CSS,浏览器直接丢弃**,
+    // 进度条不是归零而是**冻结在上一个合法值**——比显示 0 更误导(见上方原注释)。
+    // 所以宽度单独走一条:未知时给 `0%`(零宽是诚实的「画不出来」)。
+
+    /// 数值版:未知返回 `null`。用于阈值比较(`null > 50` 为 false,落到 normal)。
     marginUtilization: state => {
-      const balance = state.monitoring.accounts.total_balance
-      const margin = state.monitoring.accounts.total_margin_used
-      return balance > 0 ? ((margin / balance) * 100).toFixed(1) : '0.0'
+      if (!state.monitoringLoaded) return null   // 未加载 ≠ 0%
+      const acc = (state.monitoring && state.monitoring.accounts) || {}
+      const ok = v => Number.isFinite(v) && Math.abs(v) < 1e15
+      const b = Number(acc.total_balance)
+      const m = Number(acc.total_margin_used)
+      if (!ok(b) || !ok(m) || b <= 0) return null
+      return (m / b) * 100
+    },
+
+    /// 显示版:自带百分号;未知时是 `--`(**不是** `--%`)。
+    marginUtilizationText: (state, getters) => {
+      const v = getters.marginUtilization
+      return v === null ? '--' : v.toFixed(1) + '%'
+    },
+
+    /// 宽度版:未知给 `0%`,并夹到 [0,100] —— 超过 100% 的条会溢出容器。
+    marginUtilizationWidth: (state, getters) => {
+      const v = getters.marginUtilization
+      if (v === null) return '0%'
+      return Math.min(100, Math.max(0, v)).toFixed(1) + '%'
     },
 
     // ==================== RBAC Getters @yutiansut @quantaxis ====================

@@ -21,7 +21,14 @@
       <el-row :gutter="20">
         <el-col :xs="24" :sm="12" :md="8" :lg="6">
           <el-form-item label="选择账户">
-            <el-select v-model="selectedAccountId" placeholder="请选择账户" style="width: 200px" @change="loadStatistics">
+            <!-- 200px 装不下 `ACC_` + 32 位 hex(实测需 305px,硬切 107px 且**无省略号**),
+                 用户无法分辨当前选的是哪个账户。
+                 ⚠️ 必须用**定值**:本表单是 `<el-form :inline="true">`,
+                 `.el-form-item` 与 `.el-form-item__content` 都是 inline-block
+                 (shrink-to-fit),`width:100%` 只等于父级收缩后的 196px,
+                 `max-width` 永远不触发 —— 实测比改前还窄 4px。
+                 @yutiansut @quantaxis -->
+            <el-select v-model="selectedAccountId" placeholder="请选择账户" style="width: 380px" @change="loadStatistics">
               <el-option
                 v-for="account in accounts"
                 :key="account.account_id"
@@ -37,13 +44,13 @@
         <el-col :xs="24" :sm="12" :lg="8">
           <div class="stat-item">
             <div class="stat-label">累计手续费</div>
-            <div class="stat-value danger">{{ statistics.total_commission.toFixed(2) }}</div>
+            <div class="stat-value danger">{{ $num(statistics.total_commission, 2) }}</div>
           </div>
         </el-col>
         <el-col :xs="24" :sm="12" :lg="8">
           <div class="stat-item">
             <div class="stat-label">今日手续费</div>
-            <div class="stat-value warning">{{ statistics.today_commission.toFixed(2) }}</div>
+            <div class="stat-value warning">{{ $num(statistics.today_commission, 2) }}</div>
           </div>
         </el-col>
         <!-- ⚠️ 原来这里还有「本月手续费」和「交易笔数」两张卡,但后端
@@ -67,17 +74,17 @@
              close_today_commission / total。原来的 trade_count / total_volume /
              commission 三列后端一个都没有。@yutiansut @quantaxis -->
         <el-table-column prop="instrument_id" label="合约" min-width="120" show-overflow-tooltip></el-table-column>
-        <el-table-column label="开仓手续费" min-width="110" align="right">
-          <template slot-scope="scope">{{ (scope.row.open_commission || 0).toFixed(2) }}</template>
+        <el-table-column label="开仓手续费" min-width="110" align="right" show-overflow-tooltip>
+          <template slot-scope="scope">{{ $num(scope.row.open_commission, 2) }}</template>
         </el-table-column>
-        <el-table-column label="平仓手续费" min-width="110" align="right">
-          <template slot-scope="scope">{{ (scope.row.close_commission || 0).toFixed(2) }}</template>
+        <el-table-column label="平仓手续费" min-width="110" align="right" show-overflow-tooltip>
+          <template slot-scope="scope">{{ $num(scope.row.close_commission, 2) }}</template>
         </el-table-column>
-        <el-table-column label="平今手续费" min-width="110" align="right">
-          <template slot-scope="scope">{{ (scope.row.close_today_commission || 0).toFixed(2) }}</template>
+        <el-table-column label="平今手续费" min-width="110" align="right" show-overflow-tooltip>
+          <template slot-scope="scope">{{ $num(scope.row.close_today_commission, 2) }}</template>
         </el-table-column>
-        <el-table-column label="合计" min-width="110" align="right">
-          <template slot-scope="scope">{{ (scope.row.total || 0).toFixed(2) }}</template>
+        <el-table-column label="合计" min-width="110" align="right" show-overflow-tooltip>
+          <template slot-scope="scope">{{ $num(scope.row.total, 2) }}</template>
         </el-table-column>
       </el-table>
     </el-card>
@@ -95,6 +102,7 @@
         ></el-input>
       </div>
       <el-table
+        :empty-text="$emptyText(loadError)"
         :data="filteredRates"
         v-loading="loading"
         stripe
@@ -107,36 +115,36 @@
         <el-table-column label="开仓手续费" align="center">
           <el-table-column prop="open_ratio_by_money" label="按金额" min-width="75">
             <template slot-scope="scope">
-              {{ scope.row.open_ratio_by_money > 0 ? (scope.row.open_ratio_by_money * 100).toFixed(4) + '%' : '-' }}
+              {{ scope.row.open_ratio_by_money > 0 ? $pct(scope.row.open_ratio_by_money, 4) : '-' }}
             </template>
           </el-table-column>
           <el-table-column prop="open_ratio_by_volume" label="按手数" min-width="70">
             <template slot-scope="scope">
-              {{ scope.row.open_ratio_by_volume > 0 ? scope.row.open_ratio_by_volume.toFixed(2) + '元/手' : '-' }}
+              {{ (Number(scope.row.open_ratio_by_volume) || 0) > 0 ? $num(scope.row.open_ratio_by_volume, 2) + '元/手' : '-' }}
             </template>
           </el-table-column>
         </el-table-column>
         <el-table-column label="平仓手续费" align="center">
           <el-table-column prop="close_ratio_by_money" label="按金额" min-width="120">
             <template slot-scope="scope">
-              {{ scope.row.close_ratio_by_money > 0 ? (scope.row.close_ratio_by_money * 100).toFixed(4) + '%' : '-' }}
+              {{ scope.row.close_ratio_by_money > 0 ? $pct(scope.row.close_ratio_by_money, 4) : '-' }}
             </template>
           </el-table-column>
           <el-table-column prop="close_ratio_by_volume" label="按手数" min-width="120">
             <template slot-scope="scope">
-              {{ scope.row.close_ratio_by_volume > 0 ? scope.row.close_ratio_by_volume.toFixed(2) + '元/手' : '-' }}
+              {{ (Number(scope.row.close_ratio_by_volume) || 0) > 0 ? $num(scope.row.close_ratio_by_volume, 2) + '元/手' : '-' }}
             </template>
           </el-table-column>
         </el-table-column>
         <el-table-column label="平今手续费" align="center">
           <el-table-column prop="close_today_ratio_by_money" label="按金额" min-width="120">
             <template slot-scope="scope">
-              {{ scope.row.close_today_ratio_by_money > 0 ? (scope.row.close_today_ratio_by_money * 100).toFixed(4) + '%' : '-' }}
+              {{ scope.row.close_today_ratio_by_money > 0 ? $pct(scope.row.close_today_ratio_by_money, 4) : '-' }}
             </template>
           </el-table-column>
           <el-table-column prop="close_today_ratio_by_volume" label="按手数" min-width="120">
             <template slot-scope="scope">
-              {{ scope.row.close_today_ratio_by_volume > 0 ? scope.row.close_today_ratio_by_volume.toFixed(2) + '元/手' : '-' }}
+              {{ (Number(scope.row.close_today_ratio_by_volume) || 0) > 0 ? $num(scope.row.close_today_ratio_by_volume, 2) + '元/手' : '-' }}
             </template>
           </el-table-column>
         </el-table-column>
@@ -157,6 +165,9 @@ export default {
 
   data() {
     return {
+      // 加载失败原因 —— 与「真的没数据」区分开,交给 $emptyText 渲染
+      // @yutiansut @quantaxis
+      loadError: null,
       loading: false,
       accounts: [],
       selectedAccountId: '',
@@ -205,17 +216,19 @@ export default {
           this.loadStatistics()
         }
       } catch (err) {
+        this.loadError = (err && err.message) || '加载失败'
         console.error('加载账户列表失败:', err)
       }
     },
 
     async loadRates() {
-      this.loading = true
+      this.loading = true; this.loadError = null
       try {
         // request 拦截器已解包，直接拿到手续费率数组
         const rates = await getCommissionRates()
         this.rates = rates || []
       } catch (err) {
+        this.loadError = (err && err.message) || '加载失败'
         console.error('加载手续费率失败:', err)
         this.$message.error('加载手续费率失败')
       } finally {
@@ -229,6 +242,7 @@ export default {
         // request 拦截器已解包，直接拿到统计对象
         this.statistics = await getCommissionStatistics(this.selectedAccountId)
       } catch (err) {
+        this.loadError = (err && err.message) || '加载失败'
         console.error('加载手续费统计失败:', err)
       }
     }

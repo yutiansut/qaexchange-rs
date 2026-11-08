@@ -23,19 +23,19 @@
         <el-col :xs="24" :sm="12" :lg="6">
           <div class="stat-card">
             <div class="stat-label">总资产</div>
-            <div class="stat-value">{{ totalBalance.toFixed(2) }}</div>
+            <div class="stat-value">{{ $num(totalBalance, 2) }}</div>
           </div>
         </el-col>
         <el-col :xs="24" :sm="12" :lg="6">
           <div class="stat-card">
             <div class="stat-label">可用资金</div>
-            <div class="stat-value">{{ totalAvailable.toFixed(2) }}</div>
+            <div class="stat-value">{{ $num(totalAvailable, 2) }}</div>
           </div>
         </el-col>
         <el-col :xs="24" :sm="12" :lg="6">
           <div class="stat-card">
             <div class="stat-label">占用保证金</div>
-            <div class="stat-value">{{ totalMargin.toFixed(2) }}</div>
+            <div class="stat-value">{{ $num(totalMargin, 2) }}</div>
           </div>
         </el-col>
       </el-row>
@@ -44,7 +44,20 @@
     <!-- 账户列表 -->
     <el-card class="accounts-card">
       <div v-loading="loading">
+        <!-- 刷新失败但表里还留着上一次的数据 —— 必须持久提示,不能只弹一条 3 秒的 toast。
+             交易系统里「陈旧余额 + 无提示」比空表更危险:用户会照着过期数字做决策。
+             清空列表也不对(那等于丢掉唯一能看的数据),所以保留数据 + 明示状态。
+             @yutiansut @quantaxis -->
+        <el-alert
+          v-if="loadError && accounts.length > 0"
+          :title="'刷新失败，下方为上次成功加载的数据：' + loadError"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px;"
+        />
         <el-table
+          :empty-text="$emptyText(loadError, '暂无账户')"
           :data="accounts"
           style="width: 100%"
           :default-sort="{ prop: 'created_at', order: 'descending' }"
@@ -85,10 +98,9 @@
             prop="balance"
             label="总资产"
             min-width="130"
-            align="right"
-          >
+            align="right" show-overflow-tooltip>
             <template slot-scope="scope">
-              <span class="money">{{ scope.row.balance.toFixed(2) }}</span>
+              <span class="money">{{ $num(scope.row.balance, 2) }}</span>
             </template>
           </el-table-column>
 
@@ -96,10 +108,9 @@
             prop="available"
             label="可用资金"
             min-width="130"
-            align="right"
-          >
+            align="right" show-overflow-tooltip>
             <template slot-scope="scope">
-              <span class="money">{{ scope.row.available.toFixed(2) }}</span>
+              <span class="money">{{ $num(scope.row.available, 2) }}</span>
             </template>
           </el-table-column>
 
@@ -107,10 +118,9 @@
             prop="margin"
             label="占用保证金"
             min-width="130"
-            align="right"
-          >
+            align="right" show-overflow-tooltip>
             <template slot-scope="scope">
-              <span class="money">{{ scope.row.margin.toFixed(2) }}</span>
+              <span class="money">{{ $num(scope.row.margin, 2) }}</span>
             </template>
           </el-table-column>
 
@@ -125,7 +135,7 @@
                 :type="getRiskRatioTag(scope.row.risk_ratio)"
                 size="small"
               >
-                {{ (scope.row.risk_ratio * 100).toFixed(1) }}%
+                {{ $pct(scope.row.risk_ratio, 1) }}
               </el-tag>
             </template>
           </el-table-column>
@@ -143,7 +153,6 @@
           <el-table-column
             label="操作"
             width="180"
-            fixed="right"
           >
             <template slot-scope="scope">
               <el-button
@@ -247,7 +256,7 @@
       :visible.sync="showDepositDialog"
       width="400px"
     >
-      <el-form ref="depositForm" :model="depositForm" label-width="80px">
+      <el-form ref="depositForm" :model="depositForm" :rules="depositRules" label-width="80px">
         <el-form-item label="账户">
           <el-input :value="currentAccount.account_name" disabled />
         </el-form-item>
@@ -262,7 +271,8 @@
       </el-form>
       <div slot="footer">
         <el-button @click="showDepositDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleDepositConfirm">确定</el-button>
+        <el-button type="primary" :loading="submittingCapital"
+                     :disabled="submittingCapital" @click="handleDepositConfirm">确定</el-button>
       </div>
     </el-dialog>
 
@@ -272,7 +282,7 @@
       :visible.sync="showWithdrawDialog"
       width="400px"
     >
-      <el-form ref="withdrawForm" :model="withdrawForm" label-width="80px">
+      <el-form ref="withdrawForm" :model="withdrawForm" :rules="withdrawRules" label-width="80px">
         <el-form-item label="账户">
           <el-input :value="currentAccount.account_name" disabled />
         </el-form-item>
@@ -291,7 +301,8 @@
       </el-form>
       <div slot="footer">
         <el-button @click="showWithdrawDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleWithdrawConfirm">确定</el-button>
+        <el-button type="primary" :loading="submittingCapital"
+                     :disabled="submittingCapital" @click="handleWithdrawConfirm">确定</el-button>
       </div>
     </el-dialog>
   </div>
@@ -306,6 +317,8 @@ export default {
 
   data() {
     return {
+      // 加载失败原因(null = 未失败)
+      loadError: null,
       loading: false,
       accounts: [],
 
@@ -333,12 +346,27 @@ export default {
       // 入金/出金
       showDepositDialog: false,
       showWithdrawDialog: false,
+      // ⚠️ 提交中标志 —— 防重复提交。@yutiansut @quantaxis
+      //
+      // 回验代理实测:入金/出金**没有任何 in-flight 守卫**,
+      // 对话框按钮也没有 :loading/:disabled(实测 disabled=false)。
+      // **300ms 内点 3 次确定 → 发出 3 笔入金请求**(42/374/707ms)。
+      // 出金同形。这是直接的资金风险。
+      submittingCapital: false,
       currentAccount: {},
       depositForm: {
         amount: 10000
       },
       withdrawForm: {
         amount: 1000
+      },
+      // ✨ 补前端校验：清空金额框 el-input-number 写 undefined → JSON 丢键 → 后端 400
+      // `missing field amount`。@yutiansut @quantaxis
+      depositRules: {
+        amount: [{ required: true, message: '请输入入金金额', trigger: 'blur' }]
+      },
+      withdrawRules: {
+        amount: [{ required: true, message: '请输入出金金额', trigger: 'blur' }]
       }
     }
   },
@@ -347,15 +375,15 @@ export default {
     ...mapGetters(['currentUser']),
 
     totalBalance() {
-      return this.accounts.reduce((sum, acc) => sum + acc.balance, 0)
+      return this.accounts.reduce((sum, acc) => sum + (Number(acc.balance) || 0), 0)
     },
 
     totalAvailable() {
-      return this.accounts.reduce((sum, acc) => sum + acc.available, 0)
+      return this.accounts.reduce((sum, acc) => sum + (Number(acc.available) || 0), 0)
     },
 
     totalMargin() {
-      return this.accounts.reduce((sum, acc) => sum + acc.margin, 0)
+      return this.accounts.reduce((sum, acc) => sum + (Number(acc.margin) || 0), 0)
     }
   },
 
@@ -372,10 +400,14 @@ export default {
 
       this.loading = true
       try {
+        this.loadError = null   // 重试先清除上次失败标记
         const res = await getUserAccounts(this.currentUser)
         this.accounts = res.accounts || []
       } catch (error) {
-        this.$message.error('获取账户列表失败：' + (error.message || '未知错误'))
+        // ✨ 区分「加载失败」与「真的没数据」—— 两者原先在界面上完全同形,
+        //    这是「无法显示」反馈的结构性来源。@yutiansut @quantaxis
+        this.loadError = this.$errMsg(error, '加载失败')
+        this.$message.error('获取账户列表失败：' + (this.$errMsg(error, '未知错误')))
       } finally {
         this.loading = false
       }
@@ -393,7 +425,7 @@ export default {
           this.resetCreateForm()
           await this.fetchAccounts()
         } catch (error) {
-          this.$message.error('创建账户失败：' + (error.message || '未知错误'))
+          this.$message.error('创建账户失败：' + (this.$errMsg(error, '未知错误')))
         } finally {
           this.creating = false
         }
@@ -423,6 +455,12 @@ export default {
     },
 
     async handleDepositConfirm() {
+      // ✨ 先过表单校验（空金额在此拦下，不再让畸形请求打到后端换 400）。@yutiansut @quantaxis
+      const valid = await new Promise(res => this.$refs.depositForm.validate(v => res(v)))
+      if (!valid) return
+      // 防重复提交:请求未回来之前直接忽略后续点击。@yutiansut @quantaxis
+      if (this.submittingCapital) return
+      this.submittingCapital = true
       try {
         // ✨ 字段名叫 user_id,但后端要的是 **account_id** @yutiansut @quantaxis
         //
@@ -438,7 +476,11 @@ export default {
         this.showDepositDialog = false
         await this.fetchAccounts()
       } catch (error) {
-        this.$message.error('入金失败：' + (error.message || '未知错误'))
+        this.$message.error('入金失败：' + (this.$errMsg(error, '未知错误')))
+      } finally {
+        // 必须在 finally 复位 —— 只在成功路径复位的话,一次失败后
+        // 用户就再也提交不了了。@yutiansut @quantaxis
+        this.submittingCapital = false
       }
     },
 
@@ -449,6 +491,12 @@ export default {
     },
 
     async handleWithdrawConfirm() {
+      // ✨ 先过表单校验。@yutiansut @quantaxis
+      const valid = await new Promise(res => this.$refs.withdrawForm.validate(v => res(v)))
+      if (!valid) return
+      // 防重复提交:请求未回来之前直接忽略后续点击。@yutiansut @quantaxis
+      if (this.submittingCapital) return
+      this.submittingCapital = true
       try {
         // ✨ 同上:传 account_id 而非登录 UUID @yutiansut @quantaxis
         await withdraw({
@@ -459,7 +507,9 @@ export default {
         this.showWithdrawDialog = false
         await this.fetchAccounts()
       } catch (error) {
-        this.$message.error('出金失败：' + (error.message || '未知错误'))
+        this.$message.error('出金失败：' + (this.$errMsg(error, '未知错误')))
+      } finally {
+        this.submittingCapital = false
       }
     },
 
@@ -511,7 +561,13 @@ $primary-color: #1890ff;
 .my-accounts-container {
   padding: 20px;
   background: $dark-bg-primary;
-  min-height: calc(100vh - 60px);
+  // ⚠️ 用 --qa-content-h,不要手写 calc(100vh - N)。@yutiansut @quantaxis
+  //    原值 -60px 少算了 content-wrapper 的上下 padding(各 20px):
+  //    真实 chrome = top-header 56 + padding 40 = 96px(有公告条时再 +40)。
+  //    实测本页在无内容可滚时仍有 41px 的死滚动条
+  //    (.content-wrapper 的 scrollHeight - clientHeight = 41)。
+  //    `layout/index.vue:546` 早就写明「各页面请一律用 var(--qa-content-h)」。
+  min-height: var(--qa-content-h, calc(100vh - 96px));
 }
 
 .header-card {

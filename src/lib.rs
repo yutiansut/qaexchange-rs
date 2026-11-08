@@ -6,11 +6,55 @@
 //!
 //! - **账户管理**: 开户/入金/出金/查询 (复用 qars::qaaccount)
 //! - **订单系统**: 下单/撤单/订单路由 (复用 qars::qaaccount::QAOrder)
-//! - **撮合引擎**: 价格时间优先/集合竞价/连续交易 (复用 qars::qamarket::matchengine)
+//! - **撮合引擎**: 价格时间优先/连续交易 (复用 qars::qamarket::matchengine)
 //! - **成交回报**: 实时成交推送/账户更新
 //! - **行情推送**: Level1/Level2/逐笔成交 (复用 qars::qadata::broadcast_hub)
-//! - **结算系统**: 日终结算/盯市盈亏/强平处理
-//! - **风控系统**: 盘前风控/持仓限额/自成交防范
+//! - **结算系统**: 盯市盈亏/结算价管理
+//! - **风控系统**: 盘前风控/持仓限额/自成交防范/盘中风险监控
+//!
+//! ## ⚠️ 已实现但**默认不启用**的能力 @yutiansut @quantaxis
+//!
+//! 下面这些代码是完整的、有单测的,但**当前不会自己运行** ——
+//! 之前这份清单把它们与上面的能力并列,读者会以为它们在工作。
+//! 2026-09-05 逐条核过:
+//!
+//! - **集合竞价**:`matching/auction.rs`(304 行,7 个测试)—— **生产零引用**。
+//!   `AuctionCalculator` / `AuctionResult` 全仓无外部调用点。
+//! - **交易时段门禁**:`exchange/trading_session.rs:461 validate_order` 本身完整
+//!   (查交易日历时段的 `allow_order` + 合约 `TradingState`),
+//!   但需 `QAEX_ENFORCE_TRADING_SESSION=1` 才生效 ——
+//!   **默认 7×24 都能下单**,没有午休/收盘之分。
+//! - **日终结算**:`daily_settlement` 只能手动调
+//!   (`POST /api/admin/settlement/execute`),`main.rs` **无任何时间调度**,
+//!   `trading_session` 也不触发它。**当前从未执行过**。
+//!   连带后果:`dailyorders`/`dailytrades` 永不清空(装着全部历史)、
+//!   `position_price` 永不滚动、零手持仓永不回收。
+//! - **自动强平**:`risk_monitor` 的 `set_liquidation_callback` **生产零调用**,
+//!   回调恒为 `None` —— 盘中风控**只告警不强平**。
+//! - **高性能撮合**:`matching/high_perf.rs`(643 行)—— 生产零引用,
+//!   与 qars 的撮合核心重复。
+//!
+//! ## ⚠️ 完全未接线的模块(2026-09-05 核查)@yutiansut @quantaxis
+//!
+//! 下面四个模块**编译进 crate 但生产代码零引用**,合计 **4,780 行 / 44 个测试**。
+//! 它们各自都有测试、写得也认真,只是最后一根线没接:
+//!
+//! | 模块 | 行数 | 测试 | 模块外引用 |
+//! |---|---|---|---|
+//! | [`dsl`] —— 因子表达式解析 | 1,641 | 7 | **0** |
+//! | [`perf`] —— 对象池 / 性能原语 | 1,844 | 27 | 仅被同样死的 `matching::high_perf` 用 |
+//! | [`observability`] —— 指标导出 | 800 | 6 | **0** |
+//! | [`cluster`] —— 一致性哈希 | 495 | 4 | **0** |
+//!
+//! 核查方法:逐个代表符号(`FactorParser` / `AstBuilder` / `PhysicalNode` /
+//! `ConsistentHash` / `init_metrics` / `export_metrics`)查模块外引用,全部 0;
+//! 阳性对照:同法查 `risk` / `market` / `exchange` 得 3 / 32 / 42 次。
+//!
+//! **读到这里的人请注意**:引用它们之前先确认那部分功能是否真的接通,
+//! 不要因为"代码在仓里、还有测试"就假定它在工作。
+//! 处置(删除 / 接线 / 移出主编译单元)见 `tasks/DECISIONS-PENDING.md`。
+//!
+//! 详见 `tasks/DECISIONS-PENDING.md`。
 //! - **对外服务**: WebSocket + HTTP API (基于 Actix-web)
 //!
 //! ## 架构设计
@@ -252,6 +296,29 @@ pub enum ExchangeError {
 
     #[error("Instrument error: {0}")]
     InstrumentError(String),
+
+    /// 资源不存在 —— 映射到 HTTP 404 @yutiansut @quantaxis
+    ///
+    /// 加这个变体是为了**收敛三处各自表达「不存在」的写法**:
+    ///   market/mod.rs:327  MatchingError("Instrument not found: {id}")   → HTTP 500
+    ///   market/mod.rs:472  MatchingError("Instrument not found: {id}")   → HTTP 500
+    ///   instrument_registry.rs:177  InstrumentError("Instrument {id} not found")
+    /// 连措辞都不一致,更关键的是**语义丢失**:HTTP 层只能看到 MatchingError,
+    /// 只好一律 500。实测 `GET /api/market/tick/{不存在的合约}` 返回
+    /// `500 Failed to get tick: Matching error: Instrument not found`,
+    /// 而正确语义是 404。
+    ///
+    /// 为什么不复用 `InstrumentError`:它同时承担「已存在」(instrument_registry.rs:132,
+    /// 重复上市,语义是 409/400)和「不存在」(:177),**变体本身区分不了**,
+    /// 一律映射 404 会把「重复上市」也说成「找不到」。
+    // Display **不加变体前缀** —— 与其他变体不同,这里的消息体本身就是完整句子
+    // ("Instrument not found: X" / "Account not found: X")。加上 "Not found: "
+    // 会得到 `Not found: Instrument not found: X`,再被 handler 的 context 一裹
+    // 就是三重复述。实测旧行为:
+    //   `Account not found: AccountError("Account not found: ZZNOACC9")`
+    // @yutiansut @quantaxis
+    #[error("{0}")]
+    NotFound(String),
 
     #[error("Storage error: {0}")]
     StorageError(String),

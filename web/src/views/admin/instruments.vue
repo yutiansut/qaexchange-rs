@@ -13,16 +13,20 @@
            var(--qa-content-h) 由 layout/index.vue 统一定义 = 100vh - 56(顶栏) - 40(padding),
            有公告条时自动再减 40px; max(260px, ...) 是极短视口下的兜底 -->
       <el-table
+        :empty-text="$emptyText(loadError)"
         ref="instrumentTable"
         :data="instruments"
         border
         stripe
         v-loading="loading"
-        :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 93px))'"
+        :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 134px))'"
       >
         <el-table-column prop="instrument_id" label="合约代码" min-width="120" sortable show-overflow-tooltip></el-table-column>
         <el-table-column prop="instrument_name" label="合约名称" min-width="195"></el-table-column>
-        <el-table-column prop="instrument_type" label="类型" min-width="80" sortable>
+        <!-- show-overflow-tooltip:该列实测被 ellipsis 截断且无提示,hover 也弹不出全文。
+             不加宽是因为这张表在 1280 下已横向溢出,加宽会加剧;
+             tooltip 让内容 hover 可达而不增加列宽。@yutiansut @quantaxis -->
+        <el-table-column prop="instrument_type" label="类型" min-width="80" sortable show-overflow-tooltip>
           <template slot-scope="scope">
             <el-tag :type="getTypeTagType(scope.row.instrument_type)" size="small">
               {{ getTypeName(scope.row.instrument_type) }}
@@ -30,20 +34,20 @@
           </template>
         </el-table-column>
         <el-table-column prop="exchange" label="交易所" min-width="70"></el-table-column>
-        <el-table-column prop="contract_multiplier" label="合约乘数" min-width="100" align="right"></el-table-column>
-        <el-table-column prop="price_tick" label="最小变动价位" min-width="120" align="right">
+        <el-table-column prop="contract_multiplier" label="合约乘数" min-width="100" align="right" show-overflow-tooltip></el-table-column>
+        <el-table-column prop="price_tick" label="最小变动价位" min-width="120" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            {{ scope.row.price_tick.toFixed(2) }}
+            {{ $num(scope.row.price_tick, 2) }}
           </template>
         </el-table-column>
-        <el-table-column prop="margin_rate" label="保证金率" min-width="100" align="right">
+        <el-table-column prop="margin_rate" label="保证金率" min-width="100" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            {{ (scope.row.margin_rate * 100).toFixed(1) }}%
+            {{ $pct(scope.row.margin_rate, 1) }}
           </template>
         </el-table-column>
-        <el-table-column prop="commission_rate" label="手续费率" min-width="100" align="right">
+        <el-table-column prop="commission_rate" label="手续费率" min-width="100" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            {{ (scope.row.commission_rate * 100).toFixed(2) }}%
+            {{ $pct(scope.row.commission_rate, 2) }}
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" min-width="70" sortable>
@@ -55,7 +59,7 @@
         </el-table-column>
         <el-table-column prop="list_date" label="上市日期" min-width="95"></el-table-column>
         <el-table-column prop="expire_date" label="到期日期" min-width="95"></el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="200">
           <template slot-scope="scope">
             <el-button size="mini" type="text" @click="showEditDialog(scope.row)">编辑</el-button>
             <el-button
@@ -250,6 +254,9 @@ export default {
   name: 'Instruments',
   data() {
     return {
+      // 加载失败原因 —— 与「真的没数据」区分开,交给 $emptyText 渲染
+      // @yutiansut @quantaxis
+      loadError: null,
       loading: false,
       instruments: [],
       dialogVisible: false,
@@ -300,12 +307,13 @@ export default {
   methods: {
     // 加载合约列表
     async loadInstruments() {
-      this.loading = true
+      this.loading = true; this.loadError = null
       try {
         // request 拦截器已解包 { success, data, error }，这里直接拿到合约数组
         const instruments = await getAllInstruments()
         this.instruments = instruments || []
       } catch (error) {
+        this.loadError = this.$errMsg(error, '加载失败')
         this.$message.error('加载合约列表失败')
         console.error(error)
       } finally {
@@ -323,7 +331,19 @@ export default {
     // 显示编辑对话框
     showEditDialog(row) {
       this.isEdit = true
-      this.form = { ...row }
+      // ⚠️ 不能整体替换 —— `/api/admin/instruments` 返回的行里**没有 init_price**
+      //    (InstrumentInfo 本来就不存它),整体替换会把 data() 里的默认值冲成
+      //    undefined;而 init_price 是 required 且在编辑态被 disabled,
+      //    用户既填不了、校验又过不去 → 点「确定」时 validate 失败直接 return,
+      //    请求根本不发出,只在输入框下方显示红字,连 toast 都没有。
+      //    合并即可保住默认值。@yutiansut @quantaxis
+      //
+      // ✨ 但合并前必须先 resetForm() —— 否则**上一条记录的残值会漏进这一条**。
+      //    实测:先编辑一条 margin_rate 异常的记录,再编辑一条只有 instrument_id
+      //    的记录,四个费率格仍显示上一条的值。`resetForm()`(:345)是现成的,
+      //    新增对话框(:327)一直在用,这里漏了。@yutiansut @quantaxis
+      this.resetForm()
+      this.form = { ...this.form, ...row }
       this.dialogVisible = true
     },
 
@@ -498,7 +518,13 @@ $primary-color: #1890ff;
 .instruments-container {
   padding: 20px;
   background: $dark-bg-primary;
-  min-height: calc(100vh - 60px);
+  // ⚠️ 用 --qa-content-h,不要手写 calc(100vh - N)。@yutiansut @quantaxis
+  //    原值 -60px 少算了 content-wrapper 的上下 padding(各 20px):
+  //    真实 chrome = top-header 56 + padding 40 = 96px(有公告条时再 +40)。
+  //    实测本页在无内容可滚时仍有 41px 的死滚动条
+  //    (.content-wrapper 的 scrollHeight - clientHeight = 41)。
+  //    `layout/index.vue:546` 早就写明「各页面请一律用 var(--qa-content-h)」。
+  min-height: var(--qa-content-h, calc(100vh - 96px));
 }
 
 .page-header {
@@ -599,6 +625,16 @@ $primary-color: #1890ff;
 }
 
 // 对话框样式
+/* 「上市新合约」弹窗内容高 823px,默认 top:15vh —— 1366×768 下 footer
+   落在折线以下 169px、1280×800 下 143px。wrapper 可滚动所以内容可达
+   (不是"按钮消失"),但用户要先滚才能看到确定/取消。@yutiansut @quantaxis */
+::v-deep .el-dialog {
+  margin-top: 5vh !important;
+}
+::v-deep .el-dialog__body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
 ::v-deep .el-dialog {
   background: $dark-bg-card !important;
   border: 1px solid $dark-border !important;

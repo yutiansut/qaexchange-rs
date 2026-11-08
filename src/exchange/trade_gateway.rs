@@ -3,6 +3,7 @@
 //! 负责处理撮合引擎的成交结果，更新账户，并推送成交回报到客户端
 
 use crate::core::{Order, QA_Account, Trade};
+use crate::core::account_ext::AccountExt;   // safe_risk_ratio @yutiansut @quantaxis
 use crate::exchange::{
     AccountManager, ExchangeIdGenerator, ExchangeOrderRecord, ExchangeTradeRecord,
 };
@@ -19,11 +20,11 @@ use crate::storage::wal::manager::WalManager;
 use crate::storage::wal::record::{WalEntry, WalRecord};
 use crate::ExchangeError;
 use chrono::Utc;
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{bounded, unbounded, Receiver, Sender};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// 成交回报消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +79,13 @@ pub struct OrderStatusNotification {
     pub reason: Option<String>,
 }
 
+/// 诊断旁路通道容量 —— 见 `TradeGateway::new` 的说明
+const NOTIFICATION_TAP_CAPACITY: usize = 8192;
+
+/// 旁路通道因满而丢弃的通知数(仅诊断用,不影响真实投递)
+pub static NOTIFICATION_TAP_DROPPED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// 通知类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Notification {
@@ -116,7 +124,25 @@ pub struct TradeGateway {
     notification_broker: Option<Arc<NotificationBroker>>,
 
     /// DIFF 协议业务快照管理器（零拷贝共享）
-    snapshot_mgr: Option<Arc<SnapshotManager>>,
+    /// ⚠️ 用 `OnceLock` 而不是 `Option` —— 因为它是在 `Arc<TradeGateway>` **已被 clone
+    /// 之后**才设置的,原实现靠 `Arc::as_ptr(..) as *mut TradeGateway` 强改,那是 UB。
+    /// @yutiansut @quantaxis
+    ///
+    /// 原写法(`service/websocket/mod.rs:78`、`main.rs:541`):
+    /// ```ignore
+    /// unsafe {
+    ///     let p = Arc::as_ptr(&trade_gateway) as *mut TradeGateway;
+    ///     (*p).set_snapshot_manager(mgr);      // 安全性注释写着「此时只有一个引用」
+    /// }
+    /// ```
+    /// **那句注释是错的**:`main.rs:364` 早在 178 行之前就把 `trade_gateway.clone()`
+    /// 交给了 `OrderRouter`。`Arc<T>` 只提供共享(不可变)访问,通过裸指针写入
+    /// 违反别名规则;而这两个字段的读取点全在成交/撤单**热路径**上
+    /// (:321 / :434 / :940 / :1695 / :1776 / :1809),跨线程读写即数据竞争。
+    ///
+    /// `OnceLock` 语义正好吻合「启动时设一次、之后只读」:`set(&self)` 不需要 `&mut`,
+    /// 读取 `get()` 无锁,热路径零额外开销。
+    snapshot_mgr: OnceLock<Arc<SnapshotManager>>,
 
     /// WAL 管理器映射（per-instrument: {instrument_id} -> WalManager for orders/trades）
     /// Phase 5: 存储分离 - 交易所内部数据
@@ -133,12 +159,45 @@ pub struct TradeGateway {
     wal_root: String,
 
     /// 市场数据服务（用于更新快照统计）
-    market_data_service: Option<Arc<crate::market::MarketDataService>>,
+    /// 同 `snapshot_mgr`:启动时设一次、热路径只读。@yutiansut @quantaxis
+    market_data_service: OnceLock<Arc<crate::market::MarketDataService>>,
+
+    /// 交易所单号(router order_id)→ 客户端编号(DIFF insert_order 的 order_id)。
+    /// DIFF `trade.<account>.orders/trades` 的键用客户端编号(DIFF/TqSdk 惯例,
+    /// hft_maker 与 QIFI 对账也按它);没给客户端编号的订单仍用交易所单号。@yutiansut @quantaxis
+    client_order_ids: DashMap<String, String>,
+
+    /// 每个账户的回报序号(EIFI §6 序号水位线):`trade.<account>.orders/trades` 每个补丁 +1
+    diff_seqno: DashMap<String, u64>,
+}
+
+/// 成交后应写入的 `last_msg`;已有非空值时返回 `None`(不覆盖)。@yutiansut @quantaxis
+///
+/// QIFI 里「已撤单」与「全部成交」的 `status` 同为 `FINISHED`,
+/// 区分信息只在 `last_msg`。取值与 `diff_messages.rs:363-365` 的契约一致。
+fn fill_last_msg(current: &str, volume_left: f64) -> Option<String> {
+    if !current.is_empty() {
+        return None;
+    }
+    Some(if volume_left <= 0.0 {
+        "全部成交".to_string()
+    } else {
+        "部分成交".to_string()
+    })
 }
 
 impl TradeGateway {
     pub fn new(account_mgr: Arc<AccountManager>) -> Self {
-        let (trade_sender, trade_receiver) = unbounded();
+        // ✨ 有界 —— 这条通道在生产里没有消费者 @yutiansut @quantaxis
+        //
+        // `get_receiver()`(唯一的排空入口)只被 2 个测试调用,生产零调用。
+        // 而 `send_notification` 有 9 个生产调用点(每笔成交/每次委托状态变化/
+        // 每次账户更新),原先用 unbounded() 就是只进不出的黑洞:压测下
+        // ~25 万单/小时 × 数条通知,全部永久驻留内存。
+        //
+        // 真实投递靠后面 4 条路径(per-user / global / global_tokio / broker)。
+        // 这条只是测试与诊断用的旁路 tap,因此改为有界 + 满则丢弃。
+        let (trade_sender, trade_receiver) = bounded(NOTIFICATION_TAP_CAPACITY);
 
         Self {
             account_mgr,
@@ -150,12 +209,161 @@ impl TradeGateway {
             trade_seq: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             id_generator: Arc::new(ExchangeIdGenerator::new()),
             notification_broker: None,
-            snapshot_mgr: None,
+            snapshot_mgr: OnceLock::new(),
             instrument_wal_managers: DashMap::new(),
             account_wal_managers: DashMap::new(),
             wal_root: "./data/wal".to_string(), // 默认 WAL 根目录
             trade_recorder: None,
-            market_data_service: None,
+            market_data_service: OnceLock::new(),
+            client_order_ids: DashMap::new(),
+            diff_seqno: DashMap::new(),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ✨ DIFF 交易回报:`trade.<account_id>.{orders,trades,positions,accounts}` = QIFI 切片
+    // (2026-11-08,hft_maker 接入;依据 qaultraoms docs/EIFI.md §4/§5/§6/§7.3)@yutiansut @quantaxis
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// 登记客户端编号(DIFF insert_order 的 order_id)
+    pub fn register_client_order_id(&self, exchange_order_id: &str, client_order_id: &str) {
+        self.client_order_ids
+            .insert(exchange_order_id.to_string(), client_order_id.to_string());
+    }
+
+    /// DIFF 订单键:有客户端编号用客户端编号,否则用交易所单号
+    pub fn diff_order_key(&self, exchange_order_id: &str) -> String {
+        self.client_order_ids
+            .get(exchange_order_id)
+            .map(|e| e.value().clone())
+            .unwrap_or_else(|| exchange_order_id.to_string())
+    }
+
+    /// 合约所属交易所(取合约配置)。订单/成交路径上的 `exchange_id` 是占位串 "EXCHANGE",
+    /// qars 持仓的 exchange_id 是空串 —— QIFI 视图一律以合约配置为准。@yutiansut @quantaxis
+    pub fn exchange_of(&self, instrument_id: &str, fallback: &str) -> String {
+        self.market_data_service
+            .get()
+            .and_then(|m| m.get_instrument_config(instrument_id).map(|c| c.exchange_id.clone()))
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| {
+                if fallback.is_empty() || fallback == "EXCHANGE" { String::new() } else { fallback.to_string() }
+            })
+    }
+
+    /// 把 `trade.<account_id>.<section>.<key> = value` **同步**推入截面。
+    ///
+    /// - 按主题扇出:账户 ID(按账户 ID 连接的会话)+ 属主用户(按真实 user_id 连接的会话),
+    ///   绑定了其中任一主题的**每条连接各收一份**(同一用户开行情/交易两条连接都要收到回报;
+    ///   同时绑定两个主题的连接只收一份)。同一用户名下多个账户持同一合约时,嵌在账户下就不会互相覆盖。
+    /// - `orders` / `trades` 段写入账户内单调的 `seqno`(EIFI §6 序号水位线)。
+    /// - **不取任何账户锁**(属主从 metadata 取),可在持账户写锁时调用。
+    pub fn publish_trade_section(
+        &self,
+        account_id: &str,
+        section: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) {
+        self.publish_trade_section_to(None, account_id, section, key, value);
+    }
+
+    /// 同 `publish_trade_section`;`conn = Some(连接)` 时**只推给这条连接**
+    /// (登录时给新连接补当前状态,不必让同用户的其他连接再收一遍)。@yutiansut @quantaxis
+    pub fn publish_trade_section_to(
+        &self,
+        conn: Option<&str>,
+        account_id: &str,
+        section: &str,
+        key: &str,
+        mut value: serde_json::Value,
+    ) {
+        let Some(snapshot_mgr) = self.snapshot_mgr.get() else { return };
+        if section == "orders" || section == "trades" {
+            let seq = {
+                let mut e = self.diff_seqno.entry(account_id.to_string()).or_insert(0);
+                *e += 1;
+                *e
+            };
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("seqno".to_string(), serde_json::json!(seq));
+            }
+        }
+        // 主题上没有连接就不构造补丁 —— 之后连上的会话由登录初始快照补齐当前状态
+        // (`publish_account_views_to` + 活单,见 DiffHandler 登录分支)。@yutiansut @quantaxis
+        let owner = self.account_mgr.get_account_owner(account_id);
+        let mut topics: Vec<&str> = vec![account_id];
+        if let Some(o) = owner.as_deref().filter(|o| *o != account_id) {
+            topics.push(o);
+        }
+        if conn.is_none() && !topics.iter().any(|t| snapshot_mgr.has_subscribers(t)) {
+            return;
+        }
+        let patch = serde_json::json!({
+            "trade": { account_id: { section: { key: value } } }
+        });
+        match conn {
+            Some(c) => {
+                snapshot_mgr.push_to_connection(c, patch);
+            }
+            None => {
+                snapshot_mgr.push_patch_topics(&topics, patch);
+            }
+        }
+    }
+
+    /// 旧格式(顶层 orders/trades/accounts)补丁只有按账户 ID 连接的会话读得到 ——
+    /// 账户主题上没有连接就不推(否则 80 个走 HTTP 的仿真账户每个回报都要白构造一次)。
+    fn legacy_snapshot_active(&self, account_id: &str) -> bool {
+        self.snapshot_mgr
+            .get()
+            .map_or(false, |m| m.has_subscribers(account_id))
+    }
+
+    /// 账户的 DIFF 标准视图:`accounts.CNY`(QIFI Account,已按规范口径校正)与
+    /// `positions.<EXCHANGE.INSTRUMENT>`(QIFI Position)。调用方需持账户写锁
+    /// (`get_qifi_position` / `get_accountmessage` 要 &mut)。
+    fn account_views(
+        &self,
+        acc: &mut crate::QA_Account,
+    ) -> Vec<(&'static str, String, serde_json::Value)> {
+        let exch_of = |inst: &str| -> String { self.exchange_of(inst, "") };
+        let mut out: Vec<(&'static str, String, serde_json::Value)> = acc
+            .hold
+            .values_mut()
+            .map(|pos| {
+                let mut q = pos.get_qifi_position();
+                if q.exchange_id.is_empty() {
+                    q.exchange_id = exch_of(&q.instrument_id);
+                }
+                let key = if q.exchange_id.is_empty() {
+                    q.instrument_id.clone()
+                } else {
+                    format!("{}.{}", q.exchange_id, q.instrument_id)
+                };
+                ("positions", key, serde_json::to_value(&q).unwrap_or_default())
+            })
+            .collect();
+        let mut qacc = acc.get_accountmessage();
+        crate::exchange::account_mgr::conform_qifi_account(&mut qacc);
+        out.push(("accounts", "CNY".to_string(), serde_json::to_value(&qacc).unwrap_or_default()));
+        out
+    }
+
+    /// 登录初始快照用:按 DIFF 标准推一次某账户的 accounts / positions。
+    pub fn publish_account_views(&self, account_id: &str) {
+        self.publish_account_views_to(None, account_id);
+    }
+
+    /// 同 `publish_account_views`;`conn = Some(连接)` 时只推给这条连接(登录初始快照)
+    pub fn publish_account_views_to(&self, conn: Option<&str>, account_id: &str) {
+        let Ok(account) = self.account_mgr.get_account(account_id) else { return };
+        let views = {
+            let mut acc = account.write();
+            self.account_views(&mut acc)
+        };
+        for (section, key, val) in views {
+            self.publish_trade_section_to(conn, account_id, section, &key, val);
         }
     }
 
@@ -169,11 +377,14 @@ impl TradeGateway {
     }
 
     /// 设置市场数据服务（用于更新快照统计）
+    /// 同 `set_snapshot_manager`:`OnceLock` 只要 `&self`,调用方不必再用 UB 写法。
     pub fn set_market_data_service(
-        &mut self,
+        &self,
         market_data_service: Arc<crate::market::MarketDataService>,
     ) {
-        self.market_data_service = Some(market_data_service);
+        if self.market_data_service.set(market_data_service).is_err() {
+            log::warn!("MarketDataService 已设置过,本次调用被忽略");
+        }
     }
 
     /// 设置 WAL 根目录 (Phase 5)
@@ -194,13 +405,17 @@ impl TradeGateway {
     }
 
     /// 设置 DIFF 快照管理器（用于 DIFF 协议实时推送）
-    pub fn set_snapshot_manager(&mut self, snapshot_mgr: Arc<SnapshotManager>) {
-        self.snapshot_mgr = Some(snapshot_mgr);
+    /// 设置 SnapshotManager(启动时一次)。重复设置会被忽略并告警 —— 不再需要 `&mut self`,
+    /// 因此调用方**不必**再用 `Arc::as_ptr(..) as *mut` 那套 UB 写法。@yutiansut @quantaxis
+    pub fn set_snapshot_manager(&self, snapshot_mgr: Arc<SnapshotManager>) {
+        if self.snapshot_mgr.set(snapshot_mgr).is_err() {
+            log::warn!("SnapshotManager 已设置过,本次调用被忽略(启动路径应只设一次)");
+        }
     }
 
     /// 获取 DIFF 快照管理器
     pub fn snapshot_manager(&self) -> Option<&Arc<SnapshotManager>> {
-        self.snapshot_mgr.as_ref()
+        self.snapshot_mgr.get()
     }
 
     /// 处理撮合结果 (已废弃 - OrderRouter 直接调用 handle_filled/handle_partially_filled)
@@ -248,6 +463,7 @@ impl TradeGateway {
             price,
             volume,
             qa_order_id,
+            "", // 旧路径没有交易所成交号
         )?;
 
         // 2. 生成成交回报
@@ -286,7 +502,7 @@ impl TradeGateway {
         self.push_account_update(user_id)?;
 
         // 6. DIFF 协议：推送成交和订单状态 patch（如果设置了 SnapshotManager）
-        if let Some(snapshot_mgr) = &self.snapshot_mgr {
+        if let Some(snapshot_mgr) = self.snapshot_mgr.get() {
             let trade_patch = serde_json::json!({
                 "trades": {
                     trade_notification.trade_id.clone(): {
@@ -323,7 +539,7 @@ impl TradeGateway {
             });
         }
 
-        log::info!(
+        log::debug!(
             "Trade executed for order {}: {} @ {} x {} | status={}, volume_left={}/{}",
             order_id,
             instrument_id,
@@ -361,6 +577,7 @@ impl TradeGateway {
             price,
             volume,
             qa_order_id,
+            "", // 旧路径没有交易所成交号
         )?;
 
         // 2. 生成成交回报
@@ -399,7 +616,7 @@ impl TradeGateway {
         self.push_account_update(user_id)?;
 
         // 6. DIFF 协议：推送成交和订单状态 patch（如果设置了 SnapshotManager）
-        if let Some(snapshot_mgr) = &self.snapshot_mgr {
+        if let Some(snapshot_mgr) = self.snapshot_mgr.get() {
             let trade_patch = serde_json::json!({
                 "trades": {
                     trade_notification.trade_id.clone(): {
@@ -436,7 +653,7 @@ impl TradeGateway {
             });
         }
 
-        log::info!(
+        log::debug!(
             "Trade executed for order {}: {} @ {} x {} | status={}, volume_left={}/{}",
             order_id,
             instrument_id,
@@ -585,17 +802,8 @@ impl TradeGateway {
             exchange: WalRecord::to_fixed_array_16(exchange),
             instrument: WalRecord::to_fixed_array_16(instrument_id),
             exchange_order_id,
-            direction: match direction {
-                "BUY" => 0,
-                "SELL" => 1,
-                _ => 0,
-            },
-            offset: match offset {
-                "OPEN" => 0,
-                "CLOSE" => 1,
-                "CLOSETODAY" => 2,
-                _ => 0,
-            },
+            direction: WalRecord::encode_direction(direction),
+            offset: WalRecord::encode_offset(offset),
             price_type: match price_type {
                 "LIMIT" => 0,
                 "MARKET" => 1,
@@ -657,17 +865,8 @@ impl TradeGateway {
 
         // Phase 14: 写入订单状态更新到 WAL @yutiansut @quantaxis
         // 订单接受，状态=0 (ALIVE)
-        let direction_u8 = match direction {
-            "BUY" => 0,
-            "SELL" => 1,
-            _ => 0,
-        };
-        let offset_u8 = match offset {
-            "OPEN" => 0,
-            "CLOSE" => 1,
-            "CLOSETODAY" => 2,
-            _ => 0,
-        };
+        let direction_u8 = WalRecord::encode_direction(direction);
+        let offset_u8 = WalRecord::encode_offset(offset);
 
         // 获取当前冻结保证金（从账户中读取）
         let frozen_margin = if let Ok(account) = self.account_mgr.get_account(user_id) {
@@ -698,7 +897,7 @@ impl TradeGateway {
             log::error!("Failed to write OrderStatusUpdate WAL for accepted order: {}", e);
         }
 
-        log::info!(
+        log::debug!(
             "Order accepted: exchange_order_id={}, instrument={}, user={}, order_id={}",
             exchange_order_id,
             instrument_id,
@@ -749,17 +948,8 @@ impl TradeGateway {
 
         // Phase 14: 写入订单状态更新到 WAL @yutiansut @quantaxis
         // 订单拒绝，状态=3 (REJECTED)
-        let direction_u8 = match direction {
-            "BUY" => 0,
-            "SELL" => 1,
-            _ => 0,
-        };
-        let offset_u8 = match offset {
-            "OPEN" => 0,
-            "CLOSE" => 1,
-            "CLOSETODAY" => 2,
-            _ => 0,
-        };
+        let direction_u8 = WalRecord::encode_direction(direction);
+        let offset_u8 = WalRecord::encode_offset(offset);
 
         if let Err(e) = self.write_order_status_update(
             order_id, // qars 内部订单ID
@@ -875,7 +1065,9 @@ impl TradeGateway {
         // taker 是主动方（新下单的一方），maker 是被动方（挂在订单簿上的一方）
         if is_taker {
             if let Some(recorder) = &self.trade_recorder {
-                let trading_day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                // 成交的交易日必须随交易所本地日历,见 settlement.rs:615 的说明。
+                // @yutiansut @quantaxis
+                let trading_day = chrono::Local::now().format("%Y-%m-%d").to_string();
 
                 // 根据 direction 确定买卖方的 user_id
                 let (buy_user_id, sell_user_id) = match direction {
@@ -918,8 +1110,8 @@ impl TradeGateway {
                     trading_day,
                     // 用 qars 的权威公式,不复制费率 —— `preset` 里带 unit_table,
                     // 手写 `price * volume * rate` 必然漏合约乘数。@yutiansut @quantaxis
-                    qars::qaaccount::marketpreset::MarketPreset::global()
-                        .get(instrument_id)
+                    // 生效费率 = qars 预设 + 按合约覆盖(core::account_ext)
+                    crate::core::account_ext::effective_preset(instrument_id)
                         .calc_commission(price, volume),
                 );
             }
@@ -930,7 +1122,7 @@ impl TradeGateway {
         // 更新快照生成器的成交统计
         // ✨ 只在 taker 侧做:本函数对买卖双方各调用一次,不设门会双计 @yutiansut @quantaxis
         if is_taker {
-        if let Some(mds) = &self.market_data_service {
+        if let Some(mds) = self.market_data_service.get() {
             let turnover = price * volume;
             mds.update_trade_stats(instrument_id, volume as i64, turnover);
             let dir_str = if direction.eq_ignore_ascii_case("BUY") { "buy" } else { "sell" };
@@ -956,9 +1148,10 @@ impl TradeGateway {
             price,
             volume,
             qa_order_id,
+            &trade_id.to_string(), // 撮合成交号 → QIFI exchange_trade_id
         )?;
 
-        log::info!("✅ Account updated after trade: order_id={}, status={}, volume_left={}",
+        log::debug!("✅ Account updated after trade: order_id={}, status={}, volume_left={}",
             order_id, order_status, volume_left);
 
         // Phase 14: 写入订单状态更新到 WAL @yutiansut @quantaxis
@@ -968,17 +1161,8 @@ impl TradeGateway {
         } else {
             4 // PARTIALLY_FILLED (部分成交)
         };
-        let direction_u8 = match direction {
-            "BUY" => 0,
-            "SELL" => 1,
-            _ => 0,
-        };
-        let offset_u8 = match offset {
-            "OPEN" => 0,
-            "CLOSE" => 1,
-            "CLOSETODAY" => 2,
-            _ => 0,
-        };
+        let direction_u8 = WalRecord::encode_direction(direction);
+        let offset_u8 = WalRecord::encode_offset(offset);
 
         // 获取当前冻结保证金（从账户中读取）
         let frozen_margin = if let Ok(account) = self.account_mgr.get_account(user_id) {
@@ -1020,9 +1204,42 @@ impl TradeGateway {
         );
 
         self.emit_trade_notification(trade_notification)?;
+
+        // ✨ DIFF 标准成交:`trade.<account>.trades.<order_key|exchange_trade_id>` = QIFI Trade
+        //    键是 EIFI §6 / QIFI 规范的 `order_id|交易所成交号`;成交补丁**先于**使订单 FINISHED
+        //    的订单补丁(订单补丁由 order_router 在本函数返回后推送)。@yutiansut @quantaxis
+        //    手续费用 qars 权威公式(与 TradeRecorder 同一个),不用 create_trade_notification
+        //    里那个漏了合约乘数的占位值。
+        {
+            let order_key = self.diff_order_key(order_id);
+            let exchange_trade_id = trade_id.to_string();
+            let key = format!("{}|{}", order_key, exchange_trade_id);
+            let commission = crate::core::account_ext::effective_preset(instrument_id)
+                .calc_commission(price, volume);
+            self.publish_trade_section(
+                user_id,
+                "trades",
+                &key,
+                serde_json::json!({
+                    "user_id": user_id,
+                    "trade_id": key,
+                    "exchange_id": self.exchange_of(instrument_id, exchange),
+                    "instrument_id": instrument_id,
+                    "order_id": order_key,
+                    "exchange_order_id": order_id,
+                    "exchange_trade_id": exchange_trade_id,
+                    "direction": direction,
+                    "offset": offset,
+                    "volume": volume,
+                    "price": price,
+                    "trade_date_time": Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                    "commission": commission,
+                }),
+            );
+        }
         self.push_account_update(user_id)?;
 
-        log::info!(
+        log::debug!(
             "Trade executed: trade_id={}, exchange_order_id={}, instrument={}, volume={}, price={}",
             trade_id,
             exchange_order_id,
@@ -1056,23 +1273,75 @@ impl TradeGateway {
 
         // ✨ 释放冻结资金：调用 qars cancel_order @yutiansut @quantaxis
         // user_id 在 qaexchange 中实际是 account_id
-        if let Ok(account) = self.account_mgr.get_account(user_id) {
+        //
+        // ⚠️ 空 qa_order_id 必须提前挡掉,否则会 **panic 掉整个线程**。
+        // @yutiansut @quantaxis
+        //
+        // `order_router.rs:1586` 取 qa_order_id 时,订单不在 `self.orders` 就回退成
+        // `String::new()`;而下面的 `acc.cancel_order()` 是 qars 的
+        // `QA_Account::cancel_order`(qars2 `account.rs:1227`),它内部是
+        // `self.dailyorders.get_mut(order_id).expect("Order not found for order_id")`
+        // —— 空串必然取不到,**直接 panic**。
+        // 下面用 `match ... { Ok / Err }` 接,但 `match` 接不住 panic。
+        //
+        // 实测可达性低(`self.orders` 全仓无 remove 点,`grep -c 'orders.remove'` = 0),
+        // 重启路径也安全(`restore_orders_from_accounts` 明确设了
+        // `qa_order_id: order_id.clone()`)。但这是纵深防御:撤单回报里
+        // 一个空 ID 不该能击穿到 panic。
+        if qa_order_id.is_empty() {
+            log::warn!(
+                "撤单回报的 qa_order_id 为空,跳过 qars 冻结资金释放: account={}, exchange_order_id={}",
+                user_id, exchange_order_id
+            );
+        } else if let Ok(account) = self.account_mgr.get_account(user_id) {
             let mut acc = account.write();
 
-            // Debug: 打印frozen HashMap中的所有order_id @yutiansut @quantaxis
-            let frozen_keys: Vec<String> = acc.frozen.keys().cloned().collect();
-            log::info!(
-                "🔍 [DEBUG] Attempting to release frozen funds: qa_order_id={}, account={}, frozen_keys={:?}",
+            // 调试日志:级别降为 debug,且 **克隆放进宏内惰性求值**。@yutiansut @quantaxis
+            //
+            // 原写法有两个问题:① 挂在 `log::info!` 上,而它是每笔撤单都打
+            //(快照里有 326,913 笔撤单)—— 正常运行会刷屏;
+            // ② `frozen_keys` 在宏**之外**先 collect,即使日志被级别过滤掉,
+            // 这次 Vec<String> 分配也照样发生 —— 撤单热路径上的无谓开销。
+            // 放进宏内后,debug 未开启时 `frozen` 一次都不会被遍历。
+            log::debug!(
+                "Attempting to release frozen funds: qa_order_id={}, account={}, frozen_keys={:?}",
                 qa_order_id,
                 user_id,
-                frozen_keys
+                acc.frozen.keys().collect::<Vec<_>>()
             );
 
             let money_before = acc.money;
             // 使用作用域限制借用范围
-            let cancel_success = {
+            let cancel_success = if !acc.dailyorders.contains_key(qa_order_id) {
+                // 同上一段空 ID 的道理:委托已不在当日委托里(日终结算清过),qars
+                // `cancel_order` 的 expect 会 panic(2026-11-08 隔离实例「结算 → 撤单」实测进程退出)。
+                // 日终流程先撤光活单再结算,这里是纵深防御。@yutiansut @quantaxis
+                log::warn!(
+                    "撤单回报对应的委托不在账户当日委托里(已日终结算?),跳过 qars 撤单: account={}, qa_order_id={}",
+                    user_id, qa_order_id
+                );
+                None
+            } else {
                 match acc.cancel_order(qa_order_id) {
-                    Ok(cancelled_order) => Some(cancelled_order.order_id.clone()),
+                    Ok(cancelled_order) => {
+                        // ✨ 填 `last_msg` —— QIFI 靠它区分「已撤单」与「全部成交」。
+                        // @yutiansut @quantaxis
+                        //
+                        // CLAUDE.md 的 QIFI 样本里,两笔订单 `status` 同为 `FINISHED`,
+                        // 区别只在 `last_msg`(「已撤单」/「全部成交」)与 `volume_left`。
+                        // 而本库实测 **410,380 笔订单的 `last_msg` 全是空串** ——
+                        // 其中 326,915 笔是撤单、82,781 笔是全成,
+                        // 在 QIFI 结构里**无法区分**,只能靠 `volume_left` 倒推。
+                        //
+                        // 外部消费者(Mongo / 其它系统 / DIFF 客户端)拿到的就是没有原因的
+                        // FINISHED。`diff_messages.rs:364-365` 把这个契约写进了文档和测试,
+                        // 但那个测试是**手写 JSON 字面量再断言**,测的是 serde 往返,
+                        // 不是系统行为 —— 于是契约「有测试」却从未被生产满足。
+                        //
+                        // `cancel_order` 返回的是 `&mut Order`,在这里填即可,不必改 qars。
+                        cancelled_order.last_msg = "已撤单".to_string();
+                        Some(cancelled_order.order_id.clone())
+                    }
                     Err(_) => None,
                 }
             };
@@ -1080,7 +1349,7 @@ impl TradeGateway {
             let money_after = acc.money;
 
             if let Some(released_order_id) = cancel_success {
-                log::info!(
+                log::debug!(
                     "✅ Frozen funds released for cancelled order: qa_order_id={}, account={}, released_order={}, money_before={}, money_after={}",
                     qa_order_id,
                     user_id,
@@ -1090,10 +1359,14 @@ impl TradeGateway {
                 );
             } else {
                 // 可能订单已经成交或已被取消，frozen 中不存在
+                // 失败分支才需要打出 frozen 的键用于诊断 —— 同样在宏内求值。
+                // 此处读的是「撤单尝试之后」的键集,但失败恰恰意味着这个 order_id
+                // 本就不在 frozen 里、cancel_order 也没能移除它,所以与尝试前等价。
+                // @yutiansut @quantaxis
                 log::warn!(
                     "⚠️ Failed to release frozen funds: qa_order_id={} NOT FOUND in frozen HashMap (keys: {:?}), account={}",
                     qa_order_id,
-                    frozen_keys,
+                    acc.frozen.keys().collect::<Vec<_>>(),
                     user_id
                 );
             }
@@ -1124,17 +1397,8 @@ impl TradeGateway {
 
         // Phase 14: 写入订单状态更新到 WAL @yutiansut @quantaxis
         // 撤单成功，状态=2 (CANCELLED)
-        let direction_u8 = match direction {
-            "BUY" => 0,
-            "SELL" => 1,
-            _ => 0,
-        };
-        let offset_u8 = match offset {
-            "OPEN" => 0,
-            "CLOSE" => 1,
-            "CLOSETODAY" => 2,
-            _ => 0,
-        };
+        let direction_u8 = WalRecord::encode_direction(direction);
+        let offset_u8 = WalRecord::encode_offset(offset);
 
         if let Err(e) = self.write_order_status_update(
             qa_order_id, // 使用 qars 内部订单ID
@@ -1155,7 +1419,7 @@ impl TradeGateway {
             log::error!("Failed to write OrderStatusUpdate WAL for cancelled order: {}", e);
         }
 
-        log::info!(
+        log::debug!(
             "Cancel accepted: exchange_order_id={}, instrument={}, user={}, order_id={}, qa_order_id={}",
             exchange_order_id,
             instrument_id,
@@ -1226,9 +1490,13 @@ impl TradeGateway {
         price: f64,
         volume: f64,
         qa_order_id: &str, // qars 内部订单ID（非交易所订单ID）
+        exchange_trade_id: &str, // 交易所成交号(写进 QIFI trades;旧路径无成交号传 "")
     ) -> Result<(String, f64, f64), ExchangeError> {
         log::debug!("🔧 update_account called: account={}, instrument={}, {}  {}, price={}, volume={}, qa_order_id={}",
             account_id, instrument_id, direction, offset, price, volume, qa_order_id);
+
+        // 合约所属交易所的兜底值:锁外取(只读合约配置);优先用委托上已回填的值(见下方)
+        let exchange_id_cfg = self.exchange_of(instrument_id, "");
 
         // ✨ 修复：使用 get_account 而非 get_default_account，因为传入的是 account_id
         let account = self.account_mgr.get_account(account_id)?;
@@ -1251,8 +1519,9 @@ impl TradeGateway {
             );
         }
 
-        // 生成时间戳字符串
-        let datetime = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        // 生成时间戳字符串 —— 必须是**北京墙钟**:qars `parse_dt_ns` 按 UTC+8 解析再减 8h
+        // (qars2 account.rs:455)。原来给 UTC 墙钟 ⇒ QIFI 成交 trade_date_time 恒早 8 小时。@yutiansut @quantaxis
+        let datetime = crate::core::account_ext::beijing_now_str();
 
         // 计算 towards (遵循 qars 的定义)
         let towards = match (direction, offset) {
@@ -1262,6 +1531,10 @@ impl TradeGateway {
             ("SELL", "CLOSE") => -3, // 卖平 (平多) = -3 ✅
             ("BUY", "CLOSETODAY") => 4,
             ("SELL", "CLOSETODAY") => -4,
+            // 平昨与下单侧 `calculate_towards` 同口径(order_router.rs:2545-2546)。缺这两支时,
+            // CLOSEYESTERDAY 单在撮合簿里已成交、这里却报错返回 —— 账户不入账,同批其余成交也被跳过。@yutiansut @quantaxis
+            ("BUY", "CLOSEYESTERDAY") => 3,
+            ("SELL", "CLOSEYESTERDAY") => -3,
             _ => {
                 return Err(ExchangeError::OrderError(format!(
                     "Invalid direction/offset: {}/{}",
@@ -1278,6 +1551,20 @@ impl TradeGateway {
             "🔧   Calling receive_deal_sim with qa_order_id={}",
             qa_order_id
         );
+        // ⚠️ 委托不在账户当日委托里就不能交给 qars:`receive_deal_sim` 内部
+        // `dailyorders.get_mut(..).unwrap()`(qars2 account.rs:1681),panic=abort 下整个进程退出。
+        // 正常路径不会走到这里 —— 日终先撤光活单再结算(`SettlementEngine::run_end_of_day`);
+        // 这是纵深防御:一笔对不上的成交只记错误、不入账,不能拖垮整个交易所。@yutiansut @quantaxis
+        if !acc.dailyorders.contains_key(qa_order_id) {
+            log::error!(
+                "成交对应的委托不在账户当日委托里(已日终结算?),不入账: account={}, qa_order_id={}, {} {} {}@{}",
+                account_id, qa_order_id, instrument_id, direction, volume, price
+            );
+            return Err(ExchangeError::OrderError(format!(
+                "Order {} not in account {} daily orders",
+                qa_order_id, account_id
+            )));
+        }
         acc.receive_deal_sim(
             instrument_id.to_string(),
             volume,
@@ -1288,6 +1575,31 @@ impl TradeGateway {
             qa_order_id.to_string(), // realorder_id 与 qa_order_id 相同
             towards,
         );
+
+        // ✨ QIFI 补全(qars sim 分支成交的 exchange_id / exchange_trade_id、持仓的 exchange_id 恒为空串)
+        //    + 持仓均价按成本校正(见 account_ext「QIFI 字段校正」)@yutiansut @quantaxis
+        //    交易所:继承所属委托(下单时按合约注册表回填,order_router `send_order` 之后),
+        //    旧快照恢复的活单没有这个值时退回合约配置。
+        let exchange_id = acc
+            .dailyorders
+            .get(qa_order_id)
+            .map(|o| o.exchange_id.clone())
+            .filter(|e| !e.is_empty())
+            .unwrap_or(exchange_id_cfg);
+        if let Some(t) = acc.dailytrades.get_mut(&trade_id) {
+            if t.exchange_id.is_empty() {
+                t.exchange_id = exchange_id.clone();
+            }
+            if t.exchange_trade_id.is_empty() {
+                t.exchange_trade_id = exchange_trade_id.to_string();
+            }
+        }
+        if let Some(pos) = acc.get_position(instrument_id) {
+            if pos.exchange_id.is_empty() {
+                pos.exchange_id = exchange_id;
+            }
+            crate::core::account_ext::conform_position_price(pos);
+        }
 
         // 检查成交后的持仓
         let pos_after = acc
@@ -1342,6 +1654,22 @@ impl TradeGateway {
                 order.volume_left,
                 order.status
             );
+
+            // ✨ 成交侧也要填 `last_msg` —— 撤单侧已在 handle_cancel_accepted_new 填过。
+            // @yutiansut @quantaxis
+            //
+            // QIFI 里「已撤单」和「全部成交」的 `status` **同为 `FINISHED`**,
+            // 区分信息只在 `last_msg`(见 CLAUDE.md 的 QIFI 样本)。
+            // 实测本库 410,380 笔订单 `last_msg` 全为空串,其中
+            // 326,915 笔撤单 / 82,781 笔全成 **在 QIFI 结构里无法区分**。
+            //
+            // 取值与 `diff_messages.rs:363-365` 记的契约一致:
+            //   全部成交 → "全部成交"(volume_left == 0)
+            //   部分成交 → "部分成交"(volume_left > 0 且已成交过)
+            // 注意**不要**覆盖已有的非空 last_msg(例如撤单已写过「已撤单」)。
+            if let Some(m) = fill_last_msg(&order.last_msg, order.volume_left) {
+                order.last_msg = m;
+            }
 
             // 返回订单的当前状态
             (order.status.clone(), order.volume_left, order.volume_orign)
@@ -1633,14 +1961,66 @@ impl TradeGateway {
             available: acc.money,
             margin,  // ✨ 修复: 使用动态计算的 margin
             position_profit: acc.get_positionprofit(),
-            risk_ratio: acc.get_riskratio(),
+            risk_ratio: acc.safe_risk_ratio(),
             timestamp: Utc::now().timestamp_nanos_opt().unwrap_or(0),
         };
 
         self.send_notification(Notification::AccountUpdate(notification))?;
 
         // DIFF 协议：推送账户更新 patch（如果设置了 SnapshotManager）
-        if let Some(snapshot_mgr) = &self.snapshot_mgr {
+        if let Some(snapshot_mgr) = self.snapshot_mgr.get() {
+            // ✨ 同时推 positions —— 此前只推 accounts,持仓明细一条都不发。
+            //    @yutiansut @quantaxis
+            //
+            // 实测(WS DIFF,有持仓的账户,25 条 rtn_data):patch 顶层键是
+            //   ["accounts","factors","ins_list","klines","notify","orders","quotes","trades"]
+            // —— 8 个段都在,**唯独没有 positions**。前端持仓页因此只能靠 HTTP 轮询,
+            // 成交后持仓变化不会实时推过去。
+            // 本处已持账户写锁(为上面 get_margin 取的),顺带产出持仓是零额外成本。
+            let positions_patch: serde_json::Map<String, serde_json::Value> = acc
+                .hold
+                .iter()
+                .map(|(code, pos)| {
+                    // ✨ 必须用 `volume_*_unmut()`,不能用 `today + his`。@yutiansut @quantaxis
+                    //
+                    // qars 的真实不变量是
+                    // `volume_long = today + his + frozen_today + frozen_his`(position.rs:403),
+                    // `today + his` **漏掉被挂单冻结的部分**。
+                    //
+                    // 而 HTTP 侧 `handlers.rs:997` 用的是 `pos.volume_long()`(含冻结)。
+                    // 于是同一个持仓:**页面加载显示 285,下一次 WS 推送到达就变成 216**
+                    // —— 数字自己会跳,用户无从判断哪个是真的。
+                    // 线上实测 `ACC_55361002` 的 IF2502:HTTP 285 / 本处 216(frozen 69)。
+                    let vl = pos.volume_long_unmut();
+                    let vs = pos.volume_short_unmut();
+                    (
+                        code.clone(),
+                        serde_json::json!({
+                            "instrument_id": code,
+                            "volume_long": vl,
+                            "volume_short": vs,
+                            "open_price_long": pos.open_price_long,
+                            "open_price_short": pos.open_price_short,
+                            // ⚠️ 不用 `float_profit_long()` —— 它是 `&mut self`
+                            //    (内部会重算并缓存),这里只有 `&` 借用。
+                            //    用公开字段按同一公式直接算(position.rs:326-336)。
+                            "float_profit": (pos.lastest_price * vl * pos.preset.unit_table as f64
+                                             - pos.open_cost_long)
+                                          + (pos.open_cost_short
+                                             - pos.lastest_price * vs * pos.preset.unit_table as f64),
+                            "margin": pos.margin_long + pos.margin_short,
+                            // ✨ 补推冻结量 @yutiansut @quantaxis
+                            // 前端持仓表有「可平量 = 持仓 − 冻结」列;挂平仓单只动冻结、
+                            // 不动 volume_long/short,不推的话该列会停在旧值直到成交。
+                            "volume_long_frozen": pos.volume_long_frozen_today
+                                                + pos.volume_long_frozen_his,
+                            "volume_short_frozen": pos.volume_short_frozen_today
+                                                 + pos.volume_short_frozen_his,
+                        }),
+                    )
+                })
+                .collect();
+
             let patch = serde_json::json!({
                 "accounts": {
                     account_id: {  // ✨ 使用 account_id @yutiansut @quantaxis
@@ -1649,16 +2029,24 @@ impl TradeGateway {
                         "available": acc.money,
                         "margin": margin,  // ✨ 修复: 使用动态计算的 margin
                         "position_profit": acc.get_positionprofit(),
-                        "risk_ratio": acc.get_riskratio(),
+                        "risk_ratio": acc.safe_risk_ratio(),
                     }
-                }
+                },
+                "positions": positions_patch
             });
 
-            let snapshot_mgr = snapshot_mgr.clone();
-            let account_id_owned = account_id.to_string(); // ✨ 重命名避免变量遮蔽 @yutiansut @quantaxis
-            tokio::spawn(async move {
-                snapshot_mgr.push_patch(&account_id_owned, patch).await;
-            });
+            if self.legacy_snapshot_active(account_id) {
+                snapshot_mgr.push_patch_now(account_id, patch); // 同步,保 FIFO
+            }
+
+            // ✨ DIFF 标准结构:`trade.<account>.accounts.CNY` / `positions.<EXCHANGE.INSTRUMENT>`
+            //    = QIFI Account / Position(与快照、HTTP QIFI 同一套结构)。仍在同一把账户写锁内。
+            //    @yutiansut @quantaxis
+            let views = self.account_views(&mut acc);
+            drop(acc);
+            for (section, key, val) in views {
+                self.publish_trade_section(account_id, section, &key, val);
+            }
         }
 
         Ok(())
@@ -1668,7 +2056,7 @@ impl TradeGateway {
     fn emit_order_status(&self, status: OrderStatusNotification) -> Result<(), ExchangeError> {
         self.send_notification(Notification::OrderStatus(status.clone()))?;
 
-        if let Some(snapshot_mgr) = &self.snapshot_mgr {
+        if let Some(snapshot_mgr) = self.snapshot_mgr.get() {
             let patch = serde_json::json!({
                 "orders": {
                     status.order_id.clone(): {
@@ -1687,11 +2075,10 @@ impl TradeGateway {
                 }
             });
 
-            let snapshot_mgr = snapshot_mgr.clone();
-            let user_id = status.user_id.clone();
-            tokio::spawn(async move {
-                snapshot_mgr.push_patch(&user_id, patch).await;
-            });
+            // 同步写入:保证同账户补丁 FIFO(原先逐条 tokio::spawn 可乱序)@yutiansut @quantaxis
+            if self.legacy_snapshot_active(&status.user_id) {
+                snapshot_mgr.push_patch_now(&status.user_id, patch);
+            }
         }
 
         Ok(())
@@ -1701,7 +2088,7 @@ impl TradeGateway {
     fn emit_trade_notification(&self, trade: TradeNotification) -> Result<(), ExchangeError> {
         self.send_notification(Notification::Trade(trade.clone()))?;
 
-        if let Some(snapshot_mgr) = &self.snapshot_mgr {
+        if let Some(snapshot_mgr) = self.snapshot_mgr.get() {
             let patch = serde_json::json!({
                 "trades": {
                     trade.trade_id.clone(): {
@@ -1719,11 +2106,9 @@ impl TradeGateway {
                 }
             });
 
-            let snapshot_mgr = snapshot_mgr.clone();
-            let user_id = trade.user_id.clone();
-            tokio::spawn(async move {
-                snapshot_mgr.push_patch(&user_id, patch).await;
-            });
+            if self.legacy_snapshot_active(&trade.user_id) {
+                snapshot_mgr.push_patch_now(&trade.user_id, patch); // 同步,保 FIFO
+            }
         }
 
         Ok(())
@@ -1732,9 +2117,11 @@ impl TradeGateway {
     /// 发送通知
     fn send_notification(&self, notification: Notification) -> Result<(), ExchangeError> {
         // 发送到全局通道
-        self.trade_sender.send(notification.clone()).map_err(|e| {
-            ExchangeError::InternalError(format!("Failed to send notification: {}", e))
-        })?;
+        // ⚠️ 不要用 `?` 传播 —— 这条是诊断旁路,满了必须继续走下面 4 条真实投递路径。
+        //    若在此返回 Err,会把「内存泄漏」变成「通知全断」的功能故障。
+        if self.trade_sender.try_send(notification.clone()).is_err() {
+            NOTIFICATION_TAP_DROPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
 
         // 发送到用户特定的订阅者
         let user_id = match &notification {
@@ -1744,9 +2131,19 @@ impl TradeGateway {
         };
 
         if let Some(subs) = self.subscribers.get(user_id) {
-            for sender in subs.read().iter() {
-                let _ = sender.send(notification.clone()); // 忽略发送失败
-            }
+            // ✨ 投递的同时剪掉已断连的订阅者 @yutiansut @quantaxis
+            //
+            // TradeGateway **没有 unsubscribe**(全仓无此方法),WS 会话在
+            // `websocket/mod.rs:126` 只订阅、断连时不清理。Receiver 被 drop 后
+            // Sender 变成死引用永远留在这个 Vec 里,而原写法 `let _ = send(..)`
+            // 把错误吞掉 —— 于是每条通知都要为每个死订阅者白 clone 一次,
+            // 连接抖动越多、开销越大。
+            //
+            // `send()` 只在接收端全部 drop 时返回 Err,所以 retain 恰好剪掉死的。
+            // 锁序未变(仍是 DashMap 分片锁 → 内层 RwLock),不引入新的环。
+            // 无界 channel 的 send 不阻塞,写锁持有时间极短。
+            subs.write()
+                .retain(|sender| sender.send(notification.clone()).is_ok());
         }
 
         // 发送到全局订阅者 (crossbeam)
@@ -2012,16 +2409,14 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore] // TODO: Phase 3 重构后更新此测试
-    fn test_handle_accepted() {
-        let (_gateway, _, _account_id) = create_test_gateway();
-
-        // let receiver = gateway.subscribe_user(account_id.clone());
-        // gateway.handle_accepted(...).unwrap();
-        // let received = receiver.try_recv().unwrap();
-        // ...
-    }
+    // ❌ 已删除 `test_handle_accepted` —— 它是个**空壳**:测试体被整段注释掉,
+    //    只剩一个 `create_test_gateway()`,却标着 `#[ignore] // TODO: Phase 3 重构后更新`。
+    //    去掉 ignore 一跑就「通过」—— **通过但零覆盖,比失败更坏**。
+    //
+    //    而它注释里想做的事(subscribe → handle_accepted → 校验通知),
+    //    `test_handle_accepted_notification`(本文件下方)**早就完整做了**,
+    //    且断言到 `order_id` / `status` 字段。所以这是遗留重复,不是覆盖缺口。
+    //    @yutiansut @quantaxis
 
     #[tokio::test]
     async fn test_diff_snapshot_manager_integration() {
@@ -2750,9 +3145,9 @@ mod tests {
 
         // 验证初始状态
         assert!(gateway.notification_broker.is_none());
-        assert!(gateway.snapshot_mgr.is_none());
+        assert!(gateway.snapshot_mgr.get().is_none());
         assert!(gateway.trade_recorder.is_none());
-        assert!(gateway.market_data_service.is_none());
+        assert!(gateway.market_data_service.get().is_none());
         assert_eq!(gateway.wal_root, "./data/wal");
     }
 
@@ -3379,5 +3774,37 @@ mod tests {
         let new_notification = gateway.convert_to_new_notification(&old_notification);
 
         assert!(new_notification.is_none());
+    }
+}
+
+#[cfg(test)]
+mod last_msg_tests {
+    use super::fill_last_msg;
+
+    /// QIFI 契约:`status=FINISHED` 时,「已撤单」与「全部成交」只能靠 `last_msg` 区分。
+    /// 实测本库 410,380 笔订单 `last_msg` **全为空串**
+    /// (326,915 笔撤单 / 82,781 笔全成,在 QIFI 结构里无法区分)。@yutiansut @quantaxis
+    #[test]
+    fn full_fill_and_partial_fill() {
+        assert_eq!(fill_last_msg("", 0.0).as_deref(), Some("全部成交"));
+        assert_eq!(fill_last_msg("", -0.0).as_deref(), Some("全部成交"));
+        assert_eq!(fill_last_msg("", 3.0).as_deref(), Some("部分成交"));
+    }
+
+    /// **不覆盖已有值** —— 撤单路径先写了「已撤单」,后到的成交回报不能把它抹掉。
+    /// 这是本函数存在的主要理由,不是顺带的边界。
+    #[test]
+    fn never_overwrites_existing() {
+        assert_eq!(fill_last_msg("已撤单", 5.0), None);
+        assert_eq!(fill_last_msg("已撤单", 0.0), None, "即便看起来是全成也不覆盖");
+        assert_eq!(fill_last_msg("部分成交", 2.0), None);
+    }
+
+    /// **负对照**:空串必须被当成「未写过」,否则这个函数永远返回 None,
+    /// 上面两个测试也能过 —— 而那正是修复前的现状(全库 last_msg 为空)。
+    #[test]
+    fn empty_is_treated_as_unset() {
+        assert!(fill_last_msg("", 1.0).is_some(), "空串必须触发写入");
+        assert!(fill_last_msg(" ", 1.0).is_none(), "非空(哪怕是空格)一律不覆盖");
     }
 }

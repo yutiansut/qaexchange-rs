@@ -5,6 +5,812 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [未发布] - 2026-11-08
+
+### ✨ 新增 - DIFF 实时完整行情快照(事件驱动,端到端 p99 ≈ 11ms)
+
+- **`quotes.<inst>` 改为完整快照**:10 档盘口 + `last_price` / 当日累计 `volume` / `amount`(含合约乘数)/
+  `open` `highest` `lowest` / `pre_close` `pre_settlement` / `upper_limit` `lower_limit` / `open_interest` /
+  `volume_multiple` `price_tick` / `datetime`(毫秒,同合约**严格递增**)。订阅时立即补发一张。
+  口径见 `market::QuoteStats` 文档(本交易所从不结算:「当日」= 日 K,UTC 零点切日、后端重启从 0 累计;
+  昨收 = 上一根日 K 收盘 → 当日开盘 → 注册价;涨跌停 = 昨收 ±10% 并按 price_tick 取整,撮合不校验)。
+- **推送是实时的**(`market/snapshot_broadcaster.rs`):盘口变化 / 成交标脏,10ms 合并发布,500ms 只是空闲心跳;
+  跑在独立 OS 线程。hft_maker 实测(IH2501,30 秒):525 张,每秒中位 17 / 最多 63,
+  端到端 p50 5.8 / p99 10.8 / max 11.1 ms。
+  ⚠️ 一度被改成「quotes 只来自 500ms 定时快照」并上线,经用户纠正改回 —— 设计是实时推送,
+  500ms 采样是客户端的事(见 lessons L189)。
+- 逐笔 Tick / LastPrice 不再单独推 quote 补丁:原补丁的 `volume` 是**单笔**量,
+  按 JSON Merge Patch 会把累计成交量覆盖成 1.0;最新价 / 成交量已在实时快照里。
+- `update_trade_stats` 生产零调用、`MarketSnapshotGenerator` 的累计量额恒为 0 —— 改为复用
+  `MarketDataService` 的日 K(`on_trade` 每笔都在更新),新增 `KLineManager::get_last_finished_kline`。
+
+### 🐛 修复 - 单线程主运行时被同步 I/O 饿死(500ms 盘口广播一张都发不出)
+
+- 旧 `/ws` 原样抓广播器 10 秒:`order_book_update` 541 条、`order_book_snapshot` **0 条**。三层同类原因:
+  1. 60s QIFI 快照 `save_snapshots` 同步跑在 `#[actix_web::main]` 单线程运行时上(快照 2GB、一轮 ~60s 背靠背)
+     → 改 `spawn_blocking` + `MissedTickBehavior::Delay`(`main.rs start_snapshot_scheduler`)。
+  2. `KLineActor` `.start()` 在主 Arbiter,每根 K 线同步 WAL fsync → 改 `start_in_arbiter` 独立线程。
+  3. 发布器现算持仓量要逐个读锁 263 个账户,被快照写锁拖到 ~250ms/张 →
+     `MarketDataService::refresh_open_interest` 后台线程每秒刷新缓存,发布路径只读缓存;
+     冷启动无日 K 时的 `get_tick_data`(L2 扫一小时 WAL)只做一次,之后复用 `last_px`。
+- 同运行时上的条件单扫描器、周期报告此前同样被饿死。
+
+### ✨ 新增 - DIFF 交易回报按标准结构推送(第二期 2a,与 hft_maker 逐条确认)
+
+- **`trade.<account_id>.{orders,trades,positions,accounts}` = QIFI 切片**,推给属主用户的会话
+  (按真实 user_id 连接即可;按账户 ID 连接也仍可用)。登录即补发名下每个账户的 accounts.CNY /
+  positions / 活单。positions 键按 QIFI 规范为 `EXCHANGE.INSTRUMENT`(qars 本地持仓 exchange_id
+  是空串、订单路径是占位串 "EXCHANGE",一律从合约配置补齐)。
+- **客户端编号**:`insert_order.order_id` 即 orders 键,账户内唯一,重复 → CTP 22(且**不**覆盖原单);
+  `exchange_order_id` = 交易所单号。撤单认客户端编号或交易所单号;会话用户 / 账户 / 属主三者之一即可撤。
+- **状态**(EIFI §4.1 + QIFI):ALIVE(`status_code` 3 未成 / 1 部成)→ FINISHED(0 全成 / 5 撤单,含 FAK
+  撤余量,用 `volume_left` 区分 / 7 拒单 + `error_id`);FOK 未满足 4。柜台层拒单 `exchange_order_id` 为空。
+  错误码取自 CTP error.xml:15 / 16 / 22 / 25 / 26 / 30 / 31 / 91(`order_router::ctp_error_id`)。
+- **顺序**:补丁在事件线程同步写入(去掉逐条 `tokio::spawn`),**成交补丁先于使订单 FINISHED 的订单补丁**,
+  账户内单调 `seqno`;成交键 `order_id|交易所成交号`,commission 用 qars 权威公式(原通知里的
+  `price*volume*0.0003` 占位值漏了合约乘数)。
+- 撤单失败 `notify.cancel_error{order_id,error_id,content}`;下单被拒 `notify.order_rejected{…,error_id}`。
+- **重启后单号不变**:交易所单号写进账户 QIFI 订单的 `exchange_order_id`(此前恒为空串)随快照持久化,
+  恢复挂单按它还原;客户端编号映射落 `<storage>/client_order_ids.jsonl`。修复前实测重启后两种单号都失效。
+- 平仓冻结实测通过(挂着的平仓单冻结可平量,超量平仓拒 → CTP 30),已加回归测试。
+- 端到端实测(独立测试用户、真实 DIFF 会话)全部通过,脚本见本次会话 scratchpad `e2e_diff.py`。
+
+### 🐛 修复 - DIFF 待发补丁队列无界
+
+- `UserSnapshotState.pending_patches` 是无界 `Vec`,只有 `peek` 会取走;没有 DIFF 会话的用户/账户
+  (80 个走 HTTP 的仿真参与者)每个回报都往里塞,永不释放。改为:超过 2000 条折叠成一张全量快照
+  (与新会话初始同步等价,单测验证折叠后客户端合并结果 == 服务端截面);交易回报只推给最近 120 秒
+  有会话 peek 的截面,新会话由登录初始快照补齐。
+
+### ⚡ 性能 - WAL 异步落盘(组提交)真正生效
+
+- `[storage.wal] sync_mode = "async"` 此前是**死配置**(结构体里没有这个字段,serde 静默丢弃),
+  热路径全是逐条 `flush + sync_all`。现在 async 模式下所有 `append` / `append_batch` 走组提交缓冲,
+  **全局一个后台线程**按 `sync_interval_ms`(配置 100)刷盘,停机前屏障刷完;`append_async` 不再按
+  「距上次刷盘超时」就地刷(那会把 fsync 放回下单路径),只在超过批量上限时背压就地刷。
+- 原 `append_async` 只在**下一次** append_async 时检查到期、没有后台刷盘 —— 行情一停记录就一直留在内存。
+- 实测(重启前 → 后):`/health` 0.0003~0.58s → ~0.2ms;盘口接口 0.4~1.4s → 0.2~0.3ms;
+  真实下单往返 submit p50 0.60ms / cancel p50 0.45ms;HTTP worker 线程 D 态 → 0%。
+- 崩溃最多丢一个刷盘间隔的记录(async 的语义);刷一轮超过 1 秒限频告警(磁盘忙时持久化窗口被拉长)。
+- 启动告警补上 `[storage]` 子表:`memtable` / `sstable` 仍未接线,现在会明确告警。
+
+### 🐛 修复 - 同一 user_id 的多条 DIFF 连接互抢补丁(06:40 上线,pid 187110)
+
+- **现象**(hft_maker 会话 06:18 复现):行情、交易各开一条连接(同一用户)时登录时好时坏 ——
+  有时行情连接收不到 `login_success`,有时交易连接收不到;单开一条连接每次都正常。
+- **根因**(3 处):① `SnapshotManager` 按 user_id 只有一个待发队列,`peek` 一次全部取走 ⇒ 谁先 peek
+  谁拿走(登录回包、成交回报都会被同用户的另一条连接「抢走」);② 任一连接断开 `remove_user(user_id)`
+  删掉共享截面;③ 行情订阅也按 user_id 登记,第二条连接顶掉第一条的行情流、断开一条注销全部。
+  另修 `peek` 丢唤醒:原先先查队列再建 `Notified`,两步之间到达的补丁不唤醒 ⇒ 最坏卡满 30 秒。
+- **新语义 = DIFF/TqSdk**:每条 WebSocket 连接一份私有截面、各自 peek;交易回报按**主题**
+  (账户 ID + 属主 user_id)扇出给绑定的每条连接,同时绑两个主题的连接只收一份;登录结果、订阅确认、
+  行情、K 线、登录初始快照只推给发起连接;行情订阅者 ID = 连接 ID。
+- **验证**:新增 9 个多连接单测;隔离实例 7 步端到端(同户双连接同时登录、按连接订阅、双连接都收到
+  委托 / 成交 / FINISHED、按账户 ID 未登录连接收回报、断一条另一条照常);上线后 hft_maker 1 手联调
+  5 步全过(挂单 / 按客户端编号撤 / FAK 开平 / 超量平仓拒 30)。
+- **重启记录**:06:38:39 SIGINT → 06:39:53 退出(**74 秒**,见下条)→ 06:40:06 启动 → 06:40:33 health ok。
+
+### 🐛 修复 - 停机最终快照与周期快照并发写同一批临时文件(07:24 上线,pid 223986)
+
+- 06:39 停机实测:周期快照(spawn_blocking)约 06:39:05 开始、06:39:52 结束;最终快照 06:39:39 开始,
+  两者写同一批 `<account>.json.tmp`,一方 rename 走另一方的 tmp ⇒ 「Rename snapshot failed: No such file」,
+  最终快照整批中止。核对:停机前已终结的 87,173 张单重启后**零复活**、重启后撤单无「单号不存在」,
+  无可检测的状态丢失;但「先开始的旧快照后完成、覆盖新快照」的交错是真实风险。
+- 修复:`AccountManager::save_snapshots` 加互斥,最终快照等在途周期快照写完再写最新状态。
+- 停机优雅等待 30s → 5s(`QAEX_SHUTDOWN_TIMEOUT_SECS`):HTTP / WS 各等满 30 秒是这次停机 74 秒的主因,
+  且 keep-alive 连接在这段时间里还在继续下单(最后一笔成交 06:39:09,SIGINT 后 30 秒)。
+
+### 🐛 修复 - 账户首单在下单路径上同步 fsync 新建的 WAL 文件(卡 6 秒;07:24 上线)
+
+- 06:41:21 实测:hft_maker 账户重启后第一张被接受的单,在 `WalManager::new` 的 `sync_all` 上等了 **6 秒**
+  (账户 WAL 目录 mtime 正是 06:41:21.747;机械盘 + ext4 data=ordered,周期快照正写 ~2GB),客户端超时断开。
+- 修复:async(组提交)模式下新建 WAL 不再立即 fsync,头部随第一次组提交由刷盘线程一并 fsync;
+  崩溃残留的无头 / 半截头文件在 `open_existing` 截断补头(3 个单测)。sync 模式语义不变。
+
+### 🚀 部署记录 - 07:24(快照互斥 / 首单 WAL / 停机 5 秒 + 仿真做市 tick 口径)
+
+- 安全停机流程(旧版本仍有快照并发写竞态):① 07:22:20 先停仿真编排(撤 178 张做市挂单,之后无成交)
+  → ② 等周期快照报「Saved 0 … (268 unchanged)」(07:23:33,证明磁盘 == 内存)→ ③ 07:23:43 SIGINT,
+  07:24:26 退出(43 秒,旧版本的 30 秒优雅等待;最终快照同样 0 变更)→ 07:24:31 启动 → 07:24:50 health ok。
+- hft_maker 引擎事先确认无在途单、无持仓并主动停机。
+
+### ✨ 仿真参与者 - 做市商改为 tick 口径,盘口对齐真实 IH 主力(qapbsystem/sim)
+
+- 目标(hft_maker 会话用本机 tick 库实算,IH2612 11-03~11-05 日盘 500ms 快照):价差 1t≈35% / 2t≈40% /
+  ≥3t≈25%,一档中位 2 手,每 500ms 成交中位 1、均值 1.5~2。生产基线:≥3t 100%(中位 28 tick)、一档 1 手、
+  每 500ms 成交均值 8.45 手(5 倍于真实)。
+- 做市:格点报价、增量改单(保留队列位置,先挂新再撤旧)、按盘口判定被吃立即补价、同一家买卖两户共享净库存
+  做偏移(各算各的会让两侧同时外退一格)、被吃后指数分布随机后撤一格、公允价快速跟随;吃单流降到约 1/5。
+- 隔离实例(18094)逐轮实测:中位 2 tick(1t 4%)→ 净库存后 1t 85% → 做薄 1t 89% → 后撤 1t 72% →
+  减仓单移出一档 1t 27% / 2t 66% / ≥3t 7% → 快速公允价 **1t 32% / 2t 61% / ≥3t 6%**,每 500ms 成交均值 1.53,
+  一档合并中位 4 手。≥3t 偏少、一档偏厚,继续调。
+
+### ✨ 新增 - 郑商所 FG2701 / FG2703 / SA2701 / SA2703 上市(07:49,pid 241852)
+
+- 用户拍板「加 FG 和 SA 切过去跑」(供 hft_maker FG 模型联调,与其生产合约一致):乘数 20、tick 1 元;
+  手续费 / 保证金按 qars MarketPreset(FG 开 3 元 / 平今 6 元 / 保证金 5%;SA 万分之一 / 5%)。
+  hft_maker 指出 FG 真实为开平今均 2 元/手 → 列入 P0「按合约覆盖手续费 / 保证金」(不改 qars)。
+- **`[[instruments]]` 整段是死配置**:07:43 第一次重启(只改配置)后合约没有出现 —— 运行时 `ExchangeConfig`
+  根本不带 `instruments`,上市清单(`init_instruments`)与行情合约配置都写死在 main.rs(IF2501 / IF2502 /
+  IC2501 / IH2501)。另:TOML 写的是 `contract_multiplier`、结构体字段是 `multiplier`,serde 静默丢弃、
+  一律回落 300。修复:运行时配置带上 `instruments`;两处写死的表 = 原四个 + 配置里新增的(新合约初始价、
+  名称、交易所、乘数、tick 取配置,保证金率取 qars preset);字段加 `alias = "contract_multiplier"`。
+  原四个合约行为不变。
+- 重启记录:07:43:02 SIGINT → 07:43:40 退出(最终快照 112 个账户)→ 07:44:11 health(合约未出现);
+  修代码后隔离实例验证 → 07:48:19 SIGINT → 07:48:55 退出 → 07:49:14 health,8 个合约上市。
+
+### ✨ 仿真参与者 - 郑商所场景 `--scenario czce`(qapbsystem/sim,08:04 定版)
+
+- 账户独立(`czmm_*` / `cznz_*`),与 IH 场景并行。做市 FG 10 家 + SA 10 家,每家报两个月份,次月公允价联动
+  主力(FG +13、SA +25);吃单 40 个按合约分配,小单为主 + 长尾大单(超过 500 手拆成连续 IOC)。
+- 做市机制(新增选项,默认关):`track_fills` 逐单查询一档自己的单是否成交后补单(几十家同价位排队时
+  「价位消失才算被吃」失效);`lean_share` 只对**正在被吃空**的队列让路(换档靠一侧队列慢慢吃光;
+  对新价位也让路会让它永远长不起来);`keep_ticks` 保留价后退时不撤原来更优的单;`reduce_at_touch`;
+  `inst_sizes` 主力 / 次月分开配置一档厚度;`link` 跨月联动。
+- 逐轮实测(500ms 网格):第一版 FG2701 1t 79%、卖一 231 手(被吃不补)→ 第二版 1t 98.8~100%、次月一侧
+  只有几十手(让路误伤新价位)→ 定版(180 秒):
+
+| 合约 | 1 tick | 一档中位 买 / 卖 | 每 500ms 中位 / 均值 | 真实(11-04~06) |
+|---|---|---|---|---|
+| FG2701 | 100% | 2248 / 2287 | 5 / 26.1 | 100%,2400~3000,3~5 / 28~35 |
+| FG2703 | 99.4% | 463 / 465 | 0 / 14.9 | 98~99%,约 500,0~1 / 7~9 |
+| SA2701 | 100% | 1864 / 1884 | 5 / 22.2 | 100%,1700~2300,4~5 / 37~40 |
+| SA2703 | 99.7% | 322 / 338 | 0 / 10.0 | 96%,310~490,0 / 9~10 |
+
+  成交量均值由少数大单决定,单个 2~3 分钟窗口波动大(同类参数上一轮 SA2701 为 65.7),需更长窗口精调。
+
+### ✨ 新增 - 郑商所成交额口径 + 按合约覆盖手续费 / 保证金(08:24 上线)
+
+- **CZCE 成交额**:`quotes.amount` 对郑商所合约 = round(当日均价 Σ价×量/Σ量,按 price_tick 四舍五入)× 累计量 × 乘数,
+  与真实郑商所 CTP 的 Turnover 一致(hft_maker 实测 FG2701 11-06 41,198 张快照,Turnover/Volume/20 小数部分 100% 为 0;
+  其模型的主动成交流特征在此口径上训练);其他交易所仍为 Σ价×量×乘数(`market::exchange_turnover`,2 个单测)。
+- **按合约覆盖费率**(`[[instruments]]` 新增可选 `commission_per_lot` / `commission_rate` / `margin_rate`,
+  `core::account_ext::preset_overrides`,不改 qars):qars 的手续费与冻结保证金都取自持仓自带的费率副本,
+  覆盖在下单前(必要时先建仓)、快照恢复后改写副本;回报手续费与合约注册表用 `effective_preset`。
+  FG 开 / 平 / 平今 2 元/手、保证金 9%;SA 万分之一、保证金 8%。
+  ⚠️ 保证金系数只在空仓时切换:qars 平仓按「当前系数 × 开仓均价」释放,带旧系数开的仓中途换系数会让 margin 变负。
+- 顺带发现:qars 成交时一律用 `calc_commission`,**不区分平今** —— FG 预设的「平今 6 元」从未生效。
+- 重启记录:hft_maker 引擎先停(空仓无在途)→ 08:23:28 SIGINT → 周期快照 08:23:41 完成(189 个账户)、
+  最终快照 08:24:06 完成(114 个账户)—— **两次落盘串行,没有再出现 rename 冲突**(07:24 上线的互斥生效)
+  → 08:24:07 启动,费率覆盖 4 条加载 → 08:24:35 health ok。
+- 验证:5 个覆盖单测;隔离实例端到端 FG 3 手手续费 6.0、保证金 4860(9%)、成交额均价为整数;lib 978 通过
+  (1 个失败为已知的磁盘性能用例,与生产实例同盘)。
+
+### 🐛 修复 - QIFI 字段与标准样本不符(6 处)+ 下单路径逐笔 INFO 日志(22:46 随日终结算一起上线,pid 686937)
+
+逐字段对照生产快照与 CLAUDE.md 的标准 QIFI 样本(依据见 `todo/TODO_EXCHANGEMSG.md` 第三期 F):
+- **成交时间早 8 小时**:`update_account` 把 UTC 墙钟串传给 qars `receive_deal_sim`,而 qars `parse_dt_ns` 按北京墙钟
+  解析再减 8h(qars2 account.rs:455)—— QIFI `trade_date_time` 与 HTTP 成交查询的 `timestamp` 都早 28,800 秒。
+  改用 `account_ext::beijing_now_str()`(显式 UTC+8,不依赖部署机时区);`account/core` 同一处一并改。
+- **委托** `time_condition` 恒为 "AND"、`volume_condition` 恒为 "GFD"、`exchange_id` 恒为 ""(qars sim 分支写死,
+  account.rs:1413-1432)→ `send_order` 之后按请求回填(缺省 GFD / ANY),交易所取合约注册表(退回行情合约配置)。
+- **成交** `exchange_id` / `exchange_trade_id`、**持仓** `exchange_id` 恒为 "" → `update_account` 入账后回填
+  (`exchange_trade_id` = 撮合成交号,与 DIFF 成交键 `order_id|exchange_trade_id` 同源)。
+- **持仓均价** `position_price_long/short` 漂移:qars 平仓用 (均价×持仓 − 平仓价×手数)/(持仓 − 手数) 改剩余仓位均价
+  (position.rs:505/535/562),平完分母为 0 ⇒ NaN ⇒ 快照写成 null(当天 84 个文件,恢复时靠「null → 0.0」文本替换兜住)。
+  实例:IH 做市账户 250 手,成本对应 1804.82,均价却是 1096.10。→ `conform_position_price` 按 position_cost 反推,
+  成交后与快照恢复时各调一次(只改输出字段;qars 盈亏用 position_cost / open_cost,不读均价)。
+- 历史记录不回改(旧委托的 time_condition 无从得知);旧成交的时间偏差留到日结清历史。
+- 日志:「HTTP submit_order / Order accepted / Cancel accepted / 冻结释放 / 成交后账户更新 / Trade executed / Batch flush」
+  9 处逐笔 INFO 降为 debug —— 实测 ~260 行/秒、当天日志 1.1GB,且在下单线程上同步写。需要时用
+  `RUST_LOG=qaexchange::exchange::trade_gateway=debug` 打开。
+- **平昨成交不入账**:`update_account` 的开平映射没有 CLOSEYESTERDAY(下单侧 `calculate_towards` 有,
+  order_router.rs:2545)—— 撮合簿里已成交,账户侧报 "Invalid direction/offset" 返回:持仓不减、同批其余成交被跳过、
+  taker 收到 5000。补 ±3(与下单侧同口径)。生产上的参与者与 hft_maker 都只发 CLOSE,尚未触发。
+- **未上市合约**:原来按兜底乘数 1 / 保证金率 0.2 冻结后到路由才失败,路由失败只把路由侧委托标 Rejected ——
+  qars 账户里委托仍是 SUBMITTED、冻结永不释放(撤单拒绝撤 Rejected 单;9 月生产快照 6 笔挂在 NOSUCH0000 等合约上)。
+  → 冻结之前查撮合簿,不存在直接拒 4006(→ CTP 16「找不到合约」),文案沿用路由失败分支。
+- **DIFF 客户端编号落盘**(`client_order_ids.jsonl`,只有 hft_maker 这类带客户端编号的 DIFF 委托会写):原来每笔都 open +
+  用 `serde_json::Value` 的 Display 往无缓冲 File 逐段写(十几~几十次 write(2))+ close,就在撮合之前 →
+  常驻追加句柄,整行一次 write。
+- 验证:4 个新单测(成交时间 = 真实时刻;部分平仓后均价不变、平完为 0;平昨成交双方入账且 QIFI 委托 / 成交 / 持仓字段
+  如实回填;未上市合约不冻结资金)。lib **981 通过**,2 个失败均为磁盘 fsync 性能用例(单次写 P99 824 / 423 / 325ms,
+  阈值 50ms;上午同一用例 113ms)—— 生产实例的快照把同一块盘压满了,见下一条。
+  隔离实例(新 verify 二进制,18094/18095)端到端:两个新账户开 3 手、平 1 手 → HTTP 成交时间与当前时刻差 +3s
+  (修前 −28,800s);快照委托 `GFD / ANY / CFFEX`;成交 `exchange_id=CFFEX`、`exchange_trade_id` 非空、时间正确;
+  持仓 `exchange_id=CFFEX`,剩 2 手均价 = 开仓价 3000.0。
+- 附带发现(未改):HTTP 成交查询把本次运行以来的每笔成交列两遍 —— QIFI(`T{纳秒}`、qars UUID 单号)与 TradeRecorder
+  (`T{序号}`、路由单号)按 `trade_id` 去重,两套编号永远对不上;重启后 TradeRecorder 清空才不重复。见 TODO 第三期 F。
+
+### ⚠️ 已知 - QIFI 快照整份重写:磁盘已被压满(待定方案)
+
+- 机械盘(ROTA=1)+ ext4 data=ordered;从不结算 ⇒ 订单历史无限累积。12:00 实测:408 个账户快照共 **3.24GB,每轮全部重写**;
+  sda 忙 97%、写 75MB/s;进程 08:24 启动后 3.5 小时累计写盘 **641GB**(≈ 4.4TB/天)。
+- 连带:WAL 组提交 08:24 起 803 轮告警,每轮 p50 4.2s / p90 6.0s / 最长 **57s**(平均每轮 fsync 84 个按账户分的 WAL);
+  下单时延长尾 p99 18~80ms;同盘的 fsync 性能单测从上午 P99 113ms 恶化到 824ms。
+- 最大账户 101MB 里委托 58MB + 成交 26MB,资金 + 持仓 + 活单只有 **8.4KB**;紧凑 JSON 只省 24%。
+  → 方案:**状态快照(每轮重写)+ 当日历史追加写**,恢复时合并;配合 2b 每自然日日结清历史(用户已拍板)。
+- 22:30 复测:快照已涨到 **4.9GB**(408 户,委托 565 万条、成交 288 万笔)。日终结算(下一条)后快照只剩当日历史 ——
+  隔离实例结算后 **4.898GB → 4MB**;「状态快照 + 当日历史追加写」仍是后续方案(一天之内的历史照样整份重写)。
+
+### ✨ 新增 - 每自然日日终结算(北京 00:00):先撤光活单再结算,修掉「结算 → 撤单 / 成交」整进程退出
+
+- **上线**:22:46 重启(pid 686937;hft_maker 已先停沙盒引擎、空仓无活单)。停机 69 秒(最终快照 125 户)+ 启动 50 秒;
+  恢复 408 户、委托 570 万条、成交 291 万笔;日志「下次日终结算:北京时间 2026-11-09 00:00 结算 2026-11-08」。
+  同一二进制带上了下面「QIFI 字段」那 8 处修复。
+
+- **崩溃根因**(隔离实例实测复现):qars `QA_Account::settle()` 清空当日委托与冻结(qars2 account.rs:550-555),
+  挂单却还在撮合簿里。之后该单一撤单 → qars `cancel_order` 的 expect 失败(account.rs:1237);一成交 →
+  `receive_deal_sim` 的 unwrap 失败(account.rs:1681)。release 是 panic=abort,**整个进程退出**。原来
+  `POST /api/admin/settlement/execute` 直接调结算,而生产没开管理端鉴权(`QAEX_REQUIRE_ADMIN_AUTH` 未设)——
+  局域网内任何人调一次,做市商的下一笔撤单就会让交易所退出。
+- **日终流程** `SettlementEngine::run_end_of_day`(定时任务与手动接口共用):
+  1. 闭市:`OrderRouter` 日终闸门置位,新单一律拒 4100 → CTP 91「日终结算中,暂停接收报单」(与交易所闭市拒单同口径),
+     撤单照常;在途报单计数归零才往下走(两边 SeqCst 配对:任何一笔要么看到闸门被拒,要么被日终等到落定);
+  2. 撤全部活单(真实交易所收盘时 GFD 单失效):走客户端撤单同一条路径(释放冻结、推 DIFF「已撤单」);逐簿复核,
+     路由不认得的残单直接从簿上摘掉;**簿上不干净就不结算**、直接开市;
+  3. 归档:先落一轮最新快照,再**硬链接**进 `snapshots/history/<交易日>/`(不复制数据;同日再结算 → `-2`、`-3`);
+     恢复只读顶层 `*.json`,子目录不会被当成账户;
+  4. 结算价:手工设置的优先,其余取撮合簿最新价,结算前统一写进每个持仓(同一合约全市场一个价;原来各账户用自己持仓上
+     最后一次更新的价);结算价按次有效,结算后清空(原来手工设过的价永远留着);
+  5. 结算(今仓 → 昨仓、清当日委托/成交、退冻结、重置资金);
+  6. 新交易日:客户端编号(CTP 报单引用)查重表清空,`client_order_ids.jsonl` 改名归档为 `.<交易日>.jsonl`;
+  7. 开市 → 落结算后快照 → 按 DIFF 推一次各账户资金 / 持仓。
+- **调度**:`config/exchange.toml` 新增 `[settlement] auto_daily = true`、`time = "00:00"`(北京时间,结算的是这一时刻之前的
+  那个自然日;缺省同值,旧配置不用改)。手动接口改走同一流程(阻塞部分进 `web::block`),响应仍以 `SettlementResult` 字段
+  为顶层,另带 `sweep / archived_snapshots / archive_dir / settlement_prices / halted_ms`。
+- **纵深防御**:网关的撤单回报 / 成交入账在调 qars 之前先查委托在不在账户当日委托里,不在就跳过并记日志 ——
+  一笔对不上的回报不再能拖垮整个交易所。日终撤单失败(撮合簿里已没有这张单)时路由侧按已撤收尾,不再每天重复失败。
+- 验证:
+  - 4 个新单测:闭市拒单无副作用 + 扫单撤光;完整日终(今 → 昨、当日委托/成交清空、归档 = 结算前完整快照、新交易日同号
+    客户端编号可用、结算后撤单 / 平仓成交正常);撤单失败的路由收尾;**绕过扫单直接结算后撤单 / 成交不 panic** ——
+    把两处守卫分别去掉,该测试分别在 account.rs:1237 / :1681 panic(已验证测试确实拦得住)。
+  - 隔离实例(生产 408 个账户快照 4.9GB 复制到 /dev/shm,不给生产的盘加压;生产同一套日志级别;定时任务 22:35 触发,
+    同时持续挂单 / 撤单 / 对敲):闭市 **32.7 秒**(几乎全花在结算前那轮 4.9GB 快照的序列化上);撤单 3450、失败 64、
+    簿上剩余 0;412 户结算 305ms。压测端:1861 笔新单拒 4100,**严格落在 22:35:00.013–22:35:32.698**;撤单全程成功;
+    开市后挂单 4055/4055、撤单 4054/4054 成功;无一笔请求超过 1 秒。
+  - 结算前后逐户核对 409 个老账户:持仓不变(全部今 → 昨)、活单 0、冻结 0、**现金增量 = 退回的冻结**(409/409,误差 < 0.01 元);
+    39 个零持仓按 qars `settle()` 设计被清掉;快照 **4.898GB → 4MB**。
+  - 手动接口第二次结算:闭市 55ms,归档到 `20261108-2`;重启 2 秒恢复,412 户持仓 / 现金与重启前逐户一致;
+    第三次日终撤单失败 0。
+- 附带发现(未改):启动恢复 `restore_orders_from_accounts` 把账户里的 ALIVE 委托重新挂进撮合簿,只认 `Accepted` 结果 ——
+  恢复单彼此交叉时撮合簿里成交了、账户却不入账(隔离实例那 64 笔撤单失败即此)。生产每次重启都会走这条路径,见 TODO 第三期 H。
+- 已知:结算价是最新价,真实交易所是当日成交量加权均价 —— 要先把当日累计量额按北京 00:00 切日(2b 第 3 项),
+  这会改 hft_maker 成交流特征的输入,需先和对方对齐。第一次日终要序列化全部历史(生产 4.9GB,机械盘),预计闭市 1~2 分钟;
+  之后每天只剩一天的历史。
+
+## [未发布] - 2026-11-07
+
+### 🐛 修复 - release 二进制启动即 SIGABRT(交易日历探测自己触发 panic)
+
+- **`trading_calendar_days_left`**(`src/main.rs`)
+  - 原实现二分查找「`QATradeDate::get_trade_day` 不 panic 的最后一天」,用 `catch_unwind`
+    包住探测,并临时把 panic hook 换成空函数。但 release / verify profile 是
+    **`panic = "abort"`** —— `catch_unwind` 什么也接不住,首个越界探测(今天 + 900 天)
+    直接 `abort()`;hook 又被换成了空函数,**进程不留一行 panic 信息**就以 SIGABRT 退出。
+  - 定位:apport 抓到 core,gdb 回溯 `qars tradedate.rs:1166 get_next_day ← get_trade_day
+    ← main.rs trading_calendar_days_left ← check_trading_calendar_horizon`。
+  - `cargo test` 走 unwind,单测一直通过 —— 只有起 release 二进制才暴露。
+  - 改为只用不会 panic 的 `if_trade_date`(纯 `Vec::contains`)向前扫出表尾,结果与原二分等价。
+  - 新增回归测试:`probe_never_panics_even_once`(hook 计数,本线程内发生任何 panic 即失败)
+    与 `horizon_matches_real_panic_boundary`(正对照:第 lo 天可处理、第 lo+1 天真实 panic)。
+  - **⚠️ 根因未修(共享库决策)**:qars2 交易日历表止于 **2026-12-31**(启动告警「剩余 54 天」)。
+    之后 `get_qifi_slice()` → `get_next_day` 的 `.unwrap()` 会 panic,在 `panic = "abort"` 下即**整个进程崩溃**。
+    `service/http/handlers.rs` 的 `TradingDayResolver` 同样依赖 `catch_unwind`,届时同理。需扩表。
+
+### 🐛 修复 - 行情盘口接口返回 1~2 秒前、未按价位聚合的旧簿
+
+- **查找顺序 L1 → L2(WAL) → L3 改为 L1 → L3(实时撮合簿)→ L2 兜底**(`src/market/mod.rs`)
+  - L1 TTL 只有 100ms,绝大多数请求落到 L2:每次区间扫描**最近 1 小时**的行情 WAL,
+    取最新一条 `OrderBookSnapshot`。该记录限流每秒最多写一次,实测比当前时刻旧 **1.2~1.6 秒**。
+  - WS 快照广播(`snapshot_broadcaster`)同样调用本函数 —— 前端与所有程序化客户端看到的都是这份旧簿。
+  - L2 现在只用于「撮合引擎里没有该合约」的情形。实测:15 次采样**最大年龄 53ms(中位数 0)**。
+- **WAL 盘口快照「10档」写成了前 10 张订单**(`src/exchange/order_router.rs`)
+  - `get_sorted_orders().take(10)` 取的是逐笔订单:同价位重复、档数不足,读回来是
+    `1896.0×1, 1896.0×1, 1896.0×1`,而 10 张单又让 `snapshot_covers_depth` 判为「够深」,永远落不到 L3。
+  - 记录里的 `last_price` 原来写的是买一价,改为撮合簿真实最新价(无成交时才退回买一/卖一)。
+- **聚合统一收口到 `ExchangeMatchingEngine::price_levels`**(`src/matching/engine.rs`)
+  - 上述两处原先各写一份聚合(一份 HashMap 按价格字符串、一份根本没聚合),现共用同一实现。
+  - `get_sorted_orders()` 已按优先级排序(买价降 / 卖价升,同价按时间),同价相邻,一趟合并。
+  - 顺带:原 L3 用 `take(depth * 10)` 取单,`depth=0` 时返回空簿,与文档「0 = 不截断」矛盾,现一致。
+  - 新增测试 `merge_levels_aggregates_adjacent_equal_prices`、`price_levels_on_real_orderbook`。
+
+## [未发布] - 2026-09-04
+
+### 🐛 修复 - 内存与无界积累
+
+- **`actix-web` worker 线程数未设上限**(`src/main.rs`)
+  - 全仓从无 `.workers()` 调用 → 默认取逻辑核数。96 核 × 2 个 HttpServer
+    (HTTP 8094 + WS 8095)= **288 个 worker 线程**。
+  - 全局分配器是 mimalloc(由 `qars_core3` 提供),按线程持有本地 segment 且不主动
+    归还:`smaps` 显示 `LazyFree = 0`、`Private_Dirty ≈ 全部 RSS`,空载 220 秒不下降。
+  - 新增 `worker_threads()`,默认 HTTP 16 / WS 8,可用 `QAEX_HTTP_WORKERS` /
+    `QAEX_WS_WORKERS` 覆盖。
+  - **实测**(同一份磁盘数据、同口径):线程 310 → **37**;
+    启动 ~60 秒处 RSS **10,078 MB → 4,910 MB**;新实例在 ~5,030 MB 平台化,
+    375 秒零增长(旧实例同期 10.0 → 12.3 GB 一路爬到峰值 13.1 GB)。
+
+- **`TradeGateway` 的通知旁路通道无消费者**(`src/exchange/trade_gateway.rs`)
+  - `send_notification` 有 9 个生产调用点(每笔成交 / 每次委托状态变化 / 每次账户更新),
+    第一件事就是往 `unbounded()` channel 里塞;而唯一的排空入口 `get_receiver()`
+    **只被 2 个测试调用,生产零调用** —— 只进不出。
+  - 改为 `bounded(8192)` + `try_send`,满则丢弃并计数(`NOTIFICATION_TAP_DROPPED`)。
+  - ⚠️ 关键约束:**不能用 `?` 传播错误**。原写法一旦返回 Err 会连带掐断后面 4 条
+    投递路径,把内存问题变成通知全断的功能故障。
+  - 附带查清:5 条投递路径里只有 2 条是活的(per-user 订阅者 ←`websocket/mod.rs:126`、
+    `notification_broker` ←`main.rs:761`);`global_subscribers` 与
+    `global_tokio_subscribers` 生产零订阅,恒空。
+
+- **per-user 订阅者只增不删**(`src/exchange/trade_gateway.rs`)
+  - `TradeGateway` 全仓**没有 unsubscribe**,WS 会话只订阅、断连不清理。
+    Receiver 被 drop 后 Sender 成为死引用永久留在 Vec 里,而 `let _ = send(..)`
+    吞掉错误 —— 每条通知都要为每个死订阅者白 clone 一次。
+  - 改为 `retain(|s| s.send(..).is_ok())`,投递与剪枝一次完成。锁序未变。
+
+### 🐛 修复 - 每订阅者泄漏一个 OS 线程
+
+- **`spawn_blocking(recv())` 把阻塞挪到了永不归还的池线程上**
+  (`src/service/websocket/diff_handler.rs`)
+  - 原写法 `tokio::task::spawn_blocking(move || receiver.recv())`,注释还写着
+    「✅ 使用 spawn_blocking 避免阻塞 Tokio 执行器」—— 但 `recv()` 会阻塞到
+    有行情事件为止,而**阻塞中的线程不算 idle,tokio 阻塞池永远不回收它**。
+  - 实测:压测后 `actix-rt` 线程 **24 → 120**,空载 **405 秒纹丝不动**;
+    日志显示 56 次订阅 / 55 次断开,仅 1 个活跃,线程却一个没还。
+  - 三重危害:① 每线程带一份 mimalloc 本地 segment,直接抵消 worker 限流的收益;
+    ② 并发订阅者被 tokio 阻塞池上限(默认 512)硬卡住;③ 一个 OS 线程只为等一条消息。
+  - **本仓库另一条 WS 路径早就做对了** —— `session.rs:140
+    start_market_data_listener` 用 `run_interval(10ms)` + `try_recv()` 批量取
+    + 背压丢弃。改动即照搬该语义(actix `run_interval` → tokio `interval`)。
+  - **验证**:40 个并发 WS 订阅 → 全部断开,`actix-rt` 恒为 **24**
+    (断开时 / +30s / +90s 三次测量均为 24),日志 40 订阅 / 40 断开。
+
+### 🐛 修复 - `/factors` 页面链路的第二处断点(订阅漏了 factor 频道)
+
+- **`diff_handler.rs` 的订阅频道列表少了 `"factor"`**
+  - 上一轮修了 `enable_factor_compute` 默认 false,因子确实开始计算了
+    (debug 日志可见 `Factor update for IF2501: {"ma5":2526.2,...}`),
+    但**链路还有第二处断点**:广播器按**精确字符串相等**过滤频道
+    (`broadcaster.rs:493` `ch == channel`),而订阅列表是
+    `["orderbook","tick","last_price","kline_finished"]` —— 没有 `"factor"`,
+    于是 `FactorUpdate` 对每个 DIFF 订阅者都被丢弃。
+  - 讽刺的是那几行旁边就有一条注释警告过同一类错误
+    (「写成 "kline" 永远匹配不上」)—— 有人修了 kline 却没加 factor,
+    又是「做对了 N-1 处」。
+  - **验证**(端到端):修复前 WS 收到 127 条 rtn_data,顶层键
+    `["ins_list","klines","notify","quotes"]`;修复后 96 条,顶层键
+    `["factors","ins_list","klines","notify","quotes"]`,内容形如
+    `{"IF2501":{"period":3,"values":{"ma5":2536.8,"ma10":2536.8,"ma20":2536.8,
+    "ema12":2536.8,"ema26":2536.8,"rsi14":50.0,"macd":0.0}}}`。
+  - 顺带核对了频道覆盖的完整性:广播器发 5 种频道,`diff_handler` 现已全订阅,
+    `convert_market_event_to_diff` 覆盖全部 6 个事件变体,
+    `kline_actor` 只订 tick(正确),旧 `/ws` 路径直接原样序列化事件(格式无关,无缺口)。
+
+### 🐛 修复 - rayon 全局池 96 线程,伪装成 actix worker
+
+- **启动时给 rayon 设上限**(`src/main.rs`,可用 `QAEX_RAYON_THREADS` 覆盖,默认 8)
+  - rayon 全局池默认 = 逻辑核数(96),**首次用到时懒创建、此后永不销毁**。
+  - **分档实验定位**:只读接口 ×30 → 24 线程;账户详情 ×10 → 24;
+    **`/api/management/transactions` ×5 → 立刻 120**(24+96),20 秒后仍是 120;
+    RSS 同步 2,350 → 3,051 MB(约 7.3 MB/线程)。该 handler 用了 `par_iter`。
+  - **为什么难发现**:rayon 用无名 `thread::Builder`,而 Linux 对无名线程的
+    `comm` **继承父线程** —— 父线程是 actix worker,所以 96 个 rayon 线程
+    全都顶着 `actix-rt|system` 的名字混在真 worker 里,按名字统计只会得出
+    「worker 变多了」。我一度以为是 `.workers()` 上限失效。
+  - **验证**:同样打那个接口 5 次,线程 24 → **24**、RSS 1,924 → **1,924 MB**。
+    线程名也反证了机制:池改由 main 线程创建后,`qaexchange-serv` 从 5 涨到 13(+8)。
+  - 顺带核实 polars **运行时不被触发**(`StreamFactorEngine::update_all` 是纯
+    HashMap + StreamOperator 循环;`query/engine.rs` 在 service 层无调用者),
+    所以不给一个不存在的池加上限。
+
+### 🐛 修复 - 资金流水的「交易前/后余额」两列永远显示 0.00
+
+- **`TransferRecord` 根本没有余额字段**(`src/service/http/models.rs`)
+  - `management.rs:410/481` 转成 `FundTransaction` 时只能硬写 `0.0`,
+    注释直言「TransferStore 不记录这个」。于是资金流水页
+    (`admin/transactions.vue:102/107`)那两列**永远是 0.00**,各占 140px 却毫无信息量。
+  - 补 `balance_before` / `balance_after`(带 `#[serde(default)]` 兼容既有记录),
+    在 3 个写入点(用户入金/出金、银期转账)填真值,2 个消费点改用真实字段。
+  - ⚠️ 一律在**变动前**取值,不用 `after ± amount` 倒推 —— 浮点误差会累积,
+    且一旦语义变化(比如加手续费)就不成立。
+  - **验证**:入金 500 → `before 1,950,148,257.62 / after 1,950,148,757.62`;
+    出金 500 → `before 1,950,148,757.62 / after 1,950,148,257.62`,首尾相接。
+
+### 🐛 修复 - 管理端资金流水每个账户只看得到 20 条
+
+- **`get_records(id, None, None, None, None)` 不等于「取全部」**
+  (`src/service/http/transfer.rs` + `management.rs`)
+  - `TransferStore::get_records` 里 `page_size.unwrap_or(20).min(100)` ——
+    传 `None` 默认 **20**,且被 `.min(100)` 封顶,**这个方法永远返回不了超过 100 条**。
+  - 全所聚合(`management.rs:469`)正是这么写的,而且真实条数被
+    `let (records, _) = ...` 丢弃。实测某账户实存 **63** 条,聚合接口只报 **20**。
+  - 新增 `get_all_records()` 不分页取法,聚合处改用它。
+
+### ⚠️ 新增 - 配置文件里三整段从不被解析
+
+- **启动时告警**(`src/utils/config.rs`)
+  - `ExchangeConfig` 只有 `server/http/websocket/storage/instruments` 五个段,
+    而 `config/exchange.toml` 里还有 `[risk]`、`[matching]`、`[account]` ——
+    没有 `deny_unknown_fields`,serde **静默丢弃**。
+  - 危害集中在 `[risk]`,恰恰是运维最想调的参数:
+    · `max_order_amount` 配置 **1000.0** vs 代码实际 **10,000,000**(差 1 万倍)
+    · `max_position_ratio` 配置 **80.0**(百分数) vs 代码 **0.5**(比率)——**单位都不一致**
+    · `[account].margin_rate = 0.15` 是全系统第 4 个保证金率来源,且无效
+  - 改为启动时列出未解析的段并告警(**只告警不阻断** ——
+    直接加 `deny_unknown_fields` 会让现有配置文件启动失败;
+    真正的修法是接线,但需要先统一单位)。
+  - **验证**:启动日志出现
+    `⚠️ 配置文件中有 3 个段**从不被解析**...: ["account", "matching", "risk"]`。
+
+### 🐛 修复 - QIFI `static_balance` 不含出入金(规范符合性)
+
+- **`account_mgr.rs` 两个 QIFI 产出点收口修正**
+  - qars 的 `get_qifi_slice`(qars2 account.rs:417)直接输出原始字段
+    `self.accounts.static_balance`,而 `deposit()`/`withdraw()`(:536-548)
+    **只更新 `money` 和 `accounts.deposit`,从不更新 `accounts.static_balance`**。
+  - 于是发生过出入金的账户,`balance` 是对的(`get_balance()` 内部算了
+    `+ deposit - withdraw`),`static_balance` 却停在 init_cash ——
+    下游按规范恒等式
+    `balance = static_balance + close_profit + position_profit - commission + premium`
+    反推就会错一个净入金额。
+  - **实测**:`pre_balance=10000, deposit=-3900, withdraw=0,
+    static_balance=10000, balance=6100` —— 规范要求 static_balance = 6100。
+    守恒校验里 4 个账户的偏差**恰好等于各自的净出入金**。
+  - 注释里写明了 qars 内部语义与规范的差异(`settle()` 把 `pre_balance` 设为
+    含浮动盈亏的结算余额、`static_balance` 设为不含,二者故意不等),
+    以及「启用日终结算后需重新确认取哪个语义」这个前提。
+    当前系统结算历史为空,两者相等,修正无歧义。
+  - 第三个产出点 `websocket/handler.rs:320` 只取 `qifi.positions`,不需要改。
+
+### 🐛 修复 - 监控面板的「总出金」结构性恒为 0
+
+- **`monitoring.rs`:`total_withdraw += acc.accounts.withdraw`**
+  - qars 的 `withdraw()` 做的是 `self.accounts.deposit -= amount`,
+    **从不写 `accounts.withdraw`**(该字段只在反序列化/恢复时被赋值)。
+  - 实测面板显示 `total_deposit 9,910,601 / total_withdraw 0`,
+    而系统确实发生过多笔出金 —— 「总出金」永远是 0、「总入金」其实是**净额**,
+    两个数都在误导读者。
+  - 拿不到真正的「总额」:资金变动分散在三条路径且无统一账本
+    (管理端走 CapitalManager、用户端**绕过**它、银期转账走 TransferStore)。
+    在数据模型允许范围内改为按账户净额的正负拆分,
+    `total_deposit - total_withdraw` 仍等于真实净流入。
+
+### ✅ 验证 - 守恒律复查
+
+对本会话的大量改动做系统级复查(582,329 单 / 43 账户):
+
+- **律1 订单生命周期**:total 与四态之和精确相等,差 = **0**。
+- **律3 持仓守恒**:IC2501 / IF2501 / IF2502 精确守恒;
+  **IH2501 多头比空头多 3 手**。逐层排除:
+  · 连测 3 次(各 0.5s、间隔 6s)都精确 +3 → **不是查询竞态**
+    (竞态表现为数值波动与符号翻转);
+  · monitoring 与 management 两个来源都报 43 个账户,
+    且 monitoring 不做元数据过滤 → **不是扫描漏账户**;
+  · **判定性实验**:两个新账户在远离盘口的价位对敲 5 手 →
+    Δlong=+5、Δshort=+5、**Δ差=0** → **当前撮合守恒**。
+  结论:+3 是历史残留,成因很可能正是本会话修掉的
+  「`SELL CLOSETODAY` 被降级成 `BUY OPEN`」—— 想平多头却又开了一个多头,
+  正好产生「多头无对应空头」。全过程差值恒为 3,与历史快照的形态一致。
+
+### 🐛 修复 - 资金金额没有上界(1e308 入金真的记入余额)
+
+- **新增 `models::validate_money_amount`,四个资金入口统一复用**
+  - 各入口原先只有 `!(req.amount > 0.0)`(这个写法是**故意**的 ——
+    它同时挡住 NaN,因为 `NaN > 0.0` 为假;换成 `amount <= 0.0` 反而会放过 NaN。
+    clippy 的 `neg_cmp_op_on_partial_ord` 在这里是假阳性)。
+  - 但**没有上界**:实测 `{"amount": 1e308}` 入金返回 **200**,余额真的变成 `1e+308`。
+  - 危害不止"数字很大":f64 在 1e308 量级精度约 1e292,账户**原有余额直接消失在
+    浮点噪声里**;而 deposit/withdraw 绑定 `money` 与 `accounts.deposit` 同步增减,
+    一旦精度丢失,**无法再通过任何 API 组合把账户恢复到一致状态**。
+    (`1e400` 会被 serde 在 JSON 解析阶段挡掉,所以 inf 进不来;
+     真正的缺口是"有限但荒谬"的数值。)
+  - 现在校验:有限、大于 0、不超单笔上限 1 万亿。
+    四处接线:`/api/account/deposit`、`/api/account/withdraw`、
+    银期转账(按绝对值)、`CapitalManager::deposit/withdraw`。
+  - **验证**:`1e308`→400、`1e13`→400「超出单笔上限」、`1e11`→200、`0`/`-5`→400。
+
+### 🎨 布局 - 8 处"无法显示"硬缺陷
+
+系统性布局审计(28 条路由 × 3 档视口 + 命中后补测 4 档,全部取
+`getBoundingClientRect`/`scrollWidth` 实测值)。**问题集中在两个模式:
+固定像素尺寸遇上真实数据长度、浅色主题颜色遗留在暗色页面上。**
+
+- `monitoring/index.vue`:`.status-card { height: 120px }` + el-card 默认
+  `overflow:hidden` → 内容需 125px,副行「待成交」「金额」被拦腰切断且祖先滚动无解。
+  改 `min-height`。
+- `monitoring/index.vue`:`.stat-value{color:#303133}` 落在 `#161b22` 上
+  **对比度 1.33:1**(AA 需 4.5),「总任务数」近乎隐形 —— 它是全站唯一没带
+  `.primary/.success` 修饰类的裸 `.stat-value`。连同 `.stat-label`/`h3`(2.83:1)
+  与 `#f0f0f0` 边框一并改为暗色变量。
+- `user/commission.vue` + `user/margin.vue`:账户下拉 200px,而
+  `ACC_`+32 位 hex 需 305px,**硬切 107px 且无省略号** —— 用户无法分辨当前账户。
+- `user/account-curve.vue`:同病,240px vs 需要 423px。
+- `positions/index.vue`:统计卡 `font-size: 26px` 定值,在 1200~1400 区间
+  切掉金额尾部(1200 差 49px),因 `:lg="6"` 从 1200px 起排四列而字号不收缩。改 clamp。
+- `admin/accounts.vue`:`.stat-card` 是 flex 子项但**缺 `min-width:0`**,
+  1024 宽下切掉 63px。补上并改 clamp 字号。
+- `dashboard/index.vue`:**最宽的视口反而截断** —— `minmax(260px,1fr)` 在 1920
+  排到 5 列,而 `clamp(...,1.4vw,28px)` 已涨到 26.88px,总权益需 291px > 272px。
+  字号随视口线性增长快过 auto-fit 加列后每列变宽的速度。改 `minmax(320px)` + 上限 22px。
+- 7 个数值/标签列被 ellipsis 截断且 hover 弹不出全文(总权益/可用资金/持仓市值/
+  浮动盈亏×2/风险率/类型),补 `show-overflow-tooltip`。
+  **不加宽**是因为这些表在 1280 下已横向溢出,加宽会加剧。
+
+### 🎨 布局 - 其他
+
+- `layout/index.vue`:`pageTitle` 从 36 行硬编码 path map 改为 `$route.meta.title`。
+  原字典漏了 `/account/:accountId`(动态段永远匹配不上)、`/factors`、
+  `/websocket-test` 三条,顶栏回落成「量化交易系统」;而 router 里这三条
+  **都已有 meta.title**,`router/index.js:239` 设 document.title 时早就在用 ——
+  所以标签页对、顶栏错。字典还与 meta 自相矛盾(`/dashboard` 两个名字)。
+  核实:33 条路由中 32 条有 meta.title,唯一没有的不是业务路由。
+- `admin/instruments.vue`:「上市新合约」弹窗内容 823px + `top:15vh`,
+  1366×768 下 footer 落在折线外 169px(wrapper 可滚动,内容可达,但需先滚)。
+  收紧 top 并让 body 自滚。
+- `trade/index.vue`:顶栏合约下拉 220px 装不下 `IF2501 - 沪深300股指期货2501`。
+
+**经量化验证不成立的怀疑**(与找到缺陷同等重要):el-table 表头/表体错位
+(rAF+80ms 后重测 dL=dR=0;"表头宽 8px"是 gutter 设计)、fixed 列遮挡
+(滚到最右零重叠)、页面级横向溢出(28 路由 × 4 视口全为 0)、元素重叠
+(命中的全是 el-empty 的 SVG 内部与 el-progress 的故意负 margin)、
+浮层压内容(全站仅 2 个 fixed,取样底下无文字)。
+
+### 🐛 修复 - 强平结果被丢弃,失败也记成"已完成"
+
+- **`let _ = router.submit_force_order(req)`**(`src/exchange/settlement.rs`)
+  - 强平订单的响应被整个丢弃,而紧接着的
+    `monitor.record_liquidation(.., vec![], ..)` **无条件**记一次强平事件、
+    平掉的合约列表还是空的。于是强平可以静默失败却被记成已完成:
+    账户继续超杠杆,风控台却显示"已处理",没有日志、没有告警。
+  - `submit_force_order` 返回的是 `SubmitOrderResponse`(不是 Result),
+    `success: false` 时带着 `error_message` —— 全被 `let _` 吃掉。
+  - 现在逐笔检查:成功的合约进 `closed_instruments` 并真正传给
+    `record_liquidation`;失败的记 `log::error!` 并汇总到强平记录的备注里,
+    风控台能看出这次强平是不完整的。强平是核心风控动作,失败必须可见。
+
+### 🐛 修复 - 历史数据查询吞掉 WAL 回放错误
+
+- **`let _ = wal_mgr.replay(..)`**(`src/service/http/data_query.rs`,2 处)
+  - `replay` 返回 `Result<(), String>`,被整个丢弃。WAL 文件损坏、I/O 错误、
+    或某条记录解码失败时,`query_history_ticks` / K线查询会带着**残缺数据
+    返回 HTTP 200**,调用方完全无从判断拿到的是全量还是半截。
+  - 对历史数据查询接口来说,静默返回错数据比报错危险得多。
+    现在回放失败返回 500 并带上原因;正常路径行为不变(实测仍 200)。
+
+### 🐛 修复 - 同一时间戳字段有两种单位(重启后订单显示成 1970 年)
+
+- **`OrderInfo.submit_time` 实时路径是纳秒、恢复路径是秒**
+  (`src/exchange/order_router.rs`)
+  - 实时下单 `:912` 用 `timestamp_nanos_opt()`;而
+    `restore_orders_from_accounts` `:2654` 写着
+    `order.insert_date_time / 1_000_000_000, // 纳秒转秒`。
+  - 实测同一接口返回:实时单 `1788528083266660725`、恢复单 `1788515691`。
+  - 前端 `orders/index.vue:83` 的注释明写「submit_time 是纳秒」并按纳秒格式化,
+    所以**每次重启后,所有恢复出来的订单在界面上都显示成 1970 年**;
+    排序与日期筛选也会对其中一种算错。
+  - 恢复路径改回纳秒(`update_time` 同样从 `timestamp()` 改为
+    `timestamp_nanos_opt()`)。`match_date` 另加数量级容错,
+    以防其他来源的遗留时间戳。
+  - **验证**:重启后恢复的订单返回 `1788515691792162141` → 2026-09-04 17:54:51。
+
+### 🐛 修复 - 一批「绑了但不生效」的筛选控件
+
+上一轮审计报出 7 个筛选控件形同虚设,逐条核实后修掉后端能修的部分:
+
+- **账户状态筛选**(`src/service/http/management.rs`)——
+  `AccountListQuery.status` 声明了但 handler 从不引用,`AccountListItem`
+  更是**连状态字段都没有**。实测修复前 `status=''/active/frozen/BOGUS`
+  一律返回同样的 total。现在响应带 `status`,并真正按它筛;
+  顺带补上前端一直在发、结构体里却没有的 `user_id`。
+  **验证**:冻结一个账户 → `active` 41→40、`frozen` 0→1;解冻后还原。
+- **结算历史日期区间**(`src/service/http/admin.rs`)——
+  前端 `settlement.vue:387` 一直在发 `start_date`/`end_date`,而
+  `get_settlement_history(state)` **连 `web::Query` 提取器都没有**。
+  已加参数并按 `settlement_date` 过滤;顺带加排序 ——
+  数据源是 DashMap 迭代,顺序不定,历史视图每次刷新顺序都会变。
+- **订单页/成交页的合约与日期筛选**(`src/service/http/handlers.rs`)——
+  `OrderPageQuery` 加 `instrument_id` / `start_date` / `end_date`,
+  三个 handler(用户订单、用户成交、账户成交)统一先筛选后分页
+  (顺序不能反,否则每页条数与 total 都不对)。
+  **验证**:同一账户 92 单 → `IF2501` 31 / `IH2501` 15 / `NOSUCH` 0;
+  日期区间 2020 年 → 0、今天 → 全部。
+
+  仍未修(需前端配合或属产品决策):资金流水日期区间(前后端都缺)、
+  结算执行日期(后端 `execute_settlement` 无任何提取器,恒结算"今天")。
+  另经核实,**风控页的搜索框其实是好的**(`risk.vue:351` 客户端过滤生效),
+  只是多发了一个被 `RiskQuery` 丢弃的 `user_id` —— 死参数,不是死控件。
+
+### 🐛 修复 - 卖出平今被记成买入开仓(方向翻转)
+
+- **`QAOrder::new` 从 towards 反推方向/开平是有损的**(`src/exchange/order_router.rs`)
+  - qars 的 `QAOrder::new`(qars2 order.rs:51-56)只认四个 towards 值:
+    `1|2 => (BUY,OPEN)`、`-1|-2 => (SELL,OPEN)`、`3 => (BUY,CLOSE)`、
+    `-3 => (SELL,CLOSE)`、`_ => (BUY,OPEN)`。
+    而 `calculate_towards` 对平今产出 **±4** —— 掉进兜底。
+  - 实测(直接解码 gateway_wal 的 rkyv 记录,以 SELL OPEN 作 ground truth 校准字节位):
+    · 提交 `SELL CLOSETODAY` → 落盘 **direction=BUY, offset=OPEN**(方向翻转)
+    · 提交 `BUY CLOSETODAY`  → 落盘 offset=OPEN(平仓变开仓)
+    · 提交 `CLOSEYESTERDAY`  → 落盘 offset=CLOSE(平昨的区分丢失)
+  - **上一轮统一 `encode_offset` 是不够的** —— 值在上游就已经被降级,
+    那两个编码函数永远收不到 CLOSETODAY/CLOSEYESTERDAY。
+  - 账户持仓数学走 towards(未受影响);错的是**订单记录**:QIFI orders、WAL、
+    以及 API 返回给用户的委托。建单后用已归一化的 `req.direction/offset` 回填。
+  - **验证**:穿价成交建多头持仓 → 提交 `SELL CLOSETODAY` →
+    回查 `direction=SELL offset=CLOSETODAY status=Filled`。
+
+### 🐛 修复 - direction 从不校验,任何垃圾都变成买单
+
+- **新增 `normalize_direction`**(`src/exchange/order_router.rs`),与
+  `normalize_offset` 对称;WAL 编码统一到 `WalRecord::encode_direction`(5 处)
+  - 此前 direction **完全没有入口校验**。`calculate_towards` 的兜底注释写
+    「已是不可达路径」,那只对 offset 成立(offset 有 normalize_offset 把关)。
+  - 实测(同一账户连发 4 单,价格远离市价故会挂住):
+    `"buy"` / `"Buy"` / **`"BOGUS"`** 全部 **200 接受并记成 BUY**,
+    四张单真挂到了买盘上(随后一张 SELL 被自成交防范拦住,正好反证它们是活单)。
+  - 现在大小写不敏感地接受 BUY/SELL,其余一律 4004 拒单。
+
+### 🐛 修复 - 诊断性:qars 的拒单错误是 unit 类型
+
+- **`send_order` 返回 `Result<QAOrder, ()>`,错误里没有任何原因**
+  (`src/exchange/order_router.rs`)
+  - 原写法 `format!("Insufficient funds/margin: {:?}", e)` 把**所有**拒单
+    一律报成资金不足,末尾还挂个空 `()`。无持仓平仓、手数为 0、真资金不足,
+    三种情况给出完全相同且部分错误的消息。
+  - 改为 qaexchange 自行判定:可平持仓不足 / 手数非法 / 资金不足 分别报。
+  - **验证**:无持仓平仓now报
+    `可平持仓不足: IH2501 需平 1,该方向可平 0(多 0 / 空 0)`。
+
+### 🐛 修复 - `volume_condition=MIN` 静默降级成 ANY
+
+- `VolumeCondition::MIN` 全仓**只有 Display / FromStr / 单测**,撮合侧零实现;
+  存进 `OrderRouteInfo` 的那份更是从头到尾没被读过。客户要求「至少成交 N 手」
+  实际按 ANY 撮合。改为显式 4005 拒单 —— 静默降级订单条件比拒绝危险得多。
+  (当前前端只发 ANY/ALL,属潜在契约缺口而非现行故障。)
+
+### 🐛 修复 - 资金正确性:全额出金静默成功
+
+- **「出金金额 == 全部可用资金」时余额不减,却记为成功**
+  (`src/exchange/account_mgr.rs` 新增 `withdraw_checked`,4 个调用点改用)
+  - qars 的 `QA_Account::withdraw`(qars2 account.rs:541)用**严格大于**
+    `if self.money > amount`,且**没有返回值**;本仓库三个入口的前置校验都是
+    `if money < amount { 拒绝 }`,允许相等通过。于是校验放行 → 扣款空转 →
+    上层照常返回「成功」并写 `status: completed` 的流水。
+  - **实测**:balance 1444.0 出金 1444.0 → 200「转账成功」,事后仍是 1444.0;
+    `/api/management/withdraw` 更记下 `balance_before=1444, balance_after=1444,
+    status=completed`。银期转账 / 用户出金 / 管理端出金三个入口同时中招 ——
+    正因为 `withdraw()` 没有任何返回值可判。
+  - 新增 `withdraw_checked` 在调用后核对余额确实减少,没减少就返回 Err;
+    四处(transfer.rs / handlers.rs / capital_mgr.rs ×2)统一改用。
+  - **验证**:新账户余额 1000.0 全额出金 → **HTTP 400**「出金未生效: 请求
+    1000.0000,余额 1000.0000 → 1000.0000(应为 0.0000)」,不再静默成功。
+  - 根治需改 qars 的 `>` → `>=`(共享库,需另行决策);改了之后本函数依然正确。
+
+### 🐛 修复 - 开户密码从未写入校验表(大量 400 的来源)
+
+- **`ACCOUNT_PASSWORDS` 只被改密/重置写入,开户从不写**
+  (`src/service/http/account_admin.rs` 新增 `seed_account_password`)
+  - `OpenAccountRequest.password`(models.rs:45)被 HTTP 层收下后**直接丢弃** ——
+    `CoreOpenAccountRequest` 根本没有这个字段。于是所有账户在
+    `verify_account_password` 里都落到 `None => password == "123456"`:
+    · 用户拿开户时自己设的密码改密码 → **恒定 400「原密码错误」**
+    · 银期转账的资金密码 → 只有 "123456" 被接受
+  - **验证**:开户设 `mypw8888` → 用它改密码 **200 成功**(此前 400);
+    用旧硬编码 `123456` → **400 原密码错误**(正确地不再接受)。
+  - 注:`/api/user/{id}/account/create` 走的 `CreateAccountRequest`
+    没有密码字段,那条路径仍用默认值 —— 要改需先给请求体加字段。
+
+### 🐛 修复 - 平昨单被持久化成开仓
+
+- **同一段 offset 编码 match 复制了 6 份,全都缺 `CLOSEYESTERDAY` 分支**
+  (统一到 `WalRecord::encode_offset`)
+  - `trade_gateway.rs` 里 5 份(`:609 / :681 / :773 / :992 / :1148`)只写到
+    `"CLOSETODAY" => 2`,`_ => 0`;`storage/subscriber.rs:305` 第 6 份更粗
+    (`if offset == "OPEN" { 0 } else { 1 }`),把 CLOSETODAY 也压成 CLOSE。
+  - 而 `order_router::normalize_offset` 是**接受平昨单**的、`calculate_towards`
+    也正确路由 —— 结果合法平昨单落盘成 `offset=0`(开仓),污染回放与审计。
+  - 统一为 `encode_offset`(0=OPEN / 1=CLOSE / 2=CLOSETODAY / 3=CLOSEYESTERDAY),
+    未知值记 `log::error!` 而非静默落 0。
+  - **验证**:OPEN/CLOSE/CLOSETODAY/CLOSEYESTERDAY 及两种下划线写法全部正确归一化,
+    `BOGUS` 被明确拒单,日志中「未知 offset」**0 次**。
+
+### 🐛 修复 - 其他
+
+- `CreateAnnouncementRequest` 补 `publish_time`(`models.rs`)——
+  前端 `admin/announcements.vue:283` 一直在发用户选的生效时间,
+  而结构体没有该字段且无 `deny_unknown_fields` → 静默丢弃,后端一律用当前时间。
+- `views/trade/index.vue`:WebSocket 以 `user_id=anonymous` 连接 ——
+  `this.currentUser` 是**字符串**(store 存的就是 userId),对它取 `.user_id`
+  恒为 undefined;而 `mounted` 里 initWebSocket 先于 account-change 触发,
+  `selectedAccountId` 还是 null → 落到 'anonymous',orders/trades/accounts
+  三类推送全收不到(后端按 account_id 分发)。改为「无账户先不连,
+  account-change 后再连」,并在账户切换时重连。
+- `views/admin/instruments.vue`:「编辑合约」永远保存不了 ——
+  `showEditDialog` 用 `{ ...row }` 整体替换 form,而接口返回的行里没有
+  `init_price`(InstrumentInfo 不存它),默认值被冲成 undefined;
+  该字段又是 required + 编辑态 disabled → 用户既填不了、校验又过不去,
+  点「确定」请求根本不发出。改为合并写法保住默认值。
+
+### ⚡ 性能 - 账户详情分页快 10 倍
+
+- **只把当前页转 JSON,不再全量转换后切片**(`src/service/http/management.rs`)
+  - 原写法先 `qifi.orders.values().map(to_value)` 转换**全部**订单再分页 ——
+    16.9 万单的账户每翻一页都做 16.9 万次 `serde_json::to_value`(每次分配一个 Map),
+    而返回的只有 50 条。改为对 `&Order` 引用排序(只比 i64),分页之后才转换。
+  - **实测**:`1.04~1.14 s/页` → **`0.105~0.108 s/页`**,且与页码、每页条数无关
+    (page=1 / page=2 / page=100 / page_size=500 全部 ~0.107 s)。
+  - 附带查清一个我一度怀疑错的地方:`get_qifi_slice()` 确实持
+    `account.write()`(qars 的 `&mut self` API),但实测详情请求 1.04 s 期间,
+    同账户 `/api/account/{id}`(同样取写锁)最大只延迟 **72 ms** ——
+    写锁只覆盖 QIFI 克隆,那 ~950 ms 的 `to_value` 发生在**锁外**。
+    先测量再优化,避免了给一个不存在的锁竞争加缓存。
+
+### 🐛 修复 - 分页正确性
+
+- **offset 分页在倒序 + 活跃写入下会返回重复订单**
+  (`src/service/http/management.rs`)
+  - 排序是倒序(新→旧),新订单插在最前,后续页整体右移 N 位。
+  - **受控实验坐实**(不是理论风险):背靠背取 page1/page2 交集 0;
+    间隔 8 秒再取,`total` 从 168,896 涨到 169,020(+124),
+    **page1 ∩ page2 恰好 = 124** —— 重叠数恒等于期间新增订单数。
+    做市商账户每秒新增 10+ 单,必现。
+  - 解法:**快照锚定**。首次请求返回 `snapshot_ts`(当前最新订单时间戳),
+    后续页原样带回,服务端只在 `insert_date_time <= snapshot_ts` 内分页。
+  - **验证**:带锚点同样间隔 8 秒,`total` 恒为 169,028,
+    page1 ∩ page2 = **0**,page3 与前两页交集 = **0**,三页去重 600/600。
+
+- **`page_size=0` / 只传单个参数会返回全量**(69 MB)
+  - 原守卫 `(Some(page), Some(size)) if size > 0` 让这三种情况都掉进
+    `_ => 全量` 分支 —— 一个小参数换来 69 MB 响应。
+  - 改为「只要给了分页意图就分页」,`size` 缺失或为 0 时用默认 100。
+  - **验证**:`page_size=0` → 100 条;只传 `page=2` → 100 条;`page_size=5` → 5 条。
+
+- **`account-detail.vue` 漏接分页**(前端)
+  - `risk.vue` 接了、`account-detail.vue` 没接(同一个接口的两个消费者,
+    又一次「做对了 N-1 处」)。实测大账户拉回 69.7 MB / 16 万单,
+    浏览器主线程连续阻塞 **≥75 秒**(对照组:59 单账户 5 秒渲染完成)。
+  - 两个页面现均带 `page` / `page_size` / `snapshot_ts`。
+
+### 🐛 修复 - 接口
+
+- **`/api/management/account/{id}/detail` 无分页**(`src/service/http/management.rs`)
+  - 实测最大账户返回 **65,460,145 字节 / 157,861 单**;前端 Element UI 的
+    `el-table` 不虚拟化,实测「点击 → 渲染完成 12,509 ms / DOM 382,568 节点」。
+  - 加 `page` / `page_size`(复用 `handlers::OrderPageQuery`,与
+    `/api/order/user/{id}` 同一套语义),响应补 `orders_total`。
+  - ⚠️ **先排序再分页**:`qifi.orders` 是 HashMap,迭代顺序不定,
+    直接切片会让翻页内容随机跳动。按 `insert_date_time` 倒序。
+
+- **交易员页面绕道调管理员端点**(`src/service/http/routes.rs`)
+  - 下单面板与成交记录页需要 `contract_multiplier` / `margin_rate`,而
+    `/api/market/instruments` 只有 `multiplier`、没有 `margin_rate`,
+    于是两个交易员页面调了 `/api/admin/instruments` —— `QAEX_REQUIRE_ADMIN_AUTH=1`
+    一开即 403,且两处都有 `try/catch` 静默回退到写死的 300
+    (IC2501 真实乘数是 200 → 成交额高报 50%)。
+  - 新增只读路由 `/api/market/instrument-specs`,与 admin 版**同一个 handler、
+    同一个 `InstrumentRegistry`**,仅不挂鉴权。写操作仍在 admin scope 内。
+
+### 🐛 修复 - 前端
+
+- `views/admin/risk.vue`:模板用了 `v-model="detailTab"` 却从未在 `data()` 声明 ——
+  el-tabs 回退到索引 `"0"`,而 pane 是具名 `positions`/`orders`,永不匹配 →
+  详情弹窗两个 tab 都不高亮、内容全空白。
+- QIFI 字段名对齐:`cost_long`/`cost_short` → `open_price_long`/`open_price_short`,
+  `price`/`volume` → `limit_price`/`volume_orign`(前四者在 QIFI 中**根本不存在**)。
+- `views/user/account-detail.vue`:「多头均价」原绑 `open_cost_long`(**开仓总成本**),
+  实测显示 129,785,004 而真实均价是 3,277.4 —— 差「手数 × 乘数」= 39,600 倍。
+  改绑 `open_price_long`。**数字错得离谱比留空更危险。**
+- 公告模块:`created_at` → `publish_time`(后端结构体里根本没有 `created_at`,5 处);
+  `formatDate` 去掉 `* 1000`(后端 `as_millis()`,本就是毫秒,2 处);
+  优先级映射改大写(后端 `SCREAMING_SNAKE_CASE`,4 处)。
+  顺带修了同一行的第二个 bug:`priorityOrder[p] || 3` 对 Urgent(序号 **0**)
+  也落到 3 —— 0 是 falsy,**即使大小写改对紧急公告仍不会置顶**。
+- `views/admin/risk.vue`:删除重复的 `position_count` 列(同一字段渲染两列)。
+
+### 📝 说明
+
+已定位但**未**改动的项(需要产品/数据安全决策,不擅自接线):
+- `create_checkpoint()` 无生产调用者,WAL 累积 5.44 GB。已补 `force_flush()`
+  修好前置条件,但「删 WAL」属于可能丢数据的操作,接线前需确认 SSTable 持久化语义。
+- `OrderRouter` 的 `orders` / `engine_id_to_order` / `engine_id_to_user` 三张表
+  只插不删。查表用的是**对手方** `opposite_order_id`,在订单终态时即删会让对手方
+  的成交事件查不到 —— 需要延迟清理或日切,不是简单加个 remove。
+- `OrderRouter.user_orders` 是死字段(全仓无插入点),导致
+  `OrderRouter::query_user_orders()` **永远返回空**;HTTP 层走的是
+  `get_user_order_details()`,所以线上没暴露 —— 典型双实现分叉。
+- `update_order_status()` 全仓只有定义、零调用。
+- 服务端对 SIGTERM 20 秒无响应,缺优雅停机。
+
+@yutiansut @quantaxis
+
 ## [1.0.1] - 2025-10-07
 
 ### 🆕 新增 - 市场快照生成器系统
