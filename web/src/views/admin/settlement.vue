@@ -59,12 +59,20 @@
               height="200"
             >
               <el-table-column prop="instrument_id" label="合约代码" min-width="150" show-overflow-tooltip></el-table-column>
-              <el-table-column prop="settlement_price" label="结算价" min-width="120" align="right"></el-table-column>
-              <el-table-column prop="last_price" label="最新价" min-width="120" align="right"></el-table-column>
-              <el-table-column prop="change_rate" label="涨跌幅" min-width="120" align="right">
+              <el-table-column prop="settlement_price" label="结算价" min-width="120" align="right" show-overflow-tooltip></el-table-column>
+              <!-- last_price / change_rate 取不到时是 null,必须显示「-」。
+                   若走 `(Number(null)||0)` 会渲染成 `+0.00%` —— 那仍然是编造,
+                   只是把随机数换成了 0。@yutiansut @quantaxis -->
+              <el-table-column prop="last_price" label="最新价" min-width="120" align="right" show-overflow-tooltip>
                 <template slot-scope="scope">
-                  <span :style="{ color: scope.row.change_rate >= 0 ? '#F56C6C' : '#67C23A' }">
-                    {{ scope.row.change_rate >= 0 ? '+' : '' }}{{ (scope.row.change_rate * 100).toFixed(2) }}%
+                  {{ scope.row.last_price == null ? '-' : Number(scope.row.last_price).toFixed(2) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="change_rate" label="涨跌幅" min-width="120" align="right" show-overflow-tooltip>
+                <template slot-scope="scope">
+                  <span v-if="scope.row.change_rate == null">-</span>
+                  <span v-else :style="{ color: (Number(scope.row.change_rate) || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
+                    {{ (Number(scope.row.change_rate) || 0) >= 0 ? '+' : '' }}{{ $pct(scope.row.change_rate, 2) }}
                   </span>
                 </template>
               </el-table-column>
@@ -97,6 +105,7 @@
              var(--qa-content-h) 由 layout/index.vue 统一定义 = 100vh - 56(顶栏) - 40(padding),
              有公告条时自动再减 40px; max(260px, ...) 是极短视口下的兜底 -->
         <el-table
+          :empty-text="$emptyText(loadError)"
           ref="historyTable"
           :data="historyList"
           border
@@ -105,31 +114,60 @@
           :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 300px))'"
         >
           <el-table-column prop="settlement_date" label="结算日期" min-width="120"></el-table-column>
-          <el-table-column prop="instrument_count" label="合约数" min-width="100" align="center"></el-table-column>
-          <el-table-column prop="account_count" label="账户数" min-width="100" align="center"></el-table-column>
-          <el-table-column prop="total_profit" label="总盈亏" min-width="150" align="right">
+          <!-- ⚠️ 列名必须对齐后端 `SettlementResult`(exchange/settlement.rs) ——
+               handler `admin.rs::get_settlement_history` **直接序列化** `Vec<SettlementResult>`,
+               无映射层(末尾是 `Ok(...json(ApiResponse::success(history)))`)。
+               原来 10 列里 7 列读后端不返回的字段:
+                 instrument_count / profit_accounts / loss_accounts / status → 后端完全没有
+                 account_count → 实为 total_accounts
+                 liquidation_count → 实为 force_closed_accounts(**是 Vec<String>**)
+                 execution_time → 实为 elapsed_ms
+               只有 settlement_date / total_profit / total_commission 是对的。
+               「合约数」整列删除:后端按**账户**维度统计,没有合约维度的数据。
+               因为本系统从不自动结算(见 DECISIONS-PENDING),这张表一直是空的,错误从未显形。
+               @yutiansut @quantaxis -->
+          <el-table-column prop="total_accounts" label="账户数" min-width="100" align="center"></el-table-column>
+          <el-table-column prop="settled_accounts" label="已结算" min-width="100" align="center"></el-table-column>
+          <el-table-column prop="failed_accounts" label="失败" min-width="90" align="center">
             <template slot-scope="scope">
-              <span :style="{ color: scope.row.total_profit >= 0 ? '#F56C6C' : '#67C23A' }">
-                {{ scope.row.total_profit >= 0 ? '+' : '' }}{{ scope.row.total_profit.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+              <span :style="{ color: (Number(scope.row.failed_accounts) || 0) > 0 ? '#F56C6C' : '#67C23A' }">
+                {{ Number(scope.row.failed_accounts) || 0 }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="total_commission" label="总手续费" min-width="150" align="right">
+          <el-table-column prop="total_profit" label="总盈亏" min-width="150" align="right" show-overflow-tooltip>
             <template slot-scope="scope">
-              {{ scope.row.total_commission.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+              <!-- 颜色必须与符号读**同一个**值:插值走 (Number(x)||0),这里若读生值,
+                   缺字段时 `undefined >= 0` 为 false → 绿,而符号给 '+' —— 同一格子
+                   符号说正、颜色说负。@yutiansut @quantaxis -->
+              <span :style="{ color: (Number(scope.row.total_profit) || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
+                {{ (Number(scope.row.total_profit) || 0) >= 0 ? '+' : '' }}{{ $money(scope.row.total_profit) }}
+              </span>
             </template>
           </el-table-column>
-          <el-table-column prop="profit_accounts" label="盈利账户数" min-width="120" align="center"></el-table-column>
-          <el-table-column prop="loss_accounts" label="亏损账户数" min-width="120" align="center"></el-table-column>
-          <el-table-column prop="liquidation_count" label="强平账户数" min-width="120" align="center"></el-table-column>
-          <el-table-column prop="status" label="状态" min-width="100">
+          <el-table-column prop="total_commission" label="总手续费" min-width="150" align="right" show-overflow-tooltip>
             <template slot-scope="scope">
-              <el-tag :type="getStatusTagType(scope.row.status)" size="small">
-                {{ getStatusName(scope.row.status) }}
+              {{ $money(scope.row.total_commission) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="force_closed_accounts" label="强平账户数" min-width="110" align="center">
+            <template slot-scope="scope">
+              {{ Array.isArray(scope.row.force_closed_accounts) ? scope.row.force_closed_accounts.length : '--' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" min-width="90" align="center">
+            <template slot-scope="scope">
+              <!-- 后端 SettlementResult 没有 status 字段,由 failed_accounts 推导 -->
+              <el-tag :type="(Number(scope.row.failed_accounts) || 0) === 0 ? 'success' : 'danger'" size="mini">
+                {{ (Number(scope.row.failed_accounts) || 0) === 0 ? '成功' : '部分失败' }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="execution_time" label="执行时间" min-width="180"></el-table-column>
+          <el-table-column prop="elapsed_ms" label="耗时" min-width="100" align="right" show-overflow-tooltip>
+            <template slot-scope="scope">
+              {{ Number.isFinite(Number(scope.row.elapsed_ms)) ? Number(scope.row.elapsed_ms) + ' ms' : '--' }}
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="100">
             <template slot-scope="scope">
               <el-button size="mini" type="text" @click="viewDetail(scope.row)">详情</el-button>
@@ -159,8 +197,8 @@
                 <i class="el-icon-user"></i>
               </div>
               <div class="stat-content">
-                <div class="stat-value">{{ statistics.profitAccountsCount }}</div>
-                <div class="stat-label">盈利账户数</div>
+                <div class="stat-value">{{ statistics.settledAccountsCount }}</div>
+                <div class="stat-label">已结算账户数</div>
               </div>
             </div>
           </el-col>
@@ -171,8 +209,8 @@
                 <i class="el-icon-user"></i>
               </div>
               <div class="stat-content">
-                <div class="stat-value">{{ statistics.lossAccountsCount }}</div>
-                <div class="stat-label">亏损账户数</div>
+                <div class="stat-value">{{ statistics.failedAccountsCount }}</div>
+                <div class="stat-label">结算失败账户数</div>
               </div>
             </div>
           </el-col>
@@ -183,7 +221,7 @@
                 <i class="el-icon-coin"></i>
               </div>
               <div class="stat-content">
-                <div class="stat-value">{{ statistics.totalCommission.toLocaleString() }}</div>
+                <div class="stat-value">{{ fmtMoney(statistics.totalCommission) }}</div>
                 <div class="stat-label">总手续费收入</div>
               </div>
             </div>
@@ -254,39 +292,50 @@
         <el-tabs v-model="detailTab" style="margin-top: 16px;">
           <el-tab-pane label="账户明细" name="accounts">
             <el-table
+              :empty-text="$emptyText(detailError)"
               :data="detailData && detailData.accounts || []"
               height="240"
               border
               size="mini"
             >
               <el-table-column prop="user_id" label="账户" min-width="160" show-overflow-tooltip/>
-              <el-table-column prop="balance" label="结算后权益" min-width="140" align="right">
+              <el-table-column prop="balance" label="结算后权益" min-width="140" align="right" show-overflow-tooltip>
                 <template slot-scope="{ row }">{{ formatCurrency(row.balance) }}</template>
               </el-table-column>
-              <el-table-column prop="close_profit" label="平仓盈亏" min-width="120" align="right">
+              <el-table-column prop="close_profit" label="平仓盈亏" min-width="120" align="right" show-overflow-tooltip>
                 <template slot-scope="{ row }">{{ formatCurrency(row.close_profit) }}</template>
               </el-table-column>
-              <el-table-column prop="position_profit" label="持仓盈亏" min-width="120" align="right">
+              <el-table-column prop="position_profit" label="持仓盈亏" min-width="120" align="right" show-overflow-tooltip>
                 <template slot-scope="{ row }">{{ formatCurrency(row.position_profit) }}</template>
               </el-table-column>
-              <el-table-column prop="commission" label="手续费" min-width="100" align="right">
+              <el-table-column prop="commission" label="手续费" min-width="100" align="right" show-overflow-tooltip>
                 <template slot-scope="{ row }">{{ formatCurrency(row.commission) }}</template>
               </el-table-column>
             </el-table>
           </el-tab-pane>
           <el-tab-pane label="结算价" name="prices">
             <el-table
+              :empty-text="$emptyText(detailError)"
               :data="detailData && detailData.prices || []"
               height="240"
               border
               size="mini"
             >
               <el-table-column prop="instrument_id" label="合约" min-width="140" show-overflow-tooltip/>
-              <el-table-column prop="settlement_price" label="结算价" min-width="120" align="right" />
-              <el-table-column prop="last_price" label="最新价" min-width="120" align="right" />
-              <el-table-column prop="change_rate" label="涨跌幅" min-width="120" align="right">
+              <el-table-column prop="settlement_price" label="结算价" min-width="120" align="right" show-overflow-tooltip/>
+              <el-table-column prop="last_price" label="最新价" min-width="120" align="right" show-overflow-tooltip>
                 <template slot-scope="{ row }">
-                  {{ ((row.change_rate || 0) * 100).toFixed(2) }}%
+                  <!-- 与 :68 的编辑表同口径:null/缺失显示「-」而非空单元格。
+                       口径分叉只修一半等于没修。@yutiansut @quantaxis -->
+                  {{ row.last_price == null ? '-' : Number(row.last_price).toFixed(2) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="change_rate" label="涨跌幅" min-width="120" align="right" show-overflow-tooltip>
+                <template slot-scope="{ row }">
+                  <!-- 与 :71 的编辑表同口径:没有值显示「-」,不要渲染成 0.00%
+                       —— 那仍是编造,只是把随机数换成了 0。@yutiansut @quantaxis -->
+                  <span v-if="row.change_rate == null">-</span>
+                  <span v-else>{{ $pct(row.change_rate, 2) }}</span>
                 </template>
               </el-table-column>
             </el-table>
@@ -305,13 +354,21 @@ import {
   setSettlementPrice,
   batchSetSettlementPrices,
   executeSettlement,
-  getSettlementDetail
+  getSettlementDetail,
+  getTick
 } from '@/api'
 
 export default {
   name: 'Settlement',
   data() {
     return {
+      // 加载失败原因 —— 与「真的没数据」区分开,交给 $emptyText 渲染
+      // @yutiansut @quantaxis
+      loadError: null,
+      // 弹窗详情表的加载失败原因 —— 与主历史表的 loadError 分开:
+      // 否则打开详情会擦掉历史表的错误态,详情失败又会反过来污染历史表。
+      // @yutiansut @quantaxis
+      detailError: null,
       activeTab: 'daily',
       executing: false,
       historyLoading: false,
@@ -367,6 +424,49 @@ export default {
     }
   },
   methods: {
+    // 金额格式化 —— 统一两位小数。@yutiansut @quantaxis
+    //
+    // ⚠️ 原来这几个统计卡用的是裸 `toLocaleString()`(无 options),
+    // 而**同文件下方表格**用的是带 `minimumFractionDigits: 2` 的版本。
+    // 结果:1366×768 实测卡片显示 `总资金 4,232,972,133.148`(**三位小数**)、
+    // `可用资金 4,156,965,285.352`,而正下方表格里同类金额是两位。
+    // 375×667 下这还会让 `.stat-value` 溢出容器(scrollWidth 164px / 槽宽 48px)。
+      // ✨ 委托全局 `$money`(main.js):判空 → isFinite → **量级上限 1e15**。
+      // 全仓曾有 13 个各写各的金额格式化器,**没有一个带量级闸**,
+      // 于是 `balance = 1e300` 的污染账户在 6 个页面渲染成 404 个字符
+      // (`Number.isFinite(1e300)` 为真,只判 isFinite 挡不住)。@yutiansut @quantaxis
+    fmtMoney (v) {
+      return this.$money(v)
+    },
+
+    // 取真实行情填「最新价 / 涨跌幅」;失败就保持 null,由表格显示「-」
+    // —— **宁可不显示,也不编。** @yutiansut @quantaxis
+    // 第二参已成死参(改用 row.settlement_price 后),保留签名以免漏改调用点;
+    // 实际不再读它。@yutiansut @quantaxis
+    async fetchLastPrice (instrumentId, _settlementPriceUnused) {
+      if (!instrumentId) return
+      try {
+        const res = await getTick(instrumentId)
+        const d = (res && res.data) || res
+        const last = Number(d && d.last_price)
+        if (!Number.isFinite(last) || last === 0) return
+        const row = this.settlementPrices.find(p => p.instrument_id === instrumentId)
+        if (!row) return
+        // ⚠️ 用**行上的现值**而不是调用时捕获的参数 @yutiansut @quantaxis
+        // 回验实测:同一合约先后改价时,迟到的应答会拿旧结算价算涨跌幅,
+        // 配着新结算价一起显示(`settlement_price:2000` 配 `change_rate:1.6342`,
+        // 而 1.6342 = (2634.2-1000)/1000 用的是旧价 1000)。读 row 就永远自洽。
+        const sp = Number(row.settlement_price)
+        this.$set(row, 'last_price', last)
+        // 涨跌幅相对结算价 —— 这正是操作员要判断的「我填的价离市场多远」
+        this.$set(row, 'change_rate', Number.isFinite(sp) && sp !== 0 ? (last - sp) / sp : null)
+      } catch (e) {
+        // 合约无行情(如刚上市)会 404 —— 属正常,保持「-」。
+        // ⚠️ 注意**不是静默**:`api/request.js` 的响应拦截器会对失败弹提示。
+        // 这里不再自行弹,避免同一件事弹两条。@yutiansut @quantaxis
+        console.warn('[settlement] 取行情失败,最新价显示为 -:', instrumentId, e && e.message)
+      }
+    },
     // 切到「结算统计」时才有真实宽度,此时重新测量画布。
     // 若 mount 时 init 失败(容器不存在)则补一次 init。 @yutiansut @quantaxis
     onTabClick(tab) {
@@ -381,7 +481,7 @@ export default {
     },
     // 加载结算历史
     async loadHistory() {
-      this.historyLoading = true
+      this.historyLoading = true; this.loadError = null
       try {
         const params = {}
         if (this.historyDateRange && this.historyDateRange.length === 2) {
@@ -394,6 +494,7 @@ export default {
         this.updateStatisticsFromHistory()
         this.updateChart()
       } catch (error) {
+        this.loadError = this.$errMsg(error, '加载失败')
         this.$message.error('加载结算历史失败')
         console.error(error)
       } finally {
@@ -417,7 +518,10 @@ export default {
 
     // 添加结算价
     addSettlementPrice() {
-      if (!this.priceForm.instrument_id || this.priceForm.settlement_price <= 0) {
+      if (!this.priceForm.instrument_id || !(this.priceForm.settlement_price > 0)) {
+        // ✨ 用 !(x > 0) 而非 x <= 0：清空 el-input-number 会写 undefined，
+        // 而 `undefined <= 0` 为 false 会漏过守卫，导致 undefined 价被加进待结算列表、
+        // 执行时经 batchSetSettlementPrices 发出换 400。!(undefined > 0) 为 true，能拦住。@yutiansut @quantaxis
         this.$message.warning('请填写完整信息')
         return
       }
@@ -429,19 +533,24 @@ export default {
 
       if (index >= 0) {
         // 更新
-        this.settlementPrices.splice(index, 1, {
-          ...this.priceForm,
-          last_price: this.priceForm.settlement_price * (1 + Math.random() * 0.02 - 0.01),
-          change_rate: Math.random() * 0.04 - 0.02
-        })
+        // ⚠️ 不再用 Math.random() 伪造行情 @yutiansut @quantaxis
+        //
+        // 原来这里写的是:
+        //   last_price:  settlement_price * (1 + Math.random()*0.02 - 0.01)
+        //   change_rate: Math.random()*0.04 - 0.02
+        // 这是**结算页** —— 结算价决定所有账户的盯市盈亏,操作员要对着「最新价」
+        // 判断自己填的结算价是否离谱。给他一个编造的数,比不给更坏:
+        // 实测同一输入(结算价 100)两次渲染出「99.08 / +1.12%」和「100.46 / +0.09%」,
+        // 第一行最新价**低于**结算价却标红显示上涨 —— 编的数连自洽都做不到。
+        // 而批量导入那条路径(:498)用的是 `last_price: value, change_rate: 0`,
+        // 两条路径口径还不一致。
+        //
+        // 现在:取真实行情(getTick,现成接口);取不到就留 null,表格显示「-」。
+        this.settlementPrices.splice(index, 1, { ...this.priceForm, last_price: null, change_rate: null })
       } else {
-        // 新增
-        this.settlementPrices.push({
-          ...this.priceForm,
-          last_price: this.priceForm.settlement_price * (1 + Math.random() * 0.02 - 0.01),
-          change_rate: Math.random() * 0.04 - 0.02
-        })
+        this.settlementPrices.push({ ...this.priceForm, last_price: null, change_rate: null })
       }
+      this.fetchLastPrice(this.priceForm.instrument_id, this.priceForm.settlement_price)
 
       this.priceDialogVisible = false
       this.$message.success('添加成功')
@@ -470,11 +579,13 @@ export default {
           const value = parseFloat(price)
           if (instrument && !isNaN(value)) {
             const existingIndex = this.settlementPrices.findIndex(p => p.instrument_id === instrument)
+            // 与上面同源:不编造。原来这里塞 `last_price: value, change_rate: 0`
+            // (把结算价当最新价),与另一条路径的随机数口径矛盾。@yutiansut @quantaxis
             const payload = {
               instrument_id: instrument,
               settlement_price: value,
-              last_price: value,
-              change_rate: 0
+              last_price: null,
+              change_rate: null
             }
             if (existingIndex >= 0) {
               this.settlementPrices.splice(existingIndex, 1, payload)
@@ -529,7 +640,7 @@ export default {
         this.loadStatistics()
       } catch (error) {
         if (error !== 'cancel') {
-          this.$message.error(error.message || '结算执行失败')
+          this.$message.error(this.$errMsg(error, '结算执行失败'))
           console.error(error)
         }
       } finally {
@@ -541,11 +652,12 @@ export default {
     async viewDetail(row) {
       this.detailDialogVisible = true
       this.detailTab = 'accounts'
-      this.detailLoading = true
+      this.detailLoading = true; this.detailError = null
       try {
         const detail = await getSettlementDetail(row.settlement_date)
         this.detailData = detail || {}
       } catch (error) {
+        this.detailError = this.$errMsg(error, '加载失败')
         this.$message.error('加载结算详情失败')
         console.error(error)
         this.detailData = null
@@ -592,11 +704,23 @@ export default {
       if (!this.chartInstance) return
       const dates = this.historyList.map(item => item.settlement_date)
       const profits = this.historyList.map(item => item.total_profit || 0)
+      // ✨ 空态必须**说明原因**,不能只画一个空坐标框。@yutiansut @quantaxis
+      //
+      // 本系统从不自动结算(只能手动触发),所以历史长期为 0 条 ——
+      // 原先渲染出的是「两条轴线 + 无刻度 + 无数据 + 无一个字」,
+      // 与「加载失败」「还没加载完」在外观上完全无法区分。
+      // 它没有编造数据(比 dashboard 那张 33/33/33 轻),但同样没告诉用户为什么是空的。
+      // 复用 dashboard 已经验证过的做法:空时给标题文案,并把坐标轴一起隐掉。
+      // 标题样式走全局 `$chartTitle`(main.js),两处共用一份。
+      const isEmpty = dates.length === 0
       const option = {
+        title: isEmpty
+          ? this.$chartTitle('暂无结算记录', '系统尚未执行过日终结算')
+          : this.$chartTitle(null),
         tooltip: { trigger: 'axis' },
         grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-        xAxis: { type: 'category', data: dates },
-        yAxis: { type: 'value' },
+        xAxis: { type: 'category', data: dates, show: !isEmpty },
+        yAxis: { type: 'value', show: !isEmpty },
         series: [
           {
             name: '总盈亏',
@@ -622,14 +746,16 @@ export default {
       }
       this.statistics = {
         monthSettlementCount: this.historyList.length,
-        profitAccountsCount: this.historyList.reduce((sum, item) => sum + (item.profit_accounts || 0), 0),
-        lossAccountsCount: this.historyList.reduce((sum, item) => sum + (item.loss_accounts || 0), 0),
-        totalCommission: this.historyList.reduce((sum, item) => sum + (item.total_commission || 0), 0)
+        settledAccountsCount: this.historyList.reduce((sum, item) => sum + (Number(item.settled_accounts) || 0), 0),
+        failedAccountsCount: this.historyList.reduce((sum, item) => sum + (Number(item.failed_accounts) || 0), 0),
+        totalCommission: this.historyList.reduce((sum, item) => sum + (Number(item.total_commission) || 0), 0)
       }
     },
 
+    // ⚠️ 同一文件里的**第二个**金额格式化器(上面还有 `fmtMoney`)——
+    // 两个并存,只有一个带守卫。已一并委托 `$money`。@yutiansut @quantaxis
     formatCurrency(value) {
-      return Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
+      return this.$money(value)
     }
   }
 }
@@ -653,7 +779,13 @@ $success-color: #52c41a;
 .settlement-container {
   padding: 20px;
   background: $dark-bg-primary;
-  min-height: calc(100vh - 60px);
+  // ⚠️ 用 --qa-content-h,不要手写 calc(100vh - N)。@yutiansut @quantaxis
+  //    原值 -60px 少算了 content-wrapper 的上下 padding(各 20px):
+  //    真实 chrome = top-header 56 + padding 40 = 96px(有公告条时再 +40)。
+  //    实测本页在无内容可滚时仍有 41px 的死滚动条
+  //    (.content-wrapper 的 scrollHeight - clientHeight = 41)。
+  //    `layout/index.vue:546` 早就写明「各页面请一律用 var(--qa-content-h)」。
+  min-height: var(--qa-content-h, calc(100vh - 96px));
 }
 
 .page-header {

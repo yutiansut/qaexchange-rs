@@ -104,6 +104,17 @@ impl KLineActor {
 
     /// 获取或创建合约的因子引擎
     /// @yutiansut @quantaxis
+    /// ⚠️ 这个方法与 `update_factors` 是**死的重复实现** @yutiansut @quantaxis
+    ///
+    /// 真正在跑的因子计算是**内联**在两处事件循环里的
+    /// (定时器分支 :~318-328、K线收盘分支 :~468-482),各自建引擎、调
+    /// `engine.update_all(..)`、再 broadcast。这一对方法从头到尾没有调用者
+    /// (`update_factors` 零调用,`get_or_create_factor_engine` 只被它调)——
+    /// 编译器的 dead_code 警告能报出来,但被 `lib.rs:40` 的
+    /// `#![allow(dead_code)]` 全局关掉了(见 tasks/lessons.md L51)。
+    ///
+    /// 保留它们只是为了不改动既有 API 表面;**改因子逻辑要改内联那两处**,
+    /// 改这里不会有任何效果。
     fn get_or_create_factor_engine(&self, instrument_id: &str) -> Option<()> {
         if !self.enable_factor_compute {
             return None;
@@ -212,11 +223,31 @@ impl KLineActor {
                         .entry(kline_period)
                         .or_default();
 
+                    // ✨ 用恢复出来的收盘价**播种** `last_price`。@yutiansut @quantaxis
+                    //
+                    // `KLineAggregator::on_timer`(kline.rs:307-310)在 `last_price` 为
+                    // `None` 时**直接返回空**,而 `last_price` 只在收到 tick 时赋值
+                    // (kline.rs:236)。恢复流程原先只填 `history_klines`,不碰它 ——
+                    // 于是重启后**任何没有立刻成交的合约,K 线永久停在恢复出来的那一根**,
+                    // 哪怕我们明知它的最后收盘价。
+                    //
+                    // 线上实测:IH2501 的最新 bar 距今 33 小时,而进程只跑了 26 小时
+                    // —— 它的最后一根 K 线早于本次启动,启动后一根都没再生成;
+                    // 同时 IF2501 每 60 秒都有一根 `V=0` 的平推 bar(它启动后收到过 tick)。
+                    // 用户看到的是「价格显示当前值、图表停在两天前」。
+                    //
+                    // replay 按 WAL 顺序(即时间顺序)回放,所以最后写入的那根最新,
+                    // 直接覆盖即可;真实 tick 到达后会立刻覆盖掉这个种子值。
+                    let seed_close = kline.close;
                     history.push(kline);
 
                     // 限制历史数量
                     if history.len() > aggregator.max_history {
                         history.remove(0);
+                    }
+
+                    if seed_close.is_finite() && seed_close > 0.0 {
+                        aggregator.last_price = Some(seed_close);
                     }
 
                     recovered_count += 1;
@@ -390,9 +421,32 @@ impl Actor for KLineActor {
             }
 
             loop {
-                // 使用spawn_blocking避免阻塞Tokio执行器
+                // ⚠️ 这里用 spawn_blocking(recv()) 是**可以的**,但仅限于单例消费者。
+                //    阻塞中的线程不算 idle,tokio 阻塞池永不回收 —— 所以这个写法
+                //    等价于「常驻一个 OS 线程」。本 actor 是单例(全局只启动一次)、
+                //    且消费全量行情,一个专用线程换低延迟是划算的。
+                //    ❌ **不要把这个形状复制到按连接/按订阅者的路径上** ——
+                //    `diff_handler.rs` 曾这么做,实测 40 个订阅 → 线程 24→120 且永不回收。
+                //    那种场景用 `session.rs:140` 的 run_interval + try_recv 批量取。
+                //    @yutiansut @quantaxis
                 let receiver_clone = receiver.clone();
-                match tokio::task::spawn_blocking(move || receiver_clone.recv()).await {
+                // ⚠️ 必须用 `recv_timeout` 而不是 `recv()` @yutiansut @quantaxis
+                //
+                // `recv()` 会一直阻塞到有事件为止 —— 而 tokio 运行时 **drop 时会
+                // 无限期等待所有 spawn_blocking 任务结束**。无行情时这个任务永不返回,
+                // 于是:
+                //   SIGTERM → 优雅停机日志全部打完 → main 返回 → runtime drop **卡死**
+                //   → 进程永不退出(实测隔离实例停机 6 分钟后仍存活,端口已释放、
+                //      HTTP 无响应,18 个线程全在 futex_wait)
+                //   → 部署脚本 `kill; wait; start` 永久挂起
+                //   → 于是只能 `kill -9` —— **而 kill -9 正是 2026-09-05 毁掉
+                //      172,035 条订单那次事故的直接动作**。
+                //
+                // 100ms 超时不改变有事件时的延迟(有数据立即返回),
+                // 只保证无事件时最多 100ms 就让出,runtime 得以完成 drop。
+                // 原注释接受「常驻一个 OS 线程」的代价是对的,但没考虑到
+                // 「这个线程让进程永远退不出去」。
+                match tokio::task::spawn_blocking(move || receiver_clone.recv_timeout(std::time::Duration::from_millis(100))).await {
                     Ok(Ok(event)) => {
                         // 处理tick事件
                         if let MarketDataEvent::Tick {
@@ -508,6 +562,14 @@ impl Actor for KLineActor {
                                 }
                             }
                         }
+                    }
+                    // ⚠️ 必须区分「超时」与「通道关闭」@yutiansut @quantaxis
+                    // 改成 recv_timeout 后,超时返回的也是 `Ok(Err(..))`。
+                    // 原来这一支无条件 `break`,会让 actor 在 100ms 无行情后
+                    // **直接退出** —— 那比原来的「进程退不出去」更糟。
+                    Ok(Err(crossbeam::channel::RecvTimeoutError::Timeout)) => {
+                        // 无事件,继续等下一轮(这正是让 runtime 能 drop 的关键)
+                        continue;
                     }
                     Ok(Err(_)) => {
                         log::warn!("📊 [KLineActor] Market data channel disconnected");

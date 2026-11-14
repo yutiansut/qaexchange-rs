@@ -26,11 +26,42 @@ pub fn configure(cfg: &mut web::ServiceConfig, admin_auth: auth::AdminAuth) {
                 .route("/register", web::post().to(auth::register))
                 .route("/login", web::post().to(auth::login))
                 .route("/user/{user_id}", web::get().to(auth::get_current_user))
-                .route("/users", web::get().to(auth::list_users)) // 获取所有用户列表（管理员）
-                // 角色管理 API @yutiansut @quantaxis
-                .route("/user/roles", web::post().to(auth::set_user_roles)) // 设置用户角色
-                .route("/user/role/add", web::post().to(auth::add_user_role)) // 添加用户角色
-                .route("/user/{user_id}/make-admin", web::post().to(auth::make_admin)), // 升级为管理员
+                // ⚠️ 列出**全部用户**(user_id / 用户名 / 手机 / 邮箱 / 角色 / 账户列表),
+                // 注释本来就写着「管理员」,却没有任何鉴权。实测(2026-09-06)开着
+                // `QAEX_REQUIRE_ADMIN_AUTH=1` 也照样 200 —— 因为 `/api/auth` 整个 scope
+                // 不能包(注册/登录必须开放),而这条没有单独包。
+                // 用与下面提权三条相同的手法:`web::resource` 逐条包。@yutiansut @quantaxis
+                .service(
+                    web::resource("/users")
+                        .wrap(admin_auth.clone())
+                        .route(web::get().to(auth::list_users)),
+                )
+                // 角色管理 API —— **逐 resource 包鉴权** @yutiansut @quantaxis
+                //
+                // ⚠️ `/api/auth` 这个 scope 本身不能整体包 admin_auth(注册/登录必须开放),
+                //    但下面三条是**权限变更**接口。`auth::make_admin`(auth.rs:256)
+                //    内部**没有任何调用者身份校验** —— 从路径取 user_id 直接
+                //    `add_user_role(user_id, Admin)`。实测不带任何 token POST
+                //    `/api/auth/user/<不存在的id>/make-admin` 返回 400「User not found」,
+                //    说明 handler 已执行、只是用户不存在;换成真实 user_id 即可提权。
+                //    而且 scope 无 wrap ⇒ **即使 `QAEX_REQUIRE_ADMIN_AUTH=1` 也拦不住**。
+                //    前端对这三条零调用(仅 `/auth/users` 在用,故保持原样)。
+                //    actix 支持在单个 resource 上 wrap,不必重构路由。
+                .service(
+                    web::resource("/user/roles")
+                        .wrap(admin_auth.clone())
+                        .route(web::post().to(auth::set_user_roles)),
+                )
+                .service(
+                    web::resource("/user/role/add")
+                        .wrap(admin_auth.clone())
+                        .route(web::post().to(auth::add_user_role)),
+                )
+                .service(
+                    web::resource("/user/{user_id}/make-admin")
+                        .wrap(admin_auth.clone())
+                        .route(web::post().to(auth::make_admin)),
+                ),
         )
         // 用户账户管理 (Phase 10)
         .service(
@@ -109,6 +140,23 @@ pub fn configure(cfg: &mut web::ServiceConfig, admin_auth: auth::AdminAuth) {
         .service(
             web::scope("/api/market")
                 .route("/instruments", web::get().to(market::get_instruments))
+                // ✨ 合约规格(只读)—— 与 /api/admin/instruments 同一个 handler、同一个
+                // InstrumentRegistry 权威源,但不需要管理员身份。@yutiansut @quantaxis
+                //
+                // 起因:下单面板(OrderForm.vue)和成交记录页(trades/index.vue)需要
+                // contract_multiplier / margin_rate 来算保证金和成交额,而
+                // /api/market/instruments 只有 multiplier、没有 margin_rate,
+                // 于是两个**交易员**页面绕道调了 /api/admin/instruments ——
+                // 一旦 QAEX_REQUIRE_ADMIN_AUTH=1 就 403,且两处都有 try/catch
+                // 静默回退到写死的 300,IC2501 真实乘数是 200 → 成交额高报 50%
+                // (「自己重算权威量」的第 7 次复发,见 lessons.md L45)。
+                //
+                // 合约乘数/保证金率是**公开市场信息**,交易所本就对外发布,
+                // 只读暴露不构成信息泄露;写操作(create/update/delist)仍在 admin scope 内。
+                .route(
+                    "/instrument-specs",
+                    web::get().to(admin::get_all_instruments),
+                )
                 .route(
                     "/orderbook/{instrument_id}",
                     web::get().to(market::get_orderbook),
@@ -138,7 +186,18 @@ pub fn configure(cfg: &mut web::ServiceConfig, admin_auth: auth::AdminAuth) {
                     "/storage",
                     web::get().to(monitoring::get_storage_monitoring),
                 )
-                .route("/report", web::get().to(monitoring::generate_report)),
+                .route("/report", web::get().to(monitoring::generate_report))
+                // ✨ 监控端点必须与 admin/management 同级保护 @yutiansut @quantaxis
+                //
+                // 这 7 个端点暴露的是**全所**数据:总权益、全部账户统计、
+                // 全部订单/成交、存储状态。原先本 scope **没有 wrap**,
+                // 于是即使打开 `QAEX_REQUIRE_ADMIN_AUTH=1`
+                // (main.rs:877,生产环境应当打开),它们仍然完全开放 ——
+                // 任何人不带 Authorization 就能读到 ¥159 亿总权益与 39 万笔订单。
+                //
+                // 与 /api/admin、/api/management、/api/account-admin 三个 scope
+                // 保持一致:开关关闭时放行(开发态),打开时要求 admin。
+                .wrap(admin_auth.clone()),
         )
         // 管理员功能 - 市场统计
         .service(web::scope("/api/admin/market").route(
@@ -254,7 +313,12 @@ pub fn configure(cfg: &mut web::ServiceConfig, admin_auth: auth::AdminAuth) {
         )
         // Phase 13: 审计日志
         .service(
+            // ⚠️ 审计日志整个 scope 补鉴权 —— 它此前**完全没有** `.wrap(admin_auth)`,
+            // 实测开着 `QAEX_REQUIRE_ADMIN_AUTH=1` 仍匿名 200。
+            // 审计日志按定义就是「谁在什么时候对哪个账户做了什么」,
+            // 匿名可读等于把管理操作记录对外公开。@yutiansut @quantaxis
             web::scope("/api/audit")
+                .wrap(admin_auth.clone())
                 .route("/logs", web::get().to(account_admin::query_audit_logs))
                 .route("/logs/{log_id}", web::get().to(account_admin::get_audit_log))
         )
@@ -270,6 +334,18 @@ pub fn configure(cfg: &mut web::ServiceConfig, admin_auth: auth::AdminAuth) {
         // @yutiansut @quantaxis
         .service(
             web::scope("/api/data")
+                // ⚠️ 补齐鉴权 —— 本 scope 此前**完全没有** `.wrap(admin_auth)`,
+                //    而同级的 `/api/management`(:227)与 `/api/admin/*` 都有。
+                //    实测:不带任何 header 打
+                //    `GET /api/data/export?data_type=orders&account_id=<任意账户>`
+                //    → HTTP 200,返回 27,819,515 字节的完整订单历史。
+                //    这不只是当前部署关了 admin auth 的问题:该 scope 结构上就没有 wrap,
+                //    即使 `QAEX_REQUIRE_ADMIN_AUTH=1` 这 10 个接口(含全量导出、日结算单、
+                //    持仓分析)仍然敞开。前端对 `/api/data/*` 零调用(三处 exportData 都是
+                //    纯客户端 CSV 生成),补 wrap 不影响任何现有调用方。
+                //    注:若将来要开放自助查询(用户查自己的账户),应在此基础上做
+                //    「本人或管理员」的细分鉴权,而不是退回无鉴权。@yutiansut @quantaxis
+                .wrap(admin_auth.clone())
                 // 历史数据查询
                 .route("/history/ticks", web::get().to(data_query::query_history_ticks))
                 .route("/history/klines", web::get().to(data_query::query_batch_klines))

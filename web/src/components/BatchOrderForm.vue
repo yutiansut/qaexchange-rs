@@ -326,7 +326,7 @@ export default {
         }
       } catch (error) {
         console.error('[BatchOrderForm] Batch submit failed:', error)
-        this.errorMessage = `批量下单失败: ${error.message || '未知错误'}`
+        this.errorMessage = `批量下单失败: ${this.$errMsg(error, '未知错误')}`
       } finally {
         this.submitting = false
       }
@@ -469,6 +469,17 @@ $primary-color: #1890ff;
 .form-group input,
 .form-group select {
   padding: 8px;
+  // ⚠️ 必须有 width:100% + border-box,否则 grid 的 `1fr` 撑不住。
+  //    @yutiansut @quantaxis
+  //    `.form-row` 是 `grid-template-columns: 1fr 1fr`,而 `1fr` = `minmax(auto,1fr)`,
+  //    auto 最小值取内容固有宽度。原生 <input> 默认 size=20 ⇒ 固有 167px,
+  //    于是轨道被解析成 `167px 167px`,167+15+167=349 > `.order-item` 可用 222px。
+  //    实测 400px 视口:数量框 89→256、价格框 271→**438**,
+  //    而 `.content-wrapper` 是 overflow-x:hidden ⇒ 价格框被切掉 38px 且滚不到。
+  //    同页 ConditionalOrderForm.vue / TransferForm.vue 同为 `1fr 1fr`,
+  //    但它们有 width:100% 所以没炸 —— 本文件漏了。
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid $dark-border !important;
   border-radius: 4px;
   font-size: 13px;

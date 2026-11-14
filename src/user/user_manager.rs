@@ -48,6 +48,25 @@ impl UserManager {
     /// 注册新用户 @yutiansut @quantaxis
     /// 第一个注册的用户自动成为管理员
     pub fn register(&self, req: UserRegisterRequest) -> Result<User> {
+        // ⚠️ 密码强度必须在**后端**校验。@yutiansut @quantaxis
+        //
+        // 前端 `views/register.vue:304` 有强度指示器(≥6 / ≥8 / ≥12 分档),
+        // 但**后端一处校验都没有** —— 绕过前端直接调 `POST /api/auth/register`
+        // 就能用 **1 位密码**注册成功(2026-09-05 对生产实例实测,HTTP 200)。
+        // 「前端提示、后端不拦」等于没拦:攻击者不用浏览器。
+        //
+        // 阈值取 6 位,与前端强度条的第一档一致 —— 不额外收紧,
+        // 避免存量用户改密时被挡(改密走 `change_password`,另见该函数)。
+        // 若要收紧到 8 位 + 复杂度,那是产品决定,见 tasks/DECISIONS-PENDING.md。
+        const MIN_PASSWORD_LEN: usize = 6;
+        if req.password.chars().count() < MIN_PASSWORD_LEN {
+            return Err(ExchangeError::UserError(format!(
+                "密码至少需要 {} 位,当前 {} 位",
+                MIN_PASSWORD_LEN,
+                req.password.chars().count()
+            )));
+        }
+
         // 检查用户名是否已存在
         if self.username_index.contains_key(&req.username) {
             return Err(ExchangeError::UserError(format!(
@@ -716,7 +735,7 @@ mod tests {
 
         let req1 = UserRegisterRequest {
             username: "user1".to_string(),
-            password: "pass1".to_string(),
+            password: "passwd1".to_string(), // ≥6 位:register 现在校验密码长度
             phone: Some("13800138000".to_string()),
             email: None,
             real_name: None,
@@ -728,7 +747,7 @@ mod tests {
         // 相同手机号注册应该失败
         let req2 = UserRegisterRequest {
             username: "user2".to_string(),
-            password: "pass2".to_string(),
+            password: "passwd2".to_string(), // ≥6 位:register 现在校验密码长度
             phone: Some("13800138000".to_string()),
             email: None,
             real_name: None,
@@ -749,7 +768,7 @@ mod tests {
 
         let req1 = UserRegisterRequest {
             username: "user1".to_string(),
-            password: "pass1".to_string(),
+            password: "passwd1".to_string(), // ≥6 位:register 现在校验密码长度
             phone: None,
             email: Some("test@example.com".to_string()),
             real_name: None,
@@ -761,7 +780,7 @@ mod tests {
         // 相同邮箱注册应该失败
         let req2 = UserRegisterRequest {
             username: "user2".to_string(),
-            password: "pass2".to_string(),
+            password: "passwd2".to_string(), // ≥6 位:register 现在校验密码长度
             phone: None,
             email: Some("test@example.com".to_string()),
             real_name: None,

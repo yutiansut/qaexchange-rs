@@ -282,6 +282,69 @@ impl ConversionWorker {
         Ok(all_records)
     }
 
+    /// 清理超过保留期的 `.archived` 文件 @yutiansut @quantaxis
+    ///
+    /// 在每次归档时顺带做一次 —— 不额外起线程,避免又多一个周期任务
+    /// (本会话已发现两个周期任务撞车造成延迟毛刺,见 DEADLOCK 文档)。
+    /// 只扫本次涉及的目录,不做全盘遍历。
+    fn cleanup_expired_archives(&self, record: &ConversionRecord) {
+        use std::time::{Duration, SystemTime};
+        let retention = Duration::from_secs(self.config.source_retention_secs);
+        let now = SystemTime::now();
+
+        // 收集本次涉及的目录(去重),只清这些
+        let mut dirs: Vec<&std::path::Path> = record
+            .oltp_sstables
+            .iter()
+            .filter_map(|p| p.parent())
+            .collect();
+        dirs.sort();
+        dirs.dedup();
+
+        let mut removed = 0usize;
+        let mut freed = 0u64;
+        for dir in dirs {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("archived") {
+                    continue;
+                }
+                let meta = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let age = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| now.duration_since(t).ok())
+                    .unwrap_or_default();
+                if age > retention {
+                    let size = meta.len();
+                    match std::fs::remove_file(&path) {
+                        Ok(_) => {
+                            removed += 1;
+                            freed += size;
+                        }
+                        Err(e) => log::warn!("清理归档失败 {:?}: {}", path, e),
+                    }
+                }
+            }
+        }
+        if removed > 0 {
+            log::info!(
+                "Worker {} 清理过期归档 {} 个,释放 {:.1} MB(保留期 {}s)",
+                self.worker_id,
+                removed,
+                freed as f64 / 1_048_576.0,
+                self.config.source_retention_secs
+            );
+        }
+    }
+
     /// 归档源文件（延迟删除或移动到备份目录）
     fn archive_source_files(&self, record: &ConversionRecord) -> Result<(), String> {
         if self.config.source_retention_secs == 0 {
@@ -297,7 +360,20 @@ impl ConversionWorker {
                 }
             }
         } else {
-            // 延迟删除：标记文件为 .archived，后台定期清理
+            // 延迟删除：标记文件为 .archived，超过保留期后清理
+            //
+            // ✨ 那个「后台定期清理」原先**不存在** @yutiansut @quantaxis
+            //
+            // 注释写着「后台定期清理」,但全仓库没有任何删除 `.archived` 的代码
+            // (`grep -rn 'archived' src/storage/conversion/ | grep -i remove` 零命中)。
+            // 于是 `source_retention_secs = 3600`(main.rs:772)形同虚设,
+            // 文件只改名不删除 —— 2026-09-04 实测堆积 **91 个 / 3.14 GB**,
+            // 最老的已存在 4 小时(保留期的 4 倍)。
+            //
+            // 删除是**安全的**:只有转换成功(数据已在 Parquet 里)才走到这里,
+            // 与 WAL checkpoint 那种「删了可能丢数据」的情况不同(见 lessons.md L47)。
+            self.cleanup_expired_archives(record);
+
             for sstable_path in &record.oltp_sstables {
                 let archived_path = sstable_path.with_extension("archived");
                 log::info!(

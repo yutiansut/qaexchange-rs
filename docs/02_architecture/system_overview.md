@@ -863,8 +863,13 @@ impl SettlementEngine {
     pub fn set_settlement_price(&self, instrument_id: String, price: f64)
     pub fn set_settlement_prices(&self, prices: HashMap<String, f64>)
 
-    // 日终结算
+    // 日终(生产入口:定时任务 + 手动接口都走这里)—— 闭市 → 撤活单 → 归档 → 结算 → 开市
+    pub fn run_end_of_day(&self, trading_day: &str) -> Result<EndOfDayReport>
+    pub fn set_snapshot_dir(&self, dir: String)   // 启动时注入,用于归档 / 结算后落快照
+
+    // 只做账户结算本身(调用前撮合簿必须没有挂单,见下方「日终流程」)
     pub fn daily_settlement(&self) -> Result<SettlementResult>
+    pub fn daily_settlement_for(&self, settlement_date: &str) -> Result<SettlementResult>
 
     // 单个账户结算
     fn settle_account(&self, user_id: &str, date: &str) -> Result<AccountSettlement>
@@ -877,6 +882,32 @@ impl SettlementEngine {
     pub fn get_settlement_detail(&self, date: &str) -> Option<SettlementResult>
 }
 ```
+
+**日终流程**(`run_end_of_day`,2026-11-08 起每自然日北京 00:00 自动执行,`config/exchange.toml` 的 `[settlement]`):
+```
+1. 闭市:OrderRouter 日终闸门置位 —— 新单拒 4100(→ CTP 91「日终结算中,暂停接收报单」),撤单照常;
+   等在途报单计数归零
+   ↓
+2. 撤全部活单(GFD 日终失效):走与客户端撤单同一条路径(释放冻结、推 DIFF「已撤单」);
+   逐簿复核,路由不认得的残单直接摘掉;簿上仍有挂单 → 本轮不结算,直接开市
+   ↓
+3. 归档:落一轮最新快照,硬链接进 snapshots/history/<交易日>/(同日再结算 → -2、-3)
+   ↓
+4. 结算价:手工设置优先,否则撮合簿最新价;结算前写进每个持仓,结算后清空
+   ↓
+5. 账户结算(下方「结算流程」;qars settle:今仓→昨仓、清当日委托/成交、退冻结)
+   ↓
+6. 新交易日:客户端编号(CTP 报单引用)查重表清空,client_order_ids.jsonl 归档
+   ↓
+7. 开市 → 落结算后快照 → 按 DIFF 推一次各账户 accounts / positions
+```
+
+> ⚠️ 为什么不能直接调 `daily_settlement`:qars `settle()` 清空当日委托,而挂单还在撮合簿里 ——
+> 之后撤单(qars `cancel_order` expect)或成交(`receive_deal_sim` unwrap)会 panic,release 是 panic=abort,
+> 整个进程退出。网关在调 qars 前另有守卫,但那只是纵深防御。
+>
+> 手动触发:`POST /api/admin/settlement/execute`(结算今天,北京时间),响应顶层仍是 `SettlementResult` 字段,
+> 另带 `sweep`(撤单 / 失败 / 摘残单 / 剩余)、`archived_snapshots`、`archive_dir`、`settlement_prices`、`halted_ms`。
 
 **结算流程**:
 ```

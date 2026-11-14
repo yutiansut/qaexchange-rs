@@ -21,7 +21,7 @@
             <i class="el-icon-warning"></i>
           </div>
           <div class="stat-content">
-            <div class="stat-value">{{ statistics.highRiskCount }}</div>
+            <div class="stat-value">{{ statistics ? statistics.highRiskCount : "—" }}</div>
             <div class="stat-label">高风险账户 (>80%)</div>
           </div>
         </div>
@@ -33,7 +33,7 @@
             <i class="el-icon-warning-outline"></i>
           </div>
           <div class="stat-content">
-            <div class="stat-value">{{ statistics.criticalRiskCount }}</div>
+            <div class="stat-value">{{ statistics ? statistics.criticalRiskCount : "—" }}</div>
             <div class="stat-label">临近爆仓 (>90%)</div>
           </div>
         </div>
@@ -45,7 +45,7 @@
             <i class="el-icon-s-finance"></i>
           </div>
           <div class="stat-content">
-            <div class="stat-value">{{ statistics.todayLiquidations }}</div>
+            <div class="stat-value">{{ statistics ? statistics.todayLiquidations : "—" }}</div>
             <div class="stat-label">今日强平次数</div>
           </div>
         </div>
@@ -57,7 +57,7 @@
             <i class="el-icon-data-line"></i>
           </div>
           <div class="stat-content">
-            <div class="stat-value">{{ (statistics.averageRiskRatio * 100).toFixed(1) }}%</div>
+            <div class="stat-value">{{ statistics ? $pct(statistics.averageRiskRatio, 1) : "—" }}</div>
             <div class="stat-label">平均风险率</div>
           </div>
         </div>
@@ -89,42 +89,45 @@
              var(--qa-content-h) 由 layout/index.vue 统一定义 = 100vh - 56(顶栏) - 40(padding),
              有公告条时自动再减 40px; max(260px, ...) 是极短视口下的兜底 -->
         <el-table
+          :empty-text="$emptyText(accountsError, '暂无账户')"
           ref="accountTable"
           :data="filteredAccounts"
           border
           stripe
           v-loading="loading"
           :default-sort="{ prop: 'risk_ratio', order: 'descending' }"
-          :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 324px))'"
+          :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 365px))'"
         >
           <el-table-column prop="user_id" label="账户ID" min-width="180" sortable show-overflow-tooltip></el-table-column>
-          <el-table-column prop="balance" label="总权益" min-width="150" align="right" sortable>
+          <el-table-column prop="balance" label="总权益" min-width="150" align="right" sortable show-overflow-tooltip>
             <template slot-scope="scope">
-              {{ scope.row.balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+              {{ $money(scope.row.balance) }}
             </template>
           </el-table-column>
-          <el-table-column prop="margin_used" label="占用保证金" min-width="130" align="right" sortable>
+          <el-table-column prop="margin_used" label="占用保证金" min-width="130" align="right" sortable show-overflow-tooltip>
             <template slot-scope="scope">
-              {{ scope.row.margin_used.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+              {{ $money(scope.row.margin_used) }}
             </template>
           </el-table-column>
-          <el-table-column prop="available" label="可用资金" min-width="150" align="right" sortable>
+          <el-table-column prop="available" label="可用资金" min-width="150" align="right" sortable show-overflow-tooltip>
             <template slot-scope="scope">
-              {{ scope.row.available.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+              {{ $money(scope.row.available) }}
             </template>
           </el-table-column>
-          <el-table-column prop="float_profit" label="浮动盈亏" min-width="90" align="right" sortable>
+          <!-- show-overflow-tooltip:该列实测被 ellipsis 截断且无提示,hover 也弹不出全文。
+               不加宽是因为这张表在 1280 下已横向溢出,加宽会加剧;
+               tooltip 让内容 hover 可达而不增加列宽。@yutiansut @quantaxis -->
+          <el-table-column prop="float_profit" label="浮动盈亏" min-width="90" align="right" sortable show-overflow-tooltip>
             <template slot-scope="scope">
-              <span :style="{ color: scope.row.float_profit >= 0 ? '#F56C6C' : '#67C23A' }">
-                {{ scope.row.float_profit >= 0 ? '+' : '' }}{{ scope.row.float_profit.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+              <span :style="{ color: (Number(scope.row.float_profit) || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
+                {{ Number(scope.row.float_profit) > 0 ? '+' : '' }}{{ $money(scope.row.float_profit) }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="position_count" label="持仓数" width="90" align="center" sortable></el-table-column>
-          <el-table-column prop="risk_ratio" label="风险率" min-width="90" align="right" sortable>
+          <el-table-column prop="risk_ratio" label="风险率" min-width="90" align="right" sortable show-overflow-tooltip>
             <template slot-scope="scope">
               <el-tag :type="getRiskTagType(scope.row.risk_ratio)" size="small">
-                {{ (scope.row.risk_ratio * 100).toFixed(1) }}%
+                {{ $pct(scope.row.risk_ratio, 1) }}
               </el-tag>
             </template>
           </el-table-column>
@@ -171,43 +174,56 @@
              var(--qa-content-h) 由 layout/index.vue 统一定义 = 100vh - 56(顶栏) - 40(padding),
              有公告条时自动再减 40px; max(260px, ...) 是极短视口下的兜底 -->
         <el-table
+          :empty-text="$emptyText(liquidationError, '暂无强平记录')"
           ref="liquidationTable"
           :data="liquidations"
           border
           stripe
           v-loading="liquidationLoading"
-          :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 324px))'"
+          :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 365px))'"
         >
+          <!-- ⚠️ 列名必须对齐后端 `LiquidationRecord`(risk/risk_monitor.rs) ——
+               handler `management.rs::get_liquidation_records` **直接序列化该结构体**,
+               无映射层。原来这里 10 列中有 8 列读的字段后端根本不返回:
+                 user_name / liquidation_price / liquidation_volume / trigger_type / operator  → 后端完全没有
+                 pre_balance → 实为 balance_before;loss_amount → 实为 total_loss
+                 instrument_id → 实为 instruments_closed(**是 Vec<String>**)
+               只有 liquidation_time 与 user_id 是对的。因为生产至今零条强平记录,
+               这个错误一直没显形 —— 一旦真发生强平,整张表除时间和用户ID外全是空白。
+               @yutiansut @quantaxis -->
           <el-table-column prop="liquidation_time" label="强平时间" min-width="180"></el-table-column>
           <el-table-column prop="user_id" label="用户ID" min-width="150" show-overflow-tooltip></el-table-column>
-          <el-table-column prop="user_name" label="用户名" min-width="150"></el-table-column>
-          <el-table-column prop="pre_balance" label="强平前权益" min-width="130" align="right">
+          <el-table-column prop="risk_ratio_before" label="强平前风险度" min-width="120" align="right" show-overflow-tooltip>
             <template slot-scope="scope">
-              {{ scope.row.pre_balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+              {{ Number.isFinite(Number(scope.row.risk_ratio_before))
+                 ? (Number(scope.row.risk_ratio_before) * 100).toFixed(2) + '%' : '--' }}
             </template>
           </el-table-column>
-          <el-table-column prop="loss_amount" label="亏损金额" min-width="130" align="right">
+          <el-table-column prop="balance_before" label="强平前权益" min-width="130" align="right" show-overflow-tooltip>
             <template slot-scope="scope">
-              <span style="color: #67C23A">
-                -{{ scope.row.loss_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+              {{ fmtMoney(scope.row.balance_before) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="balance_after" label="强平后权益" min-width="130" align="right" show-overflow-tooltip>
+            <template slot-scope="scope">
+              {{ fmtMoney(scope.row.balance_after) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="total_loss" label="平仓损失" min-width="130" align="right" show-overflow-tooltip>
+            <template slot-scope="scope">
+              <span style="color: #F56C6C">
+                {{ fmtMoney(scope.row.total_loss) }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="instrument_id" label="强平合约" min-width="120" show-overflow-tooltip></el-table-column>
-          <el-table-column prop="liquidation_price" label="强平价格" min-width="120" align="right">
+          <el-table-column prop="instruments_closed" label="平仓合约" min-width="180" show-overflow-tooltip>
             <template slot-scope="scope">
-              {{ scope.row.liquidation_price.toFixed(2) }}
+              {{ Array.isArray(scope.row.instruments_closed) ? scope.row.instruments_closed.join(', ') : '--' }}
             </template>
           </el-table-column>
-          <el-table-column prop="liquidation_volume" label="强平数量" min-width="100" align="center"></el-table-column>
-          <el-table-column prop="trigger_type" label="触发类型" min-width="120">
-            <template slot-scope="scope">
-              <el-tag :type="scope.row.trigger_type === 'auto' ? 'danger' : 'warning'" size="small">
-                {{ scope.row.trigger_type === 'auto' ? '自动强平' : '手动强平' }}
-              </el-tag>
-            </template>
+          <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip>
+            <template slot-scope="scope">{{ scope.row.remark || '--' }}</template>
           </el-table-column>
-          <el-table-column prop="operator" label="操作员" width="120"></el-table-column>
         </el-table>
       </el-tab-pane>
     </el-tabs>
@@ -221,17 +237,24 @@
       <div v-if="currentAccount" v-loading="detailLoading">
         <el-descriptions :column="2" border class="detail-summary">
           <el-descriptions-item label="账户ID">{{ currentAccount.user_id }}</el-descriptions-item>
-          <el-descriptions-item label="总权益">{{ formatNumber(accountDetail.info && accountDetail.info.balance || currentAccount.balance) }}</el-descriptions-item>
-          <el-descriptions-item label="可用资金">{{ formatNumber(accountDetail.info && accountDetail.info.available || currentAccount.available) }}</el-descriptions-item>
-          <el-descriptions-item label="占用保证金">{{ formatNumber(accountDetail.info && accountDetail.info.margin || currentAccount.margin_used || 0) }}</el-descriptions-item>
+          <!-- ⚠️ 不能用 `详情.x || 列表.x` @yutiansut @quantaxis
+               `0 || 旧值` 得到的是**旧值** —— 而爆仓账户的 balance/available/margin
+               恰恰就是 0。实测:详情接口返回 `balance:0, available:0, margin:0`,
+               页面却渲染出列表里的陈旧值「总权益 1,000,000 / 可用 555,555」。
+               **一个被打穿的账户在风控详情页显示一百万权益。**
+               用 `detailNum()` 显式判 null/undefined,只有「详情真的没这个字段」
+               才回落到列表值。 -->
+          <el-descriptions-item label="总权益">{{ formatNumber(detailNum('balance', 'balance')) }}</el-descriptions-item>
+          <el-descriptions-item label="可用资金">{{ formatNumber(detailNum('available', 'available')) }}</el-descriptions-item>
+          <el-descriptions-item label="占用保证金">{{ formatNumber(detailNum('margin', 'margin_used')) }}</el-descriptions-item>
           <el-descriptions-item label="浮动盈亏">
-            <span :style="{ color: (accountDetail.info && accountDetail.info.float_profit || currentAccount.float_profit) >= 0 ? '#F56C6C' : '#67C23A' }">
-              {{ formatNumber(accountDetail.info && accountDetail.info.float_profit || currentAccount.float_profit || 0) }}
+            <span :style="{ color: detailNum('float_profit', 'float_profit') >= 0 ? '#F56C6C' : '#67C23A' }">
+              {{ formatNumber(detailNum('float_profit', 'float_profit')) }}
             </span>
           </el-descriptions-item>
           <el-descriptions-item label="风险率">
             <el-tag :type="getRiskTagType(currentAccount.risk_ratio)">
-              {{ (currentAccount.risk_ratio * 100).toFixed(1) }}%
+              {{ $pct(currentAccount.risk_ratio, 1) }}
             </el-tag>
           </el-descriptions-item>
         </el-descriptions>
@@ -243,38 +266,67 @@
               border
               stripe
               size="mini"
-              empty-text="暂无持仓"
+              :empty-text="$emptyText(detailError, '暂无持仓')"
             >
               <el-table-column prop="instrument_id" label="合约" min-width="140" show-overflow-tooltip/>
-              <el-table-column prop="volume_long" label="多头" min-width="100" align="right" />
-              <el-table-column prop="volume_short" label="空头" min-width="100" align="right" />
-              <el-table-column prop="cost_long" label="多头均价" min-width="120" align="right" />
-              <el-table-column prop="cost_short" label="空头均价" min-width="120" align="right" />
-              <el-table-column prop="float_profit" label="浮动盈亏" min-width="140" align="right">
+              <el-table-column prop="volume_long" label="多头" min-width="100" align="right" show-overflow-tooltip/>
+              <el-table-column prop="volume_short" label="空头" min-width="100" align="right" show-overflow-tooltip/>
+              <!-- QIFI 里均价是 open_price_long;open_cost_long 是**总成本**(差 手数×乘数 倍) -->
+              <el-table-column prop="open_price_long" label="多头均价" min-width="120" align="right" show-overflow-tooltip>
+                <template slot-scope="{ row }">{{ $num(row.open_price_long, 2) }}</template>
+              </el-table-column>
+              <el-table-column prop="open_price_short" label="空头均价" min-width="120" align="right" show-overflow-tooltip>
+                <template slot-scope="{ row }">{{ $num(row.open_price_short, 2) }}</template>
+              </el-table-column>
+              <el-table-column prop="float_profit" label="浮动盈亏" min-width="140" align="right" show-overflow-tooltip>
                 <template slot-scope="{ row }">
-                  <span :style="{ color: (row.float_profit || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
-                    {{ formatNumber(row.float_profit || 0) }}
+                  <span :style="{ color: (Number(row.float_profit) || 0) >= 0 ? '#F56C6C' : '#67C23A' }">
+                    {{ formatNumber(Number(row.float_profit) || 0) }}
                   </span>
                 </template>
               </el-table-column>
             </el-table>
           </el-tab-pane>
           <el-tab-pane label="订单明细" name="orders">
+            <!-- height 是必须的:没有它 el-table 会把全部行渲染进 DOM,
+                 实测 25,611 行 → 表格高 922,034 px / 38 万个节点。@yutiansut @quantaxis -->
             <el-table
               :data="accountDetail.orders"
+              height="360"
               border
               stripe
               size="mini"
-              empty-text="暂无订单"
+              :empty-text="$emptyText(detailError, '暂无订单')"
             >
               <el-table-column prop="order_id" label="订单号" min-width="160" show-overflow-tooltip/>
               <el-table-column prop="instrument_id" label="合约" min-width="120" show-overflow-tooltip/>
-              <el-table-column prop="direction" label="方向" width="80" align="center" />
-              <el-table-column prop="offset" label="开平" width="80" align="center" />
-              <el-table-column prop="price" label="价格" min-width="100" align="right" />
-              <el-table-column prop="volume" label="数量" width="80" align="right" />
-              <el-table-column prop="status" label="状态" min-width="120" />
+              <el-table-column prop="direction" label="方向" width="80" align="center">
+                <template slot-scope="{ row }">{{ enumText(row.direction) }}</template>
+              </el-table-column>
+              <el-table-column prop="offset" label="开平" width="80" align="center">
+                <template slot-scope="{ row }">{{ enumText(row.offset) }}</template>
+              </el-table-column>
+              <!-- QIFI 订单字段是 limit_price / volume_orign,没有 price / volume -->
+              <el-table-column prop="limit_price" label="价格" min-width="100" align="right" show-overflow-tooltip>
+                <template slot-scope="{ row }">{{ $num(row.limit_price, 2) }}</template>
+              </el-table-column>
+              <el-table-column prop="volume_orign" label="数量" width="80" align="right" show-overflow-tooltip/>
+              <el-table-column prop="status" label="状态" min-width="120">
+                <template slot-scope="{ row }">{{ enumText(row.status) }}</template>
+              </el-table-column>
             </el-table>
+            <el-pagination
+              v-if="ordersTotal > orderPageSize"
+              style="margin-top: 10px; text-align: right;"
+              background
+              layout="total, sizes, prev, pager, next"
+              :current-page="orderPage"
+              :page-size="orderPageSize"
+              :page-sizes="[50, 100, 200, 500]"
+              :total="ordersTotal"
+              @current-change="onOrderPageChange"
+              @size-change="onOrderPageSizeChange"
+            />
           </el-tab-pane>
         </el-tabs>
       </div>
@@ -295,11 +347,22 @@ export default {
   name: 'RiskMonitoring',
   data() {
     return {
+      // 三个区各自的加载失败原因 —— 页面有 loading / liquidationLoading /
+      // detailLoading 三个独立加载标志,错误态也必须分开:否则打开账户详情
+      // 会擦掉主列表的错误态,详情失败又会反过来污染主列表。@yutiansut @quantaxis
+      accountsError: null,
+      liquidationError: null,
+      detailError: null,
       loading: false,
       liquidationLoading: false,
       autoRefresh: false,
       refreshTimer: null,
       activeTab: 'realtime',
+      // ✨ 详情弹窗的 tab —— 模板 :239 用了 v-model="detailTab" 却从没声明,
+      //    undefined 时 el-tabs 回退到索引 "0",而两个 pane 用的是具名
+      //    name="positions"/"orders",永远匹配不上 → 两个 tab 都不高亮、内容全空白。
+      //    @yutiansut @quantaxis
+      detailTab: 'positions',
       searchKeyword: '',
       dateRange: [],
       accounts: [],
@@ -312,6 +375,12 @@ export default {
       },
       detailDialogVisible: false,
       detailLoading: false,
+      // 订单明细分页 —— 后端 /management/account/{id}/detail 已支持 page/page_size
+      orderPage: 1,
+      orderPageSize: 50,
+      ordersTotal: 0,
+      // 翻页锚点 —— 不带回会看到重复订单(实测重叠数 == 期间新增单数)
+      snapshotTs: null,
       currentAccount: null,
       accountDetail: {
         info: null,
@@ -336,6 +405,30 @@ export default {
     this.stopAutoRefresh()
   },
   methods: {
+    // ✨ QIFI 枚举本地化(方向/开平/状态),复用 account-detail.vue:202 的同一张表。
+    // ⚠️ FINISHED 在 QIFI 是「已完成」统称,不区分成交/撤单/拒绝,别擅自译成「已成交」。@yutiansut @quantaxis
+    enumText(v) {
+      const map = {
+        BUY: '买入', SELL: '卖出',
+        OPEN: '开仓', CLOSE: '平仓',
+        CLOSE_TODAY: '平今', CLOSE_YESTERDAY: '平昨',
+        CLOSETODAY: '平今', CLOSEYESTERDAY: '平昨',
+        ALIVE: '未完成', SUBMITTED: '已报', FINISHED: '已完成',
+        Pending: '待成交', PartiallyFilled: '部分成交', Filled: '已成交',
+        Cancelled: '已撤销', Rejected: '已拒绝'
+      }
+      if (v == null || v === '') return ''
+      return map[v] || String(v)
+    },
+    // 详情优先、列表兜底,但**只在详情确实缺该字段时**才回落 @yutiansut @quantaxis
+    // 用 `== null` 同时覆盖 null 与 undefined;`0` / `''` / `false` 都算「详情有值」。
+    detailNum (detailKey, listKey) {
+      const d = this.accountDetail && this.accountDetail.info
+      if (d && d[detailKey] != null) return Number(d[detailKey]) || 0
+      const l = this.currentAccount
+      if (l && l[listKey] != null) return Number(l[listKey]) || 0
+      return 0
+    },
     // 加载数据
     async loadData() {
       await Promise.all([
@@ -347,7 +440,7 @@ export default {
 
     // 加载账户风险数据
     async loadAccounts() {
-      this.loading = true
+      this.loading = true; this.accountsError = null
       try {
         const params = {}
         if (this.searchKeyword) {
@@ -358,6 +451,7 @@ export default {
         const rows = (response || []).map(item => this.normalizeRiskAccount(item))
         this.accounts = rows
       } catch (error) {
+        this.accountsError = this.$errMsg(error, '加载失败')
         this.$message.error('加载账户数据失败')
         console.error(error)
       } finally {
@@ -378,22 +472,26 @@ export default {
           averageRiskRatio: data.average_risk_ratio || 0
         }
       } catch (error) {
+        // ⚠️ **不要**在这里用 this.accounts 自己重算 @yutiansut @quantaxis
+        //
+        // 原实现 catch 后遍历 this.accounts 重算高风险/临近爆仓数,但
+        // loadAccounts() 与 loadStatistics() 是 Promise.all **并发**的,
+        // catch 执行时 this.accounts 往往还是 [] → 统计卡静默显示 **0**,
+        // 而下方表格仍显示「共 55 个账户」、右上角仍是绿色「系统正常」。
+        // 实测:只让 margin-summary 返回 500,高风险账户 18 → **0**
+        // (后端权威值当时是 high_risk_count:19)。
+        //
+        // 即便不并发,客户端重算权威量本身就是错的(lessons.md L45)。
+        // 置 null 让卡片显示「统计不可用」,比假报 0 诚实。
         console.error('加载统计数据失败', error)
-        // 从账户数据中计算
-        this.statistics = {
-          highRiskCount: this.accounts.filter(a => a.risk_ratio >= 0.8).length,
-          criticalRiskCount: this.accounts.filter(a => a.risk_ratio >= 0.9).length,
-          todayLiquidations: 0,
-          averageRiskRatio: this.accounts.length > 0
-            ? this.accounts.reduce((sum, a) => sum + a.risk_ratio, 0) / this.accounts.length
-            : 0
-        }
+        this.statistics = null
+        this.$message.error('风控统计加载失败,数据不可用')
       }
     },
 
     // 加载强平记录
     async loadLiquidations() {
-      this.liquidationLoading = true
+      this.liquidationLoading = true; this.liquidationError = null
       try {
         const params = {}
         if (this.dateRange && this.dateRange.length === 2) {
@@ -405,6 +503,7 @@ export default {
         const records = await getLiquidationRecords(params)
         this.liquidations = records || []
       } catch (error) {
+        this.liquidationError = this.$errMsg(error, '加载失败')
         this.$message.error('加载强平记录失败')
         console.error(error)
       } finally {
@@ -412,15 +511,31 @@ export default {
       }
     },
 
+    // ⚠️ **映射层不能把空值抹成 0** —— 否则显示层的守卫永远看不到它。
+    // @yutiansut @quantaxis
+    //
+    // 原实现是 `Number(item.balance) || 0`。`Number(null) === 0`、`Number('') === 0`,
+    // 于是「后端没给这个字段」在这里就变成了「这个账户是 0」,
+    // 再往下 `$money()` 拿到的已经是一个货真价实的 0,**它的 `--` 分支永远不触发**。
+    // 子代理实测:注入 `null` / `''` 到本页,总权益仍渲染 `0.00` 而不是 `--`
+    // —— 显示层替换在这一页**等于没做**。
+    //
+    // 保持 `null`(而不是 0),让 `$money`/`$pct` 去判定;
+    // `position_count` 是计数,0 是合理默认,维持原样。
     normalizeRiskAccount(item) {
+      const num = v => {
+        if (v === null || v === undefined || v === '') return null
+        const n = Number(v)
+        return Number.isFinite(n) ? n : null
+      }
       return {
         user_id: item.user_id,
-        balance: item.balance || 0,
-        available: item.available || 0,
-        margin_used: item.margin_used || 0,
-        float_profit: item.unrealized_pnl || 0,
-        risk_ratio: item.risk_ratio || 0,
-        position_count: item.position_count || 0,
+        balance: num(item.balance),
+        available: num(item.available),
+        margin_used: num(item.margin_used),
+        float_profit: num(item.unrealized_pnl),
+        risk_ratio: num(item.risk_ratio),
+        position_count: Number(item.position_count) || 0,
         risk_level: item.risk_level || 'low'
       }
     },
@@ -437,15 +552,42 @@ export default {
     async viewAccountDetail(account) {
       this.currentAccount = account
       this.detailDialogVisible = true
-      this.detailLoading = true
+      this.orderPage = 1
+      this.snapshotTs = null
+      await this.loadAccountDetail()
+    },
+
+    onOrderPageChange(page) {
+      this.orderPage = page
+      this.loadAccountDetail()
+    },
+
+    onOrderPageSizeChange(size) {
+      this.orderPageSize = size
+      this.orderPage = 1
+      this.snapshotTs = null
+      this.loadAccountDetail()
+    },
+
+    async loadAccountDetail() {
+      const account = this.currentAccount
+      if (!account) return
+      this.detailLoading = true; this.detailError = null
       try {
-        const detail = await getAccountDetail(account.user_id)
+        const params = { page: this.orderPage, page_size: this.orderPageSize }
+        if (this.snapshotTs !== null) params.snapshot_ts = this.snapshotTs
+        const detail = await getAccountDetail(account.user_id, params)
+        if (this.snapshotTs === null && detail.snapshot_ts !== undefined) {
+          this.snapshotTs = detail.snapshot_ts
+        }
+        this.ordersTotal = detail.orders_total || (detail.orders || []).length
         this.accountDetail = {
           info: detail.account_info || account,
           positions: detail.positions || [],
           orders: detail.orders || []
         }
       } catch (error) {
+        this.detailError = this.$errMsg(error, '加载失败')
         this.$message.error('加载账户详情失败')
         console.error(error)
         this.accountDetail = {
@@ -462,7 +604,7 @@ export default {
     async forceLiquidate(account) {
       try {
         await this.$confirm(
-          `确定要强制平仓账户 ${account.user_id} 吗？当前风险率：${(account.risk_ratio * 100).toFixed(1)}%`,
+          `确定要强制平仓账户 ${account.user_id} 吗？当前风险率：${((Number(account.risk_ratio) || 0) * 100).toFixed(1)}%`,
           '强制平仓确认',
           {
             type: 'warning',
@@ -485,8 +627,12 @@ export default {
       }
     },
 
+      // ✨ 委托全局 `$money`(main.js):判空 → isFinite → **量级上限 1e15**。
+      // 全仓曾有 13 个各写各的金额格式化器,**没有一个带量级闸**,
+      // 于是 `balance = 1e300` 的污染账户在 6 个页面渲染成 404 个字符
+      // (`Number.isFinite(1e300)` 为真,只判 isFinite 挡不住)。@yutiansut @quantaxis
     formatNumber(val) {
-      return Number(val || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
+      return this.$money(val)
     },
 
     // 切换自动刷新
@@ -535,7 +681,13 @@ $success-color: #52c41a;
 .risk-container {
   padding: 20px;
   background: $dark-bg-primary;
-  min-height: calc(100vh - 60px);
+  // ⚠️ 用 --qa-content-h,不要手写 calc(100vh - N)。@yutiansut @quantaxis
+  //    原值 -60px 少算了 content-wrapper 的上下 padding(各 20px):
+  //    真实 chrome = top-header 56 + padding 40 = 96px(有公告条时再 +40)。
+  //    实测本页在无内容可滚时仍有 41px 的死滚动条
+  //    (.content-wrapper 的 scrollHeight - clientHeight = 41)。
+  //    `layout/index.vue:546` 早就写明「各页面请一律用 var(--qa-content-h)」。
+  min-height: var(--qa-content-h, calc(100vh - 96px));
 }
 
 .page-header {

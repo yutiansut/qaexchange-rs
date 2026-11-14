@@ -1,6 +1,7 @@
 //! WebSocket 消息处理器
 
 use actix::Addr;
+use crate::core::account_ext::AccountExt;   // safe_risk_ratio @yutiansut @quantaxis
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use log;
 use std::collections::HashMap;
@@ -280,7 +281,15 @@ impl WsMessageHandler {
                     // accounts.balance 仍是 1,500,000,000(init_cash)、risk_ratio 仍是 0.0。
                     // 本处已持写锁(为 get_margin 取的),改用动态 getter 零额外成本。
                     // @yutiansut @quantaxis
-                    let frozen = acc.get_balance() - acc.money;
+                    // ⚠️ 用 `qifi_balance()` 而非 qars 的 `get_balance()` @yutiansut @quantaxis
+                    //
+                    // qars 的 `get_balance()` 依赖它内部的 `static_balance`(语义 = 初始资金),
+                    // 一旦该字段被写成 QIFI 语义(含 deposit)就会把入金算两遍。
+                    // HTTP 侧的投影层已按规范重算,若这里仍用 qars 原生值,
+                    // **同一个账户在 HTTP 与 WebSocket 上会显示相差一份 deposit 的两个余额**,
+                    // 且数字随哪个通道最后更新而跳变。统一走 AccountExt::qifi_balance。
+                    let qifi_bal = acc.qifi_balance();
+                    let frozen = qifi_bal - acc.money;
                     // ✨ 保证金 = 持仓保证金 + 冻结保证金（待成交订单）@yutiansut @quantaxis
                     let position_margin = acc.get_margin();
                     let frozen_margin = acc.get_frozen_margin();
@@ -288,12 +297,16 @@ impl WsMessageHandler {
                     let data = serde_json::json!({
                         "account": {
                             "user_id": acc.account_cookie,
-                            "balance": acc.get_balance(),
+                            "balance": qifi_bal,
                             "available": acc.money,
                             "frozen": frozen,
                             "margin": margin,  // ✨ 使用动态计算的值
                             "profit": acc.get_closeprofit(),
-                            "risk_ratio": acc.get_riskratio(),
+                            // 与上面的 qifi_bal 保持同一分母,否则 risk_ratio != margin/balance
+                            "risk_ratio": if qifi_bal > 0.0 {
+                                let r = margin / qifi_bal;
+                                if r.is_finite() { r } else { 0.0 }
+                            } else { 0.0 },
                         }
                     });
 

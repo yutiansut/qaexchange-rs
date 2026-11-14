@@ -235,17 +235,49 @@ impl PreTradeCheck {
 
         // 检查价格合法性 @yutiansut @quantaxis
         // 市价单（MARKET）允许 price=0，限价单（LIMIT）要求 price > 0
-        if req.price_type != "MARKET" && req.price <= 0.0 {
+        // ⚠️ 价格/数量必须先查**有限性**,再比大小。@yutiansut @quantaxis
+        //
+        // 原写法只有 `req.price <= 0.0` —— 那是 **NaN 不安全**的:
+        // `NaN <= 0.0` 恒为 **false**,于是 NaN 价格会**直接通过这道检查**。
+        // 对照 `service/http/models.rs:124` 的资金校验,那里刻意写成
+        // `!(amount > 0.0)` 正是为了同时挡住 NaN —— 这里没跟上。
+        //
+        // 现状下 JSON 层能挡住字符串 `"NaN"`(serde 反序列化失败),
+        // 但**计算产生的 NaN/Inf 挡不住**(例如上游用 0/0 算出的价格)。
+        // 下面 `:251` 的金额上限之所以能拦住 inf,是因为 `inf > limit` 恰好为 true
+        // —— **那是巧合不是设计**,而 `NaN > limit` 为 false,会漏过去。
+        if !req.price.is_finite() || !req.volume.is_finite() {
+            return Err(ExchangeError::RiskCheckFailed(format!(
+                "订单价格或数量不是有限数值: price={}, volume={}",
+                req.price, req.volume
+            )));
+        }
+        if req.price_type != "MARKET" && !(req.price > 0.0) {
             return Err(ExchangeError::RiskCheckFailed(
                 "Invalid order price for LIMIT order".to_string(),
             ));
         }
 
-        // 检查订单金额（市价单跳过金额检查，因为价格可能是0）
-        if req.price_type == "MARKET" {
-            return Ok(()); // 市价单跳过金额检查
-        }
+        // 订单金额上限。@yutiansut @quantaxis
+        //
+        // ⚠️ 原来是「市价单**整个跳过**金额检查」,理由写的是"价格可能是 0"。
+        // 理由本身成立(市价单下单时可能不带价),但**跳过整个检查过头了** ——
+        // `order_router.rs:490` 会先用最新价解析市价单并填回 `req.price`,
+        // 所以走到这里时**通常是有价的**,完全可以估算名义金额。
+        //
+        // 后果(回验代理发现):`orders/index.vue` 把"市价单"连同表单里
+        // 写死的 `price: 3800` 一起提交 —— 后端因 `price > 0` 跳过市价解析,
+        // 又因 `price_type == "MARKET"` 跳过金额上限,
+        // ⇒ **一张市价单可以任意大而不受风控闸门约束**。
+        //
+        // 改为:**有可用价格就查上限,只有真的拿不到价才跳过**。
         let order_amount = req.notional();   // 名义金额,含合约乘数
+        if req.price_type == "MARKET" && !(order_amount > 0.0) {
+            // 市价单且确实估不出金额(无价或价为 0)—— 此时无从判断,放行。
+            // 注意用 `!(x > 0.0)` 而非 `x <= 0.0`:NaN 也要落进这一支
+            // (上面已有有限性校验,这里是双保险)。
+            return Ok(());
+        }
         if order_amount > config.max_order_amount {
             return Err(ExchangeError::RiskCheckFailed(format!(
                 "Order amount {} exceeds limit {}",
@@ -666,6 +698,107 @@ mod tests {
 
         checker.remove_active_order("test_user", "order1");
         assert_eq!(checker.get_active_order_count("test_user"), 1);
+    }
+
+    /// 非有限价格/数量必须被拒 —— 覆盖 NaN 与 ±Inf。@yutiansut @quantaxis
+    ///
+    /// 为什么要专门测:原实现只有 `req.price <= 0.0`,而 **`NaN <= 0.0` 恒为 false**,
+    /// NaN 价格会直接通过。JSON 层能挡住字符串 "NaN",但**计算产生的** NaN 挡不住。
+    /// 下游 `:251` 的金额上限拦得住 inf 纯属巧合(`inf > limit` 为 true),
+    /// 对 NaN 无效(`NaN > limit` 为 false)。
+    /// 市价单**带价时也要受金额上限约束**。@yutiansut @quantaxis
+    ///
+    /// 原实现是 `if price_type == "MARKET" { return Ok(()) }` —— 整个跳过。
+    /// 回验代理发现:前端 `orders/index.vue` 会把"市价单"连同写死的
+    /// `price: 3800` 一起提交,后端因 `price > 0` 跳过市价解析、
+    /// 又因 MARKET 跳过金额上限 ⇒ 市价单可以任意大而不受风控约束。
+    #[test]
+    fn test_market_order_amount_limit_enforced_when_priced() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        let mk = |price: f64, volume: f64, pt: &str| OrderCheckRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume,
+            price,
+            limit_price: price,
+            price_type: pt.to_string(),
+            contract_multiplier: 300.0,
+            ..Default::default()
+        };
+
+        // ① 带价的市价单,金额远超上限 → **必须被拒**(改前会放行)
+        let huge = checker.check(&mk(3800.0, 10000.0, "MARKET"));
+        assert!(
+            matches!(huge, Err(ExchangeError::RiskCheckFailed(_))),
+            "带价市价单超上限应被拒,实际 {:?}",
+            huge
+        );
+
+        // ② 真正无价的市价单 → 估不出金额,放行(保留原语义)
+        let no_price = checker.check(&mk(0.0, 1.0, "MARKET"));
+        assert!(
+            !matches!(no_price, Err(ExchangeError::RiskCheckFailed(ref m)) if m.contains("Order amount")),
+            "无价市价单不应因金额被拒,实际 {:?}",
+            no_price
+        );
+
+        // ③ 阴性对照:正常大小的市价单必须通过 —— 否则上面的"拒"没有意义
+        let ok = checker.check(&mk(100.0, 1.0, "MARKET"));
+        assert!(
+            matches!(ok, Ok(RiskCheckResult::Pass)),
+            "正常市价单不应被拒,实际 {:?}",
+            ok
+        );
+    }
+
+    #[test]
+    fn test_non_finite_price_volume_rejected() {
+        let account_mgr = create_test_account_manager();
+        let checker = PreTradeCheck::new(account_mgr);
+
+        let mk = |price: f64, volume: f64| OrderCheckRequest {
+            account_id: "test_user".to_string(),
+            instrument_id: "IX2301".to_string(),
+            direction: "BUY".to_string(),
+            offset: "OPEN".to_string(),
+            volume,
+            price,
+            limit_price: price,
+            price_type: "LIMIT".to_string(),
+            ..Default::default()
+        };
+
+        for (name, price, volume) in [
+            ("NaN 价格", f64::NAN, 1.0),
+            ("+Inf 价格", f64::INFINITY, 1.0),
+            ("-Inf 价格", f64::NEG_INFINITY, 1.0),
+            ("NaN 数量", 100.0, f64::NAN),
+            ("+Inf 数量", 100.0, f64::INFINITY),
+        ] {
+            // ⚠️ 基础参数校验返回的是 `Err(RiskCheckFailed)`,**不是** `Ok(Reject)` ——
+            // 这是本文件的既有约定:参数错误(:223/:230/:250/:256/:267)走 Err,
+            // 业务规则拒单(:296/:339/:351,如自成交、持仓限额)走 Ok(Reject)。
+            // 上层 order_router.rs:625/635 两种都接。
+            let r = checker.check(&mk(price, volume));
+            assert!(
+                matches!(r, Err(ExchangeError::RiskCheckFailed(_))),
+                "{} 应被拒绝,实际 {:?}",
+                name,
+                r
+            );
+        }
+
+        // 阴性对照:正常值必须**通过**这一关(否则上面的"全拒"没有意义)
+        let ok = checker.check(&mk(100.0, 1.0));
+        assert!(
+            matches!(ok, Ok(RiskCheckResult::Pass)),
+            "正常价格/数量不应被拒,实际 {:?}",
+            ok
+        );
     }
 
     #[test]

@@ -1,8 +1,21 @@
 <template>
-  <div class="orders-page">
+  <div class="orders-page qa-flex-page">
     <el-card>
       <div slot="header" class="card-header">
-        <span>订单管理</span>
+        <!-- ⚠️ 口径:本页数据来自 `/api/order/user/{id}`,读的是 order_router 的**内存注册表**。
+             重启时只恢复 SUBMITTED/ALIVE 的活单(order_router.rs:2559),已成交/已撤的
+             历史单不在其中。实测某做市账户 QIFI 里有 131,223 单,本接口返回 total=109。
+             与 admin/market-overview.vue 的「活跃订单」同源同口径,那边已加同样的说明。
+             @yutiansut @quantaxis -->
+        <span>
+          订单管理
+          <el-tooltip
+            content="仅显示当前在册订单（挂单与本次运行期间产生的单）。已成交/已撤的历史订单不在此列表。"
+            placement="top"
+          >
+            <i class="el-icon-question" style="color:#909399;font-size:12px;cursor:help;margin-left:4px;"></i>
+          </el-tooltip>
+        </span>
         <el-button type="primary" size="small" @click="showSubmitDialog">
           <i class="el-icon-plus"></i> 下单
         </el-button>
@@ -37,11 +50,21 @@
            实测 1366x768: 表格上沿距内容区顶部 171px
            var(--qa-content-h) 由 layout/index.vue 统一定义 = 100vh - 56(顶栏) - 40(padding),
            有公告条时自动再减 40px; max(260px, ...) 是极短视口下的兜底 -->
+      <!-- ⚠️ 保留 height prop 并固定为 '100%' —— 不要删,也不要写常数 N。
+      @yutiansut @quantaxis
+      `flex:1` ⇒ `flex-basis:0%`,主轴尺寸由 flex 决定,height 不参与布局
+      (实测 tableH 与改前逐位相同);但 `layout.height !== null` 让 Element
+      自己做 `fixedBodyHeight = bodyHeight - gutterWidth`、渲染 th.gutter、
+      并在 updateColumnsWidth 里扣掉 gutter。删掉它会让 layout.scrollY
+      永久为 false,连锁产生冻结列错位/竖条被盖/多余横条/表头滞后四个缺陷。
+      常数 N 则是另一个错:所需值随**宽度**跳变(表格上方统计卡换行)。 -->
       <el-table
+        class="qa-flex-table"
+        :empty-text="$emptyText(loadError, '暂无订单')"
         :data="orderList"
         border
         stripe
-        :height="'max(260px, calc(var(--qa-content-h, calc(100vh - 96px)) - 171px))'"
+        :height="'100%'"
         v-loading="loading"
         style="width: 100%"
       >
@@ -64,13 +87,17 @@
             {{ scope.row.offset === 'OPEN' ? '开仓' : '平仓' }}
           </template>
         </el-table-column>
-        <el-table-column prop="price" label="价格" min-width="100" align="right">
+        <el-table-column prop="price" label="价格" min-width="100" align="right" show-overflow-tooltip>
           <template slot-scope="scope">
-            {{ scope.row.price.toFixed(2) }}
+            {{ $num(scope.row.price, 2) }}
           </template>
         </el-table-column>
-        <el-table-column prop="volume" label="数量" width="80" align="right" />
-        <el-table-column prop="filled_volume" label="成交量" width="80" align="right" />
+        <el-table-column prop="volume" label="数量" width="80" align="right" show-overflow-tooltip>
+          <template slot-scope="{ row }">{{ $num(row.volume, 0) }}</template>
+        </el-table-column>
+        <el-table-column prop="filled_volume" label="成交量" width="80" align="right" show-overflow-tooltip>
+          <template slot-scope="{ row }">{{ $num(row.filled_volume, 0) }}</template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" min-width="100" align="center">
           <template slot-scope="scope">
             <el-tag :type="getStatusType(scope.row.status)" size="mini">
@@ -83,7 +110,7 @@
              submit_time 是纳秒(order_router.rs:734 timestamp_nanos_opt),
              与 trades 页 trade.timestamp 同一约定。@yutiansut @quantaxis -->
         <el-table-column prop="submit_time" label="创建时间" min-width="160" :formatter="formatSubmitTime" />
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="150">
           <template slot-scope="scope">
             <el-button
               v-if="scope.row.status === 'Pending'"
@@ -99,23 +126,48 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- ✨ 分页条 —— 仅在按账户查询时显示 @yutiansut @quantaxis
+           不分页时单账户 5,951 单要 18.4 秒出表、905MB heap;
+           两个活跃账户合计 11,902 行 → 39.9 秒 / 1.7GB。 -->
+      <el-pagination
+        v-if="queryAccountId && totalOrders > pageSize"
+        style="margin-top: 12px; text-align: right"
+        :current-page.sync="currentPage"
+        :page-sizes="[50, 100, 200]"
+        :page-size="pageSize"
+        :total="totalOrders"
+        layout="total, sizes, prev, pager, next"
+        @current-change="fetchAccountOrders"
+        @size-change="onPageSizeChange"
+      />
     </el-card>
 
     <!-- 下单对话框 -->
     <el-dialog title="提交订单" :visible.sync="submitDialogVisible" width="500px">
       <el-form :model="submitForm" :rules="submitRules" ref="submitForm" label-width="100px">
         <el-form-item label="交易账户" prop="user_id">
-          <el-select v-model="submitForm.user_id" filterable style="width: 100%">
+          <!-- ✨ 必须同步 account_id @yutiansut @quantaxis
+               原先下拉只改 user_id,而 account_id 停在 showSubmitDialog 设的
+               **第一个**账户上。多账户用户选第二个账户下单 →
+               「user_id=账户B / account_id=账户A」→ 后端返回
+               403 code 4003「Account X does not belong to user Y」,100% 失败。 -->
+          <el-select
+            v-model="submitForm.user_id"
+            filterable
+            style="width: 100%"
+            @change="onSubmitAccountChange"
+          >
             <el-option
               v-for="account in accounts"
               :key="account.account_id"
-              :label="`${account.account_name} (可用: ¥${account.available.toLocaleString()})`"
+              :label="`${account.account_name} (可用: ¥${$money(account.available)})`"
               :value="account.account_id"
             >
               <div style="display: flex; justify-content: space-between;">
                 <span>{{ account.account_name }}</span>
                 <span style="color: #8492a6; font-size: 12px;">
-                  可用: ¥{{ account.available.toLocaleString() }}
+                  可用: ¥{{ $money(account.available) }}
                 </span>
               </div>
             </el-option>
@@ -141,7 +193,10 @@
             <el-radio label="CLOSE">平仓</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="价格" prop="price">
+        <!-- 市价单隐藏价格框 —— 与 trade/components/OrderForm.vue:55 一致。
+             提交处也做了归一(见 handleSubmitOrder),两道都留着:
+             隐藏是给用户看的,归一是防止任何路径漏掉。@yutiansut @quantaxis -->
+        <el-form-item v-if="submitForm.order_type === 'LIMIT'" label="价格" prop="price">
           <el-input-number
             v-model="submitForm.price"
             :min="0"
@@ -177,6 +232,7 @@
 
 <script>
 import { submitOrder, cancelOrder, queryUserOrders, getUserAccounts } from '@/api'
+import { extractErrorMessage } from '@/api/request'
 import { mapGetters, mapActions } from 'vuex'
 
 export default {
@@ -186,6 +242,11 @@ export default {
   },
   data() {
     return {
+      // 加载失败原因(null = 未失败)—— 供表格 empty-text 区分两种空
+      loadError: null,
+      currentPage: 1,
+      pageSize: 100,
+      totalOrders: 0,
       loading: false,
       submitting: false,
       orderList: [],
@@ -278,17 +339,47 @@ export default {
 
       this.loading = true
       try {
+        this.loadError = null   // 每次重试先清除上次的失败标记
+        // ⚠️ 逐账户 catch 是为了「一个账户失败不拖垮整页」,但原写法
+        //    `.catch(() => null)` 把异常**彻底吞掉**:外层 try 永不抛,
+        //    loadError 恒为 null,表格显示「暂无订单」。实测 9 个账户全部 500
+        //    (9 条 toast 为证)时页面仍显示「暂无订单」,下面 catch 里的
+        //    extractErrorMessage 成了不可达死代码。
+        //    改法:保留逐账户容错,记住第一个错误,**全军覆没时抛出去**。
+        //    @yutiansut @quantaxis
+        let firstError = null
+        // ✨ 把合约筛选**真的传给接口**。@yutiansut @quantaxis
+        //
+        // `queryInstrument` 声明了(:251)、绑了下拉框(:36)、重置时也清(:419),
+        // **唯独不传给 queryUserOrders** —— 回验代理网络层实测:
+        // 选了 IF2502 点查询,请求仍是 `?page=1&page_size=100`,无 instrument_id。
+        // 后端 `handlers.rs:690` 的 `match_instrument` 本来就支持。
+        const filterParams = {}
+        if (this.queryInstrument) filterParams.instrument_id = this.queryInstrument
         const pages = await Promise.all(
           this.accounts.map(acc =>
-            queryUserOrders(acc.account_id).catch(() => null)
+            queryUserOrders(acc.account_id, filterParams).catch(err => {
+              if (!firstError) firstError = err
+              return null
+            })
           )
         )
+        const failed = pages.filter(d => d === null).length
+        if (failed > 0 && failed === this.accounts.length) {
+          throw firstError || new Error('全部账户的订单都加载失败')
+        }
+        if (failed > 0) {
+          console.warn('[orders] ' + failed + '/' + this.accounts.length + ' 个账户的订单加载失败,列表为部分数据')
+        }
         this.orderList = pages.reduce((all, data) => {
           if (!data) return all
           return all.concat(Array.isArray(data) ? data : (data.orders || []))
         }, [])
       } catch (error) {
-        this.$message.error('加载订单失败: ' + ((error.response && error.response.data && error.response.data.error) || error.message))
+        // ✨ 记录失败原因 —— 否则表格只显示默认「暂无数据」,
+        //    与「真的没有数据」完全同形,用户无从判断。@yutiansut @quantaxis
+        this.loadError = this.$errMsg(error, '加载失败')
+        this.$message.error('加载订单失败: ' + extractErrorMessage(error))
         this.orderList = []
       } finally {
         this.loading = false
@@ -304,27 +395,55 @@ export default {
     },
 
     handleQuery() {
-      if (this.queryAccountId) {
-        this.loading = true
-        queryUserOrders(this.queryAccountId)
-          .then(data => {
-            this.orderList = data.orders || []
-          })
-          .catch(() => {
-            this.$message.error('查询失败')
-          })
-          .finally(() => {
-            this.loading = false
-          })
-      } else {
-        this.loadOrders()
-      }
+      // ✨ 单账户查询走分页 —— 不分页时 5,951 单要 18.4 秒 / 905MB heap
+      //    @yutiansut @quantaxis
+      this.currentPage = 1
+      this.fetchAccountOrders()
+    },
+
+    onPageSizeChange(size) {
+      this.pageSize = size
+      this.currentPage = 1
+      this.fetchAccountOrders()
+    },
+
+    fetchAccountOrders() {
+      if (!this.queryAccountId) { this.loadOrders(); return }
+      this.loading = true
+      queryUserOrders(this.queryAccountId, {
+        page: this.currentPage,
+        page_size: this.pageSize
+      })
+        .then(data => {
+          this.orderList = data.orders || []
+          this.totalOrders = data.total || 0
+        })
+        .catch(err => {
+          // ⚠️ 原来这里只弹 toast,既不置 loadError 也不清 orderList。@yutiansut @quantaxis
+          // 两个后果:① toast 3 秒后消失,表格 empty-text 仍是「暂无订单」——
+          // 「查询失败」与「这个账户确实没单」在屏幕上完全同形;
+          // ② orderList 保留**上一个账户**的行 —— 换账户查询失败时,
+          // 用户看到的是别人的订单挂在自己账号下。比空表更糟。
+          // 本页 :63 的 $emptyText(loadError, ...) 机制早已铺好,这里只是绕过了它。
+          this.loadError = extractErrorMessage(err)
+          this.orderList = []
+          this.totalOrders = 0
+          this.$message.error('查询失败: ' + this.loadError)
+        })
+        .finally(() => {
+          this.loading = false
+        })
     },
 
     handleReset() {
       this.queryAccountId = ''
       this.queryInstrument = ''
       this.loadOrders()
+    },
+
+    // 账户下拉变更时同步 account_id —— 交易所模式下两者都是 account_id
+    onSubmitAccountChange(val) {
+      this.submitForm.account_id = val
     },
 
     showSubmitDialog() {
@@ -350,7 +469,28 @@ export default {
       this.$refs.submitForm.validate(valid => {
         if (valid) {
           this.submitting = true
-          submitOrder(this.submitForm)
+          // ⚠️ 市价单必须把 price 归零,不能原样提交表单。@yutiansut @quantaxis
+          //
+          // 原来是 `submitOrder(this.submitForm)` —— 整个表单照发。
+          // 而价格框无条件显示、`data()` 里默认 `price: 3800`,
+          // 于是切到"市价单"后仍带着这个**陈旧限价**提交。
+          // 回验代理截获的实际请求体:
+          //   {"…","price":3800,"volume":1,"order_type":"MARKET"}
+          //
+          // 后端两处会因此走偏:
+          //   · `order_router.rs:490` 在 `price > 0` 时**跳过市价解析**
+          //     ⇒ 实际按 3800 这个限价撮合;
+          //   · `pre_trade_check.rs:262` 对 MARKET **提前返回**
+          //     ⇒ 跳过订单金额上限,风控闸门失效。
+          //
+          // 正确写法在同项目 `trade/components/OrderForm.vue:311`:
+          //   `price: order_type === 'LIMIT' ? form.price : 0`
+          // 这里对齐它。
+          const payload = {
+            ...this.submitForm,
+            price: this.submitForm.order_type === 'LIMIT' ? this.submitForm.price : 0
+          }
+          submitOrder(payload)
             .then(() => {
               this.$message.success('订单提交成功')
               this.submitDialogVisible = false
@@ -396,9 +536,35 @@ export default {
       })
     },
 
+    // 详情弹窗:用 <pre> 保留缩进 + 限高滚动。@yutiansut @quantaxis
+    //
+    // 原写法 `this.$alert(JSON.stringify(row, null, 2), ...)` 有两个问题:
+    // ① `\n` 与缩进空格在 HTML 里被折叠 —— 精心生成的两空格缩进**完全丢失**,
+    //    渲染成一整段跑马文(实测截图 r_positions_detail-row0 / d_accounts_detail-alert)。
+    // ② element-ui 的 `.el-message-box{overflow:hidden}`,而
+    //    `.el-message-box__wrapper` 的 overflow-y 实测是 **visible** 不是 auto,
+    //    且 styles/index.scss 全文 `max-height` 出现次数为 0 ——
+    //    内容一旦超高既不能滚动也不会截断,**确定按钮会被挤出视口**。
+    //    当前消息体约 340 字符尚有约 4 倍余量,属潜在风险,这里一并兜掉。
+    //
+    // 用 `dangerouslyUseHTMLString` 就必须自己转义 —— 字段值来自后端,
+    // 直接插 HTML 等于把接口数据当模板执行。escapeHtml 覆盖 & < > " ' 五个字符。
     handleViewDetail(row) {
-      this.$alert(JSON.stringify(row, null, 2), '订单详情', {
-        confirmButtonText: '确定'
+      const esc = s => String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+      const pre = '<pre style="max-height:60vh;overflow:auto;margin:0;' +
+                  'white-space:pre-wrap;word-break:break-all;font-size:12px;' +
+                  'line-height:1.5;text-align:left">' +
+                  esc(JSON.stringify(row, null, 2)) + '</pre>'
+      this.$alert(pre, '订单详情', {
+        confirmButtonText: '确定',
+        dangerouslyUseHTMLString: true,
+        customClass: 'qa-detail-alert'
+      }).catch(() => {
+        // $alert 在点 X / Esc 关闭时会 reject('cancel'),不接就产生一条未捕获的
+        // unhandledrejection console 错误(点「确定」不会)。回验代理用旧代码
+        // 复现过 —— 这是改动前就存在的,顺手补上。@yutiansut @quantaxis
       })
     }
   }
@@ -552,8 +718,8 @@ $warning-color: #faad14;
 
     .el-table__body-wrapper {
       &::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
+        width: var(--qa-sbw, 8px);
+        height: var(--qa-sbw, 8px);
       }
 
       &::-webkit-scrollbar-track {

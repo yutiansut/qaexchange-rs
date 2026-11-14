@@ -48,6 +48,158 @@ pub struct AccountManager {
 
     /// 用户管理器（用于验证用户和自动绑定）
     user_manager: Option<Arc<UserManager>>,
+
+    /// 快照落盘互斥:同一时刻只允许一次 `save_snapshots`。@yutiansut @quantaxis
+    ///
+    /// 2026-11-08 06:39 停机实测:60 秒周期快照(spawn_blocking)还没写完,停机最终快照就开始了,
+    /// 两次落盘写**同一批** `<account>.json.tmp` → 一方 rename 走了另一方的 tmp →
+    /// 「Rename snapshot failed: No such file」,最终快照整批中止。更危险的是另一种交错:
+    /// **先开始的旧快照后完成**,用旧状态覆盖刚写好的新快照。串行化后,最终快照会等
+    /// 在途的周期快照写完,再写出最新状态。
+    save_lock: parking_lot::Mutex<()>,
+}
+
+/// 执行出金并**核对确实扣款成功** @yutiansut @quantaxis
+///
+/// qars 的 `QA_Account::withdraw`(qars2 account.rs:541)用的是**严格大于**:
+/// ```ignore
+/// if self.money > amount { self.money -= amount; ... } else { warn!("余额不足") }
+/// ```
+/// 而且**没有返回值**。本仓库三个调用点的前置校验都是 `if money < amount { 拒绝 }`,
+/// 允许相等通过。于是「出金金额 == 全部可用资金」时:
+///   校验放行 → `withdraw()` 空转 → 上层照常返回「成功」并写一条
+///   `status: completed` 的资金流水,**余额一分不少**。
+///
+/// 实测(2026-09-04):balance 1444.0 出金 1444.0 → HTTP 200「转账成功」,
+/// 事后余额仍是 1444.0;`/api/management/withdraw` 更是记下
+/// `balance_before=1444, balance_after=1444, status=completed`。
+/// 三个入口(银期转账 / 用户出金 / 管理端出金)同时中招,
+/// 正因为 `withdraw()` 没有任何返回值可判 —— 这是「无返回值的失败」的典型代价。
+///
+/// 根治要改 qars 的 `>` → `>=`(共享库,需另行决策)。本函数在那之后依然正确:
+/// 届时全额出金会真正成功,余额核对自然通过。
+pub fn withdraw_checked(acc: &mut QA_Account, amount: f64) -> Result<(), ExchangeError> {
+    let before = acc.money;
+    acc.withdraw(amount);
+    let expected = before - amount;
+    if (acc.money - expected).abs() > 1e-6 {
+        return Err(ExchangeError::InsufficientBalance(format!(
+            "出金未生效: 请求 {:.4},余额 {:.4} → {:.4}(应为 {:.4})。\
+             qars withdraw 要求 money > amount(严格大于),全额出金被静默忽略。",
+            amount, before, acc.money, expected
+        )));
+    }
+    Ok(())
+}
+
+/// 把 qars 的 QIFI 投影修正为**符合 QIFI 规范**的形式 @yutiansut @quantaxis
+///
+/// qars 的 `get_qifi_slice`(qars2 account.rs:417)直接输出原始字段
+/// `self.accounts.static_balance`,而 `deposit()`/`withdraw()`(:536-548)
+/// **只更新 `money` 和 `accounts.deposit`,从不更新 `accounts.static_balance`**。
+/// 于是任何发生过出入金的账户,发出去的 QIFI 里:
+///   · `balance` 是对的(`get_balance()` 内部算了 `+ deposit - withdraw`)
+///   · `static_balance` 却停在 init_cash
+/// 两者不再满足规范的恒等式,下游按
+/// `balance = static_balance + close_profit + position_profit - commission + premium`
+/// 反推就会错一个净入金额。
+///
+/// 实测(2026-09-04):`pre_balance=10000, deposit=-3900, withdraw=0,
+/// static_balance=10000, balance=6100` —— 规范要求 static_balance = 6100。
+/// 守恒校验里 4 个账户的偏差恰好等于各自的净入出金。
+///
+/// ⚠️ qars 内部对这两个量的语义与规范不同:`settle()`(:574-596)把
+/// `pre_balance` 设为含浮动盈亏的结算余额、`static_balance` 设为不含浮动盈亏的量,
+/// 二者**故意**不等(account.rs:68 的注释)。本函数按**规范**输出,
+/// 只影响对外投影,不改 qars 内部状态。当前系统尚未跑过结算
+/// (`/api/admin/settlement/history` 为空),两者相等,修正无歧义;
+/// 若将来启用日终结算,需要重新确认这里该取哪个语义。
+fn conform_qifi_static_balance(qifi: &mut crate::QIFI) {
+    conform_qifi_account(&mut qifi.accounts);
+}
+
+/// `conform_qifi_static_balance` 的账户部分 —— DIFF `trade.<account>.accounts.CNY` 投影也用它,
+/// 保证 DIFF 与 HTTP QIFI 两条只读投影口径一致。⚠️ 同样**只能用于只读投影**。@yutiansut @quantaxis
+pub(crate) fn conform_qifi_account(accounts: &mut qars::qaprotocol::qifi::account::Account) {
+    // ⚠️⚠️ 只能用于**只读投影**(HTTP 响应)。**绝不可用在任何会被持久化的路径上**。
+    //      @yutiansut @quantaxis
+    //
+    // 事故复盘(2026-09-05):本函数原先也被 `save_snapshots` 调用,造成一个闭合的污染回路 ——
+    //   qars 内部 `static_balance` 的语义是「初始资金」:`account.rs:145` 构造时设为
+    //   `init_cash` 后**永不更新**(`deposit()` 只动 `money` 与 `accounts.deposit`),
+    //   所以 qars 的 `get_balance()`(:525)**必须**再加一次 `deposit - withdraw` 才对。
+    //   本函数把对外投影改成 QIFI 语义(含 deposit)→ 被 save_snapshots 写进
+    //   `snapshots/*.json` → 重启时 `restore_account_from_qifi` → `new_from_qifi`
+    //   (qars :224)把它读回 qars 内部 → `get_balance()` 又加一次 deposit。
+    //   实测后果:59 个账户里 9 个中招,虚增权益 ¥1,994,454,806(占全所 balance 9.76%),
+    //   风险率同步被低估(MM_ALPHA_BID 显示 0.76% 而非 1.14%)。
+    //   不累积(每次快照都重写成同一个值),但一次污染即长期存在。
+    //
+    // 这里同时校正 `balance`:只改 `static_balance` 会让响应自相矛盾 ——
+    // 律1(`static = pre + deposit - withdraw`)成立而律2
+    // (`balance = static + close_profit + position_profit - commission + premium`)不成立。
+    // 校正后两条同时成立,且与 QIFI 规范样本 55550081 的算法一致。
+    //
+    // 注:qars 的 `get_balance()` 用 `float_profit`(对开仓价)且不含 `premium`,
+    // 规范用 `position_profit`(对持仓价)且含 `premium`。当前系统两者相等、premium 恒 0,
+    // 所以此处改动不产生数值差异;将来启用日终结算后会分叉,届时以本函数为准。
+    accounts.static_balance =
+        accounts.pre_balance + accounts.deposit - accounts.withdraw;
+    // 与 `AccountExt::qifi_balance()` 同一公式(那里从 QA_Account 直接算,
+    // 这里从已投影的 QIFI 字段算,两条路径必须一致)。@yutiansut @quantaxis
+    accounts.balance = accounts.static_balance
+        + accounts.close_profit
+        + accounts.position_profit
+        - accounts.commission
+        + accounts.premium;
+
+    // ⚠️ `risk_ratio` 必须跟着 `balance` 一起重算,否则同一份响应自相矛盾。
+    //    @yutiansut @quantaxis
+    //
+    // qars 的 `get_riskratio()` 用的是它**内部**的 balance;上面刚把 balance 换成
+    // 规范口径,不同步 risk_ratio 就会出现 `risk_ratio != margin / balance`。
+    // 实测(受污染的 9 个账户):MM_ALPHA_BID 报 0.00750,而 margin/修正balance
+    // = 0.01136 —— **风险被低估 34%**;fe_verify 低估 50%。低估是危险方向。
+    //
+    // 非有限值一律落到 0.0(与 `AccountExt::safe_risk_ratio` 同语义:
+    // balance<=0 意味着没有可用权益作分母,此处不臆造风险度)。
+    accounts.risk_ratio = if accounts.balance > 0.0 {
+        let r = accounts.margin / accounts.balance;
+        if r.is_finite() { r } else { 0.0 }
+    } else {
+        0.0
+    };
+
+    // ⚠️ 归一化负零 —— `-0.0` 会原样序列化进 JSON,前端渲染出 "+-0.00"。
+    //    @yutiansut @quantaxis
+    //
+    // 「冻结 +X / 成交 -X」精确抵消后会留下 `-0.0`(不是残差,是真的等于 0,
+    // 只是带了符号位)。实测线上:frozen_margin 50/59 个账户、
+    // position_profit 与 float_profit 各 31 个账户是 `-0.0`。
+    // 危害在前端:JS 里 `-0 >= 0` 为 **true**,于是
+    // `admin/risk.vue:123` 的 `{{ v >= 0 ? '+' : '' }}{{ v.toLocaleString(...) }}`
+    // 先输出 `+` 再输出 `-0.00` ⇒ 渲染成 **"+-0.00"**。
+    // (`toFixed` 不带符号,`toLocaleString` 带 —— 仓内两种格式化都在用。)
+    //
+    // `x == 0.0` 对 +0.0 与 -0.0 都为真,所以这是纯恒等归一,不改变任何数值。
+    let z = |x: f64| if x == 0.0 { 0.0 } else { x };
+    let a = &mut *accounts;
+    a.balance = z(a.balance);
+    a.available = z(a.available);
+    a.margin = z(a.margin);
+    a.frozen_margin = z(a.frozen_margin);
+    a.frozen_commission = z(a.frozen_commission);
+    a.frozen_premium = z(a.frozen_premium);
+    a.position_profit = z(a.position_profit);
+    a.float_profit = z(a.float_profit);
+    a.close_profit = z(a.close_profit);
+    a.commission = z(a.commission);
+    a.premium = z(a.premium);
+    a.static_balance = z(a.static_balance);
+    a.pre_balance = z(a.pre_balance);
+    a.deposit = z(a.deposit);
+    a.withdraw = z(a.withdraw);
+    a.risk_ratio = z(a.risk_ratio);
 }
 
 impl AccountManager {
@@ -58,6 +210,7 @@ impl AccountManager {
             user_accounts: DashMap::new(),
             notification_broker: None,
             user_manager: None,
+            save_lock: parking_lot::Mutex::new(()),
         }
     }
 
@@ -69,6 +222,7 @@ impl AccountManager {
             user_accounts: DashMap::new(),
             notification_broker: Some(broker),
             user_manager: None,
+            save_lock: parking_lot::Mutex::new(()),
         }
     }
 
@@ -98,6 +252,24 @@ impl AccountManager {
     /// - `Ok(account_id)`: 成功创建的账户ID
     /// - `Err(...)`: 创建失败的错误信息
     pub fn open_account(&self, req: OpenAccountRequest) -> Result<String, ExchangeError> {
+        // ✨ 安全:限制字符串字段长度。account_name 会进每 60s 的快照,未鉴权开户传巨名(如 100MB)
+        //    可导致快照膨胀 → 磁盘/内存 DoS。256/128 字节远超合法用途(中文名 20 字 ≈ 60 字节)。@yutiansut @quantaxis
+        const MAX_NAME_LEN: usize = 256;
+        const MAX_ID_LEN: usize = 128;
+        if req.account_name.len() > MAX_NAME_LEN {
+            return Err(ExchangeError::AccountError(format!(
+                "account_name 过长: {} 字节(上限 {})",
+                req.account_name.len(),
+                MAX_NAME_LEN
+            )));
+        }
+        if req.user_id.len() > MAX_ID_LEN {
+            return Err(ExchangeError::AccountError(format!(
+                "user_id 过长: {} 字节(上限 {})",
+                req.user_id.len(),
+                MAX_ID_LEN
+            )));
+        }
         // 验证用户是否存在（如果设置了UserManager）
         if let Some(user_mgr) = &self.user_manager {
             user_mgr.get_user(&req.user_id)?;
@@ -212,7 +384,7 @@ impl AccountManager {
         // 调 remove 会死锁。
         {
             let account = self.accounts.get(account_id).ok_or_else(|| {
-                ExchangeError::AccountError(format!("Account not found: {}", account_id))
+                ExchangeError::NotFound(format!("Account not found: {}", account_id))
             })?;
             let acc = account.read();
 
@@ -249,7 +421,7 @@ impl AccountManager {
             log::info!("Account closed: {}", account_id);
             Ok(())
         } else {
-            Err(ExchangeError::AccountError(format!(
+            Err(ExchangeError::NotFound(format!(
                 "Account not found: {}",
                 account_id
             )))
@@ -262,7 +434,7 @@ impl AccountManager {
             .get(account_id)
             .map(|r| r.value().clone())
             .ok_or_else(|| {
-                ExchangeError::AccountError(format!("Account not found: {}", account_id))
+                ExchangeError::NotFound(format!("Account not found: {}", account_id))
             })
     }
 
@@ -356,7 +528,9 @@ impl AccountManager {
     ) -> Result<(), ExchangeError> {
         // 1. ✨ 先检查账户是否在accounts中存在（支持WAL恢复后metadata缺失的情况）
         if !self.accounts.contains_key(account_id) {
-            return Err(ExchangeError::AccountError(format!(
+            // 第四处「账户不存在」—— 先前收敛时我的 grep 只匹配单行 format!,
+            // 漏了这个多行形式。@yutiansut @quantaxis
+            return Err(ExchangeError::NotFound(format!(
                 "Account not found: {}",
                 account_id
             )));
@@ -464,7 +638,10 @@ impl AccountManager {
     pub fn get_qifi_slice(&self, account_id: &str) -> Result<crate::QIFI, ExchangeError> {
         let account = self.get_account(account_id)?;
         let mut acc = account.write();
-        Ok(acc.get_qifi_slice())
+        let mut qifi = acc.get_qifi_slice();
+        drop(acc);
+        conform_qifi_static_balance(&mut qifi);
+        Ok(qifi)
     }
 
     /// 获取 MOM 资金切片（轻量级实时资金快照）
@@ -526,37 +703,141 @@ impl AccountManager {
     // ========== 方案A: QIFI快照保存与恢复 ==========
 
     /// 保存所有账户快照到QIFI文件
+    /// 两份 QIFI JSON 是否**除 `updatetime` 外完全相同**。@yutiansut @quantaxis
+    ///
+    /// 用于 `save_snapshots` 跳过无变化的快照。`updatetime` 是快照生成时刻,
+    /// 每轮必变,不代表账户状态 —— 实测几十 MB 的快照跨轮 diff **只有它变**。
+    ///
+    /// 实现上不做完整 JSON 解析(88 MB 解析代价太高),而是按行比对:
+    /// `to_string_pretty` 产出的是每字段一行,`updatetime` 恰好独占一行。
+    /// 行数不同 ⇒ 直接判不等;只有该行不同 ⇒ 判等。
+    fn qifi_json_eq_ignoring_updatetime(prev: &str, cur: &str) -> bool {
+        let mut a = prev.lines();
+        let mut b = cur.lines();
+        loop {
+            match (a.next(), b.next()) {
+                (None, None) => return true,
+                (Some(x), Some(y)) => {
+                    if x != y {
+                        // 只容忍 updatetime 那一行不同
+                        let is_ut = |l: &str| l.trim_start().starts_with("\"updatetime\":");
+                        if !(is_ut(x) && is_ut(y)) {
+                            return false;
+                        }
+                    }
+                }
+                _ => return false, // 行数不同
+            }
+        }
+    }
+
     pub fn save_snapshots(&self, snapshot_dir: &str) -> Result<usize, ExchangeError> {
+        // 串行化:见 `save_lock` 字段注释(周期快照与停机最终快照并发写同一批 tmp)
+        let _save_guard = self.save_lock.lock();
         std::fs::create_dir_all(snapshot_dir)
             .map_err(|e| ExchangeError::IOError(format!("Create snapshot dir failed: {}", e)))?;
 
         let mut saved_count = 0;
+        let mut skipped_count = 0usize;
 
         for entry in self.accounts.iter() {
             let account_id = entry.key();
+            // ✨ 安全:account_id 在下方(:738)被 format! 拼进快照文件名,绝不能含路径分隔符或 `..`。
+            //    否则未鉴权 POST /api/account/open 传 account_id="../../../tmp/x" 会穿越写出快照目录
+            //    (任意文件写)。含不安全字符的账户**跳过落盘 + 告警**,不影响其他账户的快照。
+            //    这是防御纵深:开户侧也应做字符白名单,但这一层保证「快照文件名恒安全」。@yutiansut @quantaxis
+            if account_id.is_empty()
+                || account_id.contains('/')
+                || account_id.contains("..")
+            {
+                log::error!(
+                    "快照跳过: account_id {:?} 含不安全路径字符(潜在穿越攻击), 不落盘",
+                    account_id
+                );
+                continue;
+            }
             let account = entry.value();
 
             // 获取QIFI快照
             let mut acc = account.write();
             let qifi = acc.get_qifi_slice();
+            drop(acc);
+            // ⚠️ 这里**故意不调用** `conform_qifi_static_balance` —— 快照必须原样保留
+            //    qars 的内部语义(`static_balance` = 初始资金),否则重启读回后
+            //    `get_balance()` 会重复计入 deposit。详见该函数上的事故复盘。
+            //    @yutiansut @quantaxis
 
             // 序列化为JSON
             let json = serde_json::to_string_pretty(&qifi).map_err(|e| {
                 ExchangeError::SerializationError(format!("QIFI serialization failed: {}", e))
             })?;
 
-            // 写入文件（使用账户ID作为文件名）
+            // 写入文件（使用账户ID作为文件名）—— **原子写** @yutiansut @quantaxis
+            //
+            // ⚠️ 原实现是 `std::fs::write(&file_path, json)`,**非原子**:
+            //    先截断再写,写到一半被杀就留下截断文件。
+            //    实测事故(2026-09-05 04:13):做市账户 MM_ALPHA_BID 的快照有
+            //    **131,626,368 字节**(QIFI 把 171,983 条订单全部内嵌),
+            //    每 60 秒重写一次,写入窗口很长;一次 SIGKILL 正好打在中途,
+            //    文件只剩 **1,220 字节**。叠加下面 `restore_from_snapshots`
+            //    「一个坏文件中止全部恢复」的缺陷,导致 59 个账户全部丢状态、
+            //    **172,035 条订单与 59,209 笔成交消失**。
+            //
+            //    改为 temp + rename:同目录下先写 `.tmp`,fsync 后 rename 覆盖。
+            //    同文件系统内的 rename 是原子的 —— 崩溃时要么是完整的旧文件,
+            //    要么是完整的新文件,不会出现半截。
             let file_path = format!("{}/{}.json", snapshot_dir, account_id);
-            std::fs::write(&file_path, json)
-                .map_err(|e| ExchangeError::IOError(format!("Write snapshot failed: {}", e)))?;
+            let tmp_path = format!("{}/{}.json.tmp", snapshot_dir, account_id);
+
+            // ✨ 内容没变就不写盘。@yutiansut @quantaxis
+            //
+            // 实测(2026-09-06 生产):快照总量 **304 MB**、每 60 秒全量重写
+            // ⇒ **428 GB/天**。而 82 个账户里 **75 个合计只有 248 KB**(中位 1 KB),
+            // 最大 7 个占 99.9%(单个最大 **88.1 MB**)。
+            //
+            // 更关键的是:把这几个大文件跨轮 diff,**唯一变化的字段是 `updatetime`**
+            // (三个样本 88.1M / 37.4M / 35.9M 全都只有这一个字段变)——
+            // 订单、成交、持仓、资金一动没动,却把几十 MB 重写一遍。
+            //
+            // ⚠️ 为什么用**内容比对**而不是脏标记:脏标记要在每个改账户的路径上打点,
+            // **漏标一处就丢状态**,而丢状态比多写严重得多。内容比对拿最终字节说话,
+            // 零漏标风险 —— 代价是仍要序列化一次(那部分本来就要做)。
+            //
+            // ⚠️ `updatetime` 会导致比对恒不相等,所以**比对时把它剔除**:
+            // 它是快照生成时刻,不代表账户状态。若账户真有变化,
+            // orders/trades/positions/accounts 任一字段必然跟着变。
+            let prev_matches = match std::fs::read_to_string(&file_path) {
+                Ok(prev) => Self::qifi_json_eq_ignoring_updatetime(&prev, &json),
+                Err(_) => false, // 文件不存在/读不了 ⇒ 必须写
+            };
+            if prev_matches {
+                skipped_count += 1;
+                continue;
+            }
+            {
+                use std::io::Write;
+                let mut f = std::fs::File::create(&tmp_path).map_err(|e| {
+                    ExchangeError::IOError(format!("Create snapshot tmp failed: {}", e))
+                })?;
+                f.write_all(json.as_bytes()).map_err(|e| {
+                    ExchangeError::IOError(format!("Write snapshot tmp failed: {}", e))
+                })?;
+                // fsync:确保数据落盘后再 rename,否则崩溃后 rename 可能先于数据可见
+                f.sync_all().map_err(|e| {
+                    ExchangeError::IOError(format!("Sync snapshot tmp failed: {}", e))
+                })?;
+            }
+            std::fs::rename(&tmp_path, &file_path)
+                .map_err(|e| ExchangeError::IOError(format!("Rename snapshot failed: {}", e)))?;
 
             saved_count += 1;
         }
 
         log::info!(
-            "Saved {} account snapshots to {}",
+            "Saved {} account snapshots to {} ({} unchanged, skipped)",
             saved_count,
-            snapshot_dir
+            snapshot_dir,
+            skipped_count
         );
         Ok(saved_count)
     }
@@ -574,6 +855,8 @@ impl AccountManager {
         }
 
         let mut restored_count = 0;
+        // 损坏/无法解析的快照清单 —— 不中止恢复,末尾统一告警 @yutiansut @quantaxis
+        let mut corrupted_files: Vec<String> = Vec::new();
 
         for entry in std::fs::read_dir(snapshot_path)
             .map_err(|e| ExchangeError::IOError(format!("Read snapshot dir failed: {}", e)))?
@@ -587,9 +870,30 @@ impl AccountManager {
                 continue;
             }
 
-            // 读取QIFI文件
-            let json = std::fs::read_to_string(&path)
-                .map_err(|e| ExchangeError::IOError(format!("Read snapshot file failed: {}", e)))?;
+            // ⚠️ **单个坏文件不得中止整批恢复** @yutiansut @quantaxis
+            //
+            // 原实现对读取失败和反序列化失败都用 `?` 向外传播,于是
+            // **一个损坏的快照 = 全部账户都恢复不了**。
+            // 实测事故(2026-09-05 04:13):MM_ALPHA_BID 的 131 MB 快照因
+            // 非原子写 + SIGKILL 被截断成 1,220 字节,本函数直接整体返回 Err,
+            // 58 个完好快照一个都没恢复;随后 WAL 兜底按 `init_cash` 重建账户,
+            // **172,035 条订单与 59,209 笔成交丢失**。
+            //
+            // 快照之间是**互相独立**的(一个文件一个账户),坏一个只应损失一个。
+            // 改为:记录坏文件、计数、继续处理下一个;函数末尾汇总告警。
+            // 这样即使发生损坏,也只丢那一个账户,其余全部正常恢复,
+            // 且运维能从告警里看到到底坏了哪些。
+            let json = match std::fs::read_to_string(&path) {
+                Ok(j) => j,
+                Err(e) => {
+                    log::error!(
+                        "⚠️ 快照文件读取失败,**跳过该账户继续恢复其余**: {:?}, error: {}",
+                        path, e
+                    );
+                    corrupted_files.push(format!("{:?} (read: {})", path.file_name(), e));
+                    continue;
+                }
+            };
 
             // 容错处理：将 JSON 中的 null 替换为 0.0（兼容旧版快照）
             // 这是临时解决方案，防止因为旧快照中的 null 值导致启动失败
@@ -597,18 +901,19 @@ impl AccountManager {
                 .replace(": null,", ": 0.0,")
                 .replace(": null\n", ": 0.0\n");
 
-            let qifi: QIFI = serde_json::from_str(&sanitized_json).map_err(|e| {
-                log::error!(
-                    "Failed to deserialize snapshot file: {:?}, error: {}",
-                    path,
-                    e
-                );
-                ExchangeError::SerializationError(format!(
-                    "QIFI deserialization failed for {:?}: {}",
-                    path.file_name(),
-                    e
-                ))
-            })?;
+            let qifi: QIFI = match serde_json::from_str(&sanitized_json) {
+                Ok(q) => q,
+                Err(e) => {
+                    log::error!(
+                        "⚠️ 快照反序列化失败,**跳过该账户继续恢复其余**: {:?} ({} 字节), error: {}",
+                        path,
+                        sanitized_json.len(),
+                        e
+                    );
+                    corrupted_files.push(format!("{:?} ({} bytes: {})", path.file_name(), sanitized_json.len(), e));
+                    continue;
+                }
+            };
 
             // 恢复账户
             match self.restore_account_from_qifi(qifi) {
@@ -632,6 +937,29 @@ impl AccountManager {
             restored_count,
             snapshot_dir
         );
+        if !corrupted_files.is_empty() {
+            // ⚠️ 措辞按 2026-09-06 实测改准:原文说「可能丢失」,实测是**必然丢失**。
+            //
+            // 零快照仅 WAL 启动(生产 289MB 账户 WAL + 2.5MB 用户 WAL)实测:
+            //   用户 36 ✅  账户 82 ✅  —— 账户和资金回得来
+            //   总保证金 10.23 亿 → **0**;前 20 账户持仓 9 → **0**、订单 116 → **0**
+            // 根因:`recovery.rs::apply_record` 对 `OrderInsert`/`TradeExecuted` 写着
+            // 「暂不处理(仅用于审计)」,对 `PositionSnapshot` 写着「由
+            // `UnifiedRecoveryManager` 处理」—— 而那个模块(1372 行、4 个测试)
+            // **生产零调用**(lib.rs:207 已记录)。数据在 WAL 里,只是没人读。
+            //
+            // 这比「整个账户丢失」更难发现:账户在、余额正常,只是持仓空了。
+            // 所以这条告警必须明确到「需要人工对账补回持仓」。@yutiansut @quantaxis
+            log::error!(
+                "⚠️⚠️ 有 {} 个快照文件损坏、已跳过。这些账户会退回 WAL 恢复,\
+                 但 WAL 恢复**只还原账户与资金,不还原持仓/委托/成交** \
+                 (实测:保证金归零、持仓归零、订单归零,而余额正常)—— \
+                 账实将不符且不易察觉,**需人工从上游对账补回持仓**。损坏清单: {:?}",
+                corrupted_files.len(),
+                corrupted_files
+            );
+        }
+
         Ok(restored_count)
     }
 
@@ -656,6 +984,10 @@ impl AccountManager {
         // @yutiansut @quantaxis
         let mut account = QA_Account::new_from_qifi(qifi);
         account.environment = "sim".to_string(); // 重置为 sim 模式
+        // 按合约覆盖的费率 / 保证金写回持仓副本(恢复时副本按 qars 预设重建)@yutiansut @quantaxis
+        crate::core::account_ext::apply_preset_overrides_all(&mut account);
+        // 持仓均价按成本校正(旧快照里 qars 平仓公式漂移出来的值、以及 NaN 落盘成 null 再被换成 0 的值)
+        crate::core::account_ext::conform_position_prices_all(&mut account);
 
         // ✨ 从待处理订单重建 frozen HashMap @yutiansut @quantaxis
         // WAL 只存储 frozen 的总金额，不存储每个订单的 frozen 详情
@@ -827,8 +1159,23 @@ impl AccountManager {
         acc.accounts.deposit = deposit;
         acc.accounts.withdraw = withdraw;
 
-        // 重新计算 static_balance
-        acc.accounts.static_balance = acc.accounts.pre_balance + deposit - withdraw;
+        // ⚠️ **不要**在这里重算 static_balance。@yutiansut @quantaxis
+        //
+        // 原代码是 `acc.accounts.static_balance = pre_balance + deposit - withdraw;`
+        // —— 那是 **QIFI 规范**的语义,但 qars 内部用的是**另一套**:
+        // `account.rs:145` 构造时把 static_balance 设为 `init_cash` 后**永不更新**
+        // (`deposit()` 只动 `money` 与 `accounts.deposit`),因此它的 `get_balance()`
+        // (`account.rs:525`)**必须**自己再加一次 `deposit - withdraw`。
+        // 把规范语义写进 qars 内部 ⇒ `get_balance()` 重复计入 deposit,凭空造权益。
+        // (同一错误在 `save_snapshots` 上造成过 ¥1,994,454,806 的虚增,见
+        //  `conform_qifi_static_balance` 上的事故复盘。)
+        // `open_account` 已经把 static_balance 正确置为 init_cash,这里保持不动。
+
+        // ✨ 恢复现金余额 —— qars 的 `available` 取的是 `self.money`
+        // (`account.rs:425: available: self.money`),而不是 `accounts.available`。
+        // 上面那行 `acc.accounts.available = available` 对输出**毫无作用**;
+        // 不同步 `money` 会让恢复出来的账户可用资金停在 init_cash,少掉净入金。
+        acc.money = available;
 
         log::debug!(
             "Updated balance for account {} during recovery: balance={}, available={}, deposit={}, withdraw={}",
@@ -854,7 +1201,7 @@ impl AccountManager {
         created_at: i64,
     ) -> Result<(), ExchangeError> {
         let mut metadata = self.metadata.get_mut(account_id).ok_or_else(|| {
-            ExchangeError::AccountError(format!("Account not found: {}", account_id))
+            ExchangeError::NotFound(format!("Account not found: {}", account_id))
         })?;
 
         metadata.account_type = account_type;
@@ -971,6 +1318,47 @@ mod tests {
 
         let account = mgr.get_account(&account_id);
         assert!(account.is_ok());
+    }
+
+    /// 安全回归:恶意 account_id 不得穿越写出快照目录。@yutiansut @quantaxis
+    #[test]
+    fn test_snapshot_rejects_path_traversal_account_id() {
+        let mgr = AccountManager::new();
+        // open_account 允许自定义 account_id(见 test_open_account),含穿越字符
+        let req = OpenAccountRequest {
+            user_id: "u".to_string(),
+            account_id: Some("../qaex_traversal_probe".to_string()),
+            account_name: "x".to_string(),
+            init_cash: 0.0,
+            account_type: AccountType::Individual,
+        };
+        assert!(mgr.open_account(req).is_ok());
+
+        let base = std::env::temp_dir().join(format!("qaex_trav_{}", std::process::id()));
+        let snap_dir = base.join("snapshots");
+        std::fs::create_dir_all(&snap_dir).unwrap();
+        let _ = mgr.save_snapshots(snap_dir.to_str().unwrap());
+
+        // 穿越目标 = snap_dir 的上一级(../qaex_traversal_probe.json)
+        let traversal_target = base.join("qaex_traversal_probe.json");
+        let created = traversal_target.exists();
+        let _ = std::fs::remove_file(&traversal_target);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(!created, "路径穿越: 恶意 account_id 写出了快照目录外的文件!");
+    }
+
+    /// 安全回归:超长 account_name 应被拒绝(防快照膨胀 DoS)。@yutiansut @quantaxis
+    #[test]
+    fn test_open_account_rejects_oversized_name() {
+        let mgr = AccountManager::new();
+        let req = OpenAccountRequest {
+            user_id: "u".to_string(),
+            account_id: Some("acc_bigname".to_string()),
+            account_name: "x".repeat(300), // > 256 字节
+            init_cash: 0.0,
+            account_type: AccountType::Individual,
+        };
+        assert!(mgr.open_account(req).is_err(), "超长 account_name 应被拒绝");
     }
 
     #[test]
@@ -1090,13 +1478,13 @@ mod tests {
         assert!(result.is_err(), "Nonexistent account should fail");
 
         match result {
-            Err(ExchangeError::AccountError(msg)) => {
+            Err(ExchangeError::NotFound(msg)) => {
                 assert!(
                     msg.contains("not found"),
                     "Error message should indicate account not found"
                 );
             }
-            _ => panic!("Expected AccountError for nonexistent account"),
+            _ => panic!("Expected NotFound for nonexistent account"),
         }
     }
 
@@ -1177,11 +1565,13 @@ mod tests {
         let result = mgr.close_account("non_existent_account");
         assert!(result.is_err());
 
+        // 「账户不存在」已从 AccountError 收敛到 NotFound(该变体映射 HTTP 404)。
+        // 见 lib.rs 的 NotFound 注释。@yutiansut @quantaxis
         match result {
-            Err(ExchangeError::AccountError(msg)) => {
+            Err(ExchangeError::NotFound(msg)) => {
                 assert!(msg.contains("not found"));
             }
-            _ => panic!("Expected AccountError"),
+            _ => panic!("Expected NotFound"),
         }
     }
 
@@ -1738,5 +2128,83 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_skip_tests {
+    //! `qifi_json_eq_ignoring_updatetime` 的闸门。@yutiansut @quantaxis
+    //!
+    //! 这个判据决定**要不要写盘**,判错的方向不对称:
+    //!   判等而实际不等 ⇒ **丢状态**(灾难)
+    //!   判不等而实际相等 ⇒ 多写一次(仅浪费)
+    //! 所以测试重点在「任何实质变化都必须判不等」,宁可多写。
+
+    use super::AccountManager;
+
+    fn snap(updatetime: &str, balance: &str, orders: &str) -> String {
+        format!(
+            "{{\n  \"account_cookie\": \"ACC_X\",\n  \"updatetime\": \"{}\",\n  \"accounts\": {{\n    \"balance\": {}\n  }},\n  \"orders\": {}\n}}",
+            updatetime, balance, orders
+        )
+    }
+
+    #[test]
+    fn only_updatetime_differs_is_equal() {
+        // 这正是生产实测的形态:几十 MB 的快照跨轮 diff 只有 updatetime 变
+        let a = snap("2026-09-06 04:07:42", "1000.0", "{}");
+        let b = snap("2026-09-06 04:08:42", "1000.0", "{}");
+        assert!(
+            AccountManager::qifi_json_eq_ignoring_updatetime(&a, &b),
+            "只有 updatetime 不同应判等"
+        );
+    }
+
+    #[test]
+    fn identical_is_equal() {
+        let a = snap("t1", "1000.0", "{}");
+        assert!(AccountManager::qifi_json_eq_ignoring_updatetime(&a, &a));
+    }
+
+    #[test]
+    fn any_substantive_change_is_not_equal() {
+        let base = snap("t1", "1000.0", "{}");
+
+        // 余额变
+        assert!(
+            !AccountManager::qifi_json_eq_ignoring_updatetime(&base, &snap("t1", "1001.0", "{}")),
+            "余额变化必须判不等"
+        );
+        // 余额变 + updatetime 也变(真实场景:有成交时两者同时变)
+        assert!(
+            !AccountManager::qifi_json_eq_ignoring_updatetime(&base, &snap("t2", "1001.0", "{}")),
+            "余额与时间同时变必须判不等"
+        );
+        // 订单从无到有
+        assert!(
+            !AccountManager::qifi_json_eq_ignoring_updatetime(
+                &base,
+                &snap("t1", "1000.0", "{\"O1\": 1}")
+            ),
+            "新增订单必须判不等"
+        );
+    }
+
+    #[test]
+    fn line_count_change_is_not_equal() {
+        // 行数不同 ⇒ 必判不等(哪怕前缀完全相同)
+        let a = "{\n  \"a\": 1\n}";
+        let b = "{\n  \"a\": 1,\n  \"b\": 2\n}";
+        assert!(!AccountManager::qifi_json_eq_ignoring_updatetime(a, b));
+        assert!(!AccountManager::qifi_json_eq_ignoring_updatetime(b, a));
+    }
+
+    #[test]
+    fn updatetime_line_must_be_recognized_on_both_sides() {
+        // 一侧是 updatetime、另一侧是别的字段 ⇒ 必须判不等,
+        // 否则「字段被替换成 updatetime」这种畸形会被放过
+        let a = "{\n  \"updatetime\": \"t1\"\n}";
+        let b = "{\n  \"balance\": 1.0\n}";
+        assert!(!AccountManager::qifi_json_eq_ignoring_updatetime(a, b));
     }
 }

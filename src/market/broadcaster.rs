@@ -64,6 +64,11 @@ pub enum MarketDataEvent {
         bids: Vec<PriceLevel>,
         asks: Vec<PriceLevel>,
         timestamp: i64,
+        /// ✨ 实时行情快照附带的当日统计(累计量/额、昨收、涨跌停…)@yutiansut @quantaxis
+        /// 由 `broadcast_quote_snapshot` 填;旧的 `broadcast_orderbook_snapshot` 为 None。
+        /// DIFF 据此输出 CTP DepthMarketData 式的完整 quote(见 `QuoteStats`)。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stats: Option<crate::market::QuoteStats>,
     },
 
     /// 订单簿增量更新
@@ -658,9 +663,26 @@ impl MarketDataBroadcaster {
             bids,
             asks,
             timestamp: chrono::Utc::now().timestamp_millis(),
+            stats: None,
         };
 
         self.broadcast(event);
+    }
+
+    /// 广播**完整行情快照**:盘口 + 当日统计,时间戳沿用快照自带的(同合约严格递增)。
+    /// 见 `MarketDataService::quote_snapshot`。@yutiansut @quantaxis
+    pub fn broadcast_quote_snapshot(
+        &self,
+        snapshot: crate::market::OrderBookSnapshot,
+        stats: crate::market::QuoteStats,
+    ) {
+        self.broadcast(MarketDataEvent::OrderBookSnapshot {
+            instrument_id: snapshot.instrument_id,
+            bids: snapshot.bids,
+            asks: snapshot.asks,
+            timestamp: snapshot.timestamp,
+            stats: Some(stats),
+        });
     }
 
     /// 广播订单簿增量更新

@@ -174,7 +174,7 @@ impl InstrumentRegistry {
                 log::info!("Updated instrument: {}", instrument_id);
                 Ok(())
             }
-            None => Err(ExchangeError::InstrumentError(format!(
+            None => Err(ExchangeError::NotFound(format!(
                 "Instrument {} not found",
                 instrument_id
             ))),
@@ -620,11 +620,13 @@ mod tests {
         });
 
         assert!(result.is_err());
+        // 「不存在」已从 InstrumentError 收敛到 NotFound —— 该变体要映射 HTTP 404。
+        // 见 lib.rs 的 NotFound 注释。@yutiansut @quantaxis
         match result {
-            Err(ExchangeError::InstrumentError(msg)) => {
+            Err(ExchangeError::NotFound(msg)) => {
                 assert!(msg.contains("not found"));
             }
-            _ => panic!("Expected InstrumentError"),
+            _ => panic!("Expected NotFound"),
         }
     }
 

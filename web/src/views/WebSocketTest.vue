@@ -5,25 +5,30 @@
       <el-header height="auto" class="header">
         <el-card>
           <el-row :gutter="20">
-            <el-col :span="4">
+            <!-- ⚠️ 这一排原来是裸 `:span="4"/"5"`,**全站 15 个用 el-col 的页面里只有本页没做断点**
+               (79 个 el-col 中 21 个无 `:xs`,全在这个文件)。
+               375 视口实测:`el-tag「CONNECTED」`宽 91.5px 落在 31.5px 的槽里,溢出 60px,
+               横压在「账户余额 ¥0.00」上重叠 40×32px;「账户余额」被压成「账户余/额」竖排。
+               断点档位照抄本项目已有写法(monitoring/index.vue)。@yutiansut @quantaxis -->
+          <el-col :xs="24" :sm="12" :md="8" :span="4">
               <div class="status-item">
                 <div class="label">连接状态</div>
                 <el-tag :type="stateTagType" size="large">{{ connectionState }}</el-tag>
               </div>
             </el-col>
-            <el-col :span="5">
+            <el-col :xs="24" :sm="12" :md="8" :span="5">
               <div class="status-item">
                 <div class="label">账户余额</div>
                 <div class="value">¥ {{ formatNumber(accountBalance) }}</div>
               </div>
             </el-col>
-            <el-col :span="5">
+            <el-col :xs="24" :sm="12" :md="8" :span="5">
               <div class="status-item">
                 <div class="label">可用资金</div>
                 <div class="value">¥ {{ formatNumber(accountAvailable) }}</div>
               </div>
             </el-col>
-            <el-col :span="5">
+            <el-col :xs="24" :sm="12" :md="8" :span="5">
               <div class="status-item">
                 <div class="label">浮动盈亏</div>
                 <div class="value" :class="profitClass">
@@ -31,7 +36,7 @@
                 </div>
               </div>
             </el-col>
-            <el-col :span="5">
+            <el-col :xs="24" :sm="12" :md="8" :span="5">
               <div class="status-item">
                 <div class="label">风险率</div>
                 <el-progress
@@ -45,7 +50,7 @@
           </el-row>
 
           <el-row :gutter="20" style="margin-top: 15px">
-            <el-col :span="24">
+            <el-col :span="24" :xs="24">
               <div class="ws-btn-row">
                 <el-button
                   v-if="!isConnected"
@@ -122,13 +127,13 @@
 
             <div v-if="currentQuote" class="quote-detail">
               <el-row :gutter="20">
-                <el-col :span="12">
+                <el-col :span="12" :xs="24">
                   <div class="quote-item">
                     <div class="label">合约</div>
                     <div class="value">{{ currentQuote.instrument_id }}</div>
                   </div>
                 </el-col>
-                <el-col :span="12">
+                <el-col :span="12" :xs="24">
                   <div class="quote-item">
                     <div class="label">时间</div>
                     <div class="value small">{{ formatDateTime(currentQuote.datetime) }}</div>
@@ -153,24 +158,24 @@
               <!-- 买卖五档 -->
               <div class="depth-panel">
                 <el-row class="depth-header">
-                  <el-col :span="8"><div class="header-label">卖盘</div></el-col>
-                  <el-col :span="8"><div class="header-label">价格</div></el-col>
-                  <el-col :span="8"><div class="header-label">买盘</div></el-col>
+                  <el-col :span="8" :xs="24"><div class="header-label">卖盘</div></el-col>
+                  <el-col :span="8" :xs="24"><div class="header-label">价格</div></el-col>
+                  <el-col :span="8" :xs="24"><div class="header-label">买盘</div></el-col>
                 </el-row>
 
                 <!-- 卖五到卖一（倒序显示） -->
                 <el-row v-for="i in 5" :key="'ask' + i" class="depth-row">
-                  <el-col :span="8">
+                  <el-col :span="8" :xs="24">
                     <div class="depth-volume ask-side">
                       {{ formatVolume(currentQuote['ask_volume' + (6 - i)]) }}
                     </div>
                   </el-col>
-                  <el-col :span="8">
+                  <el-col :span="8" :xs="24">
                     <div class="depth-price ask">
                       {{ formatNumber(currentQuote['ask_price' + (6 - i)]) }}
                     </div>
                   </el-col>
-                  <el-col :span="8">
+                  <el-col :span="8" :xs="24">
                     <div class="depth-volume bid-side">-</div>
                   </el-col>
                 </el-row>
@@ -180,15 +185,15 @@
 
                 <!-- 买一到买五 -->
                 <el-row v-for="i in 5" :key="'bid' + i" class="depth-row">
-                  <el-col :span="8">
+                  <el-col :span="8" :xs="24">
                     <div class="depth-volume ask-side">-</div>
                   </el-col>
-                  <el-col :span="8">
+                  <el-col :span="8" :xs="24">
                     <div class="depth-price bid">
                       {{ formatNumber(currentQuote['bid_price' + i]) }}
                     </div>
                   </el-col>
-                  <el-col :span="8">
+                  <el-col :span="8" :xs="24">
                     <div class="depth-volume bid-side">
                       {{ formatVolume(currentQuote['bid_volume' + i]) }}
                     </div>
@@ -197,25 +202,25 @@
               </div>
 
               <el-row :gutter="20" class="price-grid" style="margin-top: 15px">
-                <el-col :span="12">
+                <el-col :span="12" :xs="24">
                   <div class="quote-item">
                     <div class="label">涨停价</div>
                     <div class="value">{{ formatNumber(currentQuote.upper_limit) }}</div>
                   </div>
                 </el-col>
-                <el-col :span="12">
+                <el-col :span="12" :xs="24">
                   <div class="quote-item">
                     <div class="label">跌停价</div>
                     <div class="value">{{ formatNumber(currentQuote.lower_limit) }}</div>
                   </div>
                 </el-col>
-                <el-col :span="12">
+                <el-col :span="12" :xs="24">
                   <div class="quote-item">
                     <div class="label">成交量</div>
                     <div class="value">{{ currentQuote.volume }}</div>
                   </div>
                 </el-col>
-                <el-col :span="12">
+                <el-col :span="12" :xs="24">
                   <div class="quote-item">
                     <div class="label">持仓量</div>
                     <div class="value">{{ currentQuote.open_interest }}</div>
@@ -482,6 +487,11 @@
 <script>
 import { mapGetters, mapActions } from 'vuex'
 import KLineChart from '@/components/KLineChart.vue'
+// ✨ 原代码用 `this.$axios` —— 全仓仅此一处,且从未挂到 Vue.prototype
+//    (main.js 只挂了 $echarts / $dayjs / $emptyText),每次进本页都抛
+//    `Cannot read properties of undefined (reading 'get')`。
+//    改用仓内现成的 getKlineData(api/index.js:826)。@yutiansut @quantaxis
+import { getKlineData } from '@/api'
 
 export default {
   name: 'WebSocketTest',
@@ -576,7 +586,7 @@ export default {
 
     riskRatio() {
       if (!this.account) return 0
-      return Math.min(100, (this.account.risk_ratio || 0) * 100)
+      return Math.min(100, (Number(this.account.risk_ratio) || 0) * 100)
     },
 
     profitClass() {
@@ -836,11 +846,8 @@ export default {
     },
 
     formatNumber(value) {
-      if (value === undefined || value === null) return '-'
-      return Number(value).toLocaleString('zh-CN', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      })
+      // 统一到全局 `$money`:与全站同一判据、同一 `--` 文案。@yutiansut @quantaxis
+      return this.$money(value)
     },
 
     formatVolume(value) {
@@ -924,18 +931,17 @@ export default {
       try {
         // 调用后端 K线 API @yutiansut @quantaxis
         // 使用相对路径，通过 vue.config.js 代理访问
-        const response = await this.$axios.get(
-          `/api/market/kline/${this.selectedInstrument}`,
-          {
-            params: {
+        // ⚠️ 少一层 `.data`:`getKlineData` 走 api/request.js 的拦截器,而 K线接口用的是
+        //    `{code,message,data}` 而非全站的 `{success,data,error}` 信封,拦截器不拆包,
+        //    调用方拿到的就是整个对象(api/index.js:822 已注明)。原代码用的是 axios 响应
+        //    (body 在 `.data` 里),照搬会多取一层。@yutiansut @quantaxis
+        const response = await getKlineData(this.selectedInstrument, {
               period: this.klinePeriod,
               count: 500
-            }
-          }
-        )
+        })
 
-        if (response.data.code === 0 && response.data.data) {
-          this.klineDataList = response.data.data.klines
+        if (response && response.code === 0 && response.data) {
+          this.klineDataList = response.data.klines
           console.log('[WebSocketTest] Loaded', this.klineDataList.length, 'K-line bars')
         } else {
           console.warn('[WebSocketTest] Empty K-line data, using mock data')

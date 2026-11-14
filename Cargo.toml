@@ -199,6 +199,24 @@ inherits = "release"
 debug = true
 strip = false
 
+# ✨ 行为验证专用 —— 只为"起个实例测接口对不对",不为性能。@yutiansut @quantaxis
+#
+# 背景:`release` 是 `lto="fat"` + `codegen-units=1`,全量链接约 **15 分钟**。
+# 本会话为验证改动构建了约 10 次 ≈ 2.5 小时纯等待,而这些验证
+# **完全不关心性能**(测的是"接口返回什么"、"字段有没有"、"数据对不对")。
+#
+# 本 profile 关掉 LTO、放开并行代码生成,其余与 release 一致
+#(含 `panic = "abort"` 与不 strip,保证行为与符号可读性一致)。
+# ⚠️ **不要用它做性能测量或上生产** —— 那些必须用 `--release`。
+#
+# 用法: cargo build --profile verify
+#       ./target/verify/qaexchange-server --http 127.0.0.1:18094 …
+[profile.verify]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = false
+
 [profile.extreme]
 inherits = "release"
 opt-level = 3

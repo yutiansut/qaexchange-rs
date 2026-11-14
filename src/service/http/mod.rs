@@ -104,6 +104,16 @@ impl HttpServer {
                         .allow_any_origin()
                         .allow_any_method()
                         .allow_any_header()
+                        // ⚠️ 自定义响应头必须显式 expose,否则浏览器**不给 JS 读**
+                        //    @yutiansut @quantaxis
+                        //
+                        // CORS 默认只暴露 6 个 simple response headers
+                        // (Cache-Control / Content-Language / Content-Type /
+                        //  Expires / Last-Modified / Pragma)。
+                        // `X-Total-Count`(management.rs 按用户查流水时带的总数)
+                        // 不在其中 —— 不 expose 的话 axios/fetch 读到的是 undefined,
+                        // 而且**没有任何报错**,又是一个静默失效。
+                        .expose_headers(vec!["X-Total-Count"])
                         .max_age(3600),
                 )
                 // 配置路由
@@ -125,9 +135,50 @@ impl HttpServer {
 mod tests {
     use super::*;
 
+    // ✨ 原来这里是**空函数体**,注释写「完整的 HTTP 测试需要 actix 运行时」——
+    //    但构造 `HttpServer::new` 根本不需要运行时(它只组装 AppState,
+    //    起服务是 `start()` 的事),这个理由不成立。
+    //    空测试「通过但零覆盖」,比失败更坏:它在测试计数里占一格,
+    //    让人以为这条路径有覆盖。@yutiansut @quantaxis
     #[test]
     fn test_http_server_creation() {
-        // 基本的创建测试
-        // 完整的 HTTP 测试需要 actix 运行时
+        use crate::exchange::{InstrumentRegistry, TradeGateway};
+
+        let account_mgr = Arc::new(AccountManager::new());
+        let matching_engine = Arc::new(ExchangeMatchingEngine::new());
+        let instrument_registry = Arc::new(InstrumentRegistry::new());
+        // ⚠️ 必须给 wal_root —— 默认是 `"./data/wal"`(相对 CWD = 仓库根)
+        //    @yutiansut @quantaxis
+        //
+        // 这个测试是本会话新加的(替换原来的空函数体),我第一版忘了给,
+        // 于是每跑一次就在仓库里写 `data/wal/__ACCOUNT__/test_user/` 等真实文件。
+        // 同族写法见 `trade_gateway.rs:1995` 与 `order_router.rs:2801`。
+        let trade_gateway = Arc::new(
+            TradeGateway::new(account_mgr.clone())
+                .with_wal_root("./output/testexchange/wal_http_mod"),
+        );
+        let order_router = Arc::new(OrderRouter::new(
+            account_mgr.clone(),
+            matching_engine.clone(),
+            instrument_registry,
+            trade_gateway,
+        ));
+        let settlement_engine = Arc::new(SettlementEngine::new(account_mgr.clone()));
+        let user_mgr = Arc::new(UserManager::new());
+
+        let server = HttpServer::new(
+            order_router,
+            account_mgr,
+            user_mgr,
+            settlement_engine,
+            matching_engine,
+            "127.0.0.1:0".to_string(),
+        );
+
+        // 实质断言:AppState 已组装,且 main.rs 之外的可选组件确为 None
+        // (`mod.rs:60-61` 注释说明它们由 main.rs 完整初始化)
+        assert_eq!(server.bind_address, "127.0.0.1:0");
+        assert!(server.app_state.storage_stats.is_none());
+        assert!(server.app_state.conversion_mgr.is_none());
     }
 }

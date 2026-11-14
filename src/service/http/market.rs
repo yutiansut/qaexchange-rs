@@ -43,19 +43,9 @@ pub async fn get_orderbook(
             );
             Ok(HttpResponse::Ok().json(ApiResponse::success(snapshot)))
         }
-        Err(e) => {
-            log::error!(
-                "❌ [HTTP API] Failed to get orderbook for {}: {}",
-                instrument_id,
-                e
-            );
-            Ok(
-                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
-                    500,
-                    format!("Failed to get orderbook: {}", e),
-                )),
-            )
-        }
+        // 统一错误映射 —— 「合约不存在」应是 404 而非 500。
+        // 映射表与理由见 `models.rs::exchange_error_response`。@yutiansut @quantaxis
+        Err(e) => Ok(super::models::exchange_error_response("Failed to get orderbook", &e)),
     }
 }
 
@@ -65,15 +55,9 @@ pub async fn get_orderbook(
 pub async fn get_instruments(market_service: web::Data<MarketDataService>) -> Result<HttpResponse> {
     match market_service.get_instruments() {
         Ok(instruments) => Ok(HttpResponse::Ok().json(ApiResponse::success(instruments))),
-        Err(e) => {
-            log::error!("Failed to get instruments: {}", e);
-            Ok(
-                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
-                    500,
-                    format!("Failed to get instruments: {}", e),
-                )),
-            )
-        }
+        // 统一错误映射 —— 「合约不存在」应是 404 而非 500。
+        // 映射表与理由见 `models.rs::exchange_error_response`。@yutiansut @quantaxis
+        Err(e) => Ok(super::models::exchange_error_response("Failed to get instruments", &e)),
     }
 }
 
@@ -96,19 +80,9 @@ pub async fn get_tick(
             );
             Ok(HttpResponse::Ok().json(ApiResponse::success(tick)))
         }
-        Err(e) => {
-            log::error!(
-                "❌ [HTTP API] Failed to get tick for {}: {}",
-                instrument_id,
-                e
-            );
-            Ok(
-                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
-                    500,
-                    format!("Failed to get tick: {}", e),
-                )),
-            )
-        }
+        // 统一错误映射 —— 「合约不存在」应是 404 而非 500。
+        // 映射表与理由见 `models.rs::exchange_error_response`。@yutiansut @quantaxis
+        Err(e) => Ok(super::models::exchange_error_response("Failed to get tick", &e)),
     }
 }
 
@@ -132,15 +106,9 @@ pub async fn get_recent_trades(
 ) -> Result<HttpResponse> {
     match market_service.get_recent_trades(&instrument_id, query.limit) {
         Ok(trades) => Ok(HttpResponse::Ok().json(ApiResponse::success(trades))),
-        Err(e) => {
-            log::error!("Failed to get trades for {}: {}", instrument_id, e);
-            Ok(
-                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
-                    500,
-                    format!("Failed to get trades: {}", e),
-                )),
-            )
-        }
+        // 统一错误映射 —— 「合约不存在」应是 404 而非 500。
+        // 映射表与理由见 `models.rs::exchange_error_response`。@yutiansut @quantaxis
+        Err(e) => Ok(super::models::exchange_error_response("Failed to get trades", &e)),
     }
 }
 
@@ -152,14 +120,8 @@ pub async fn get_market_order_stats(
 ) -> Result<HttpResponse> {
     match market_service.get_market_order_stats() {
         Ok(stats) => Ok(HttpResponse::Ok().json(ApiResponse::success(stats))),
-        Err(e) => {
-            log::error!("Failed to get market order stats: {}", e);
-            Ok(
-                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
-                    500,
-                    format!("Failed to get stats: {}", e),
-                )),
-            )
-        }
+        // 统一错误映射 —— 「合约不存在」应是 404 而非 500。
+        // 映射表与理由见 `models.rs::exchange_error_response`。@yutiansut @quantaxis
+        Err(e) => Ok(super::models::exchange_error_response("Failed to get stats", &e)),
     }
 }

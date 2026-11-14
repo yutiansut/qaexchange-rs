@@ -85,9 +85,19 @@ fn generate_order(instrument_id: &str, order_id: u64, timestamp: i64) -> WalReco
 }
 
 /// 集成测试：完整存储链路
-#[test]
-#[ignore] // 标记为 ignore，需要手动运行：cargo test --test exchange_integration_test -- --ignored
-fn test_full_storage_pipeline() {
+// ✨ 必须用 `#[tokio::test]` 而非裸 `#[test]` @yutiansut @quantaxis
+//
+// 链路里 `storage/compaction/scheduler.rs:64` 调 `tokio::spawn`,裸 `#[test]` 下
+// 没有运行时,直接 panic:
+//   `there is no reactor running, must be called from the context of a Tokio 1.x runtime`
+// 这两个测试被标 `#[ignore]`(注释写「需要手动运行」),于是**从未有人手动跑过** ——
+// 一跑就发现它们根本跑不起来。同目录 `notification_integration_test.rs` 的
+// 7 个用例都用 `#[tokio::test]`,全部通过。
+//
+// ⚠️ 那条 panic 消息极具误导性:它指向 Tokio 运行时,但同一条消息在别处
+//    (actix 的 HttpServer 绑定失败)真正的原因是**端口被占**。见 tasks/lessons.md L74。
+#[tokio::test]
+async fn test_full_storage_pipeline() {
     env_logger::builder()
         .filter_level(log::LevelFilter::Info)
         .is_test(true)
@@ -328,9 +338,9 @@ fn test_full_storage_pipeline() {
 }
 
 /// 集成测试：OLTP → OLAP 转换
-#[test]
-#[ignore] // 标记为 ignore，需要手动运行
-fn test_oltp_to_olap_conversion() {
+// 同上:需要 Tokio 运行时。@yutiansut @quantaxis
+#[tokio::test]
+async fn test_oltp_to_olap_conversion() {
     env_logger::builder()
         .filter_level(log::LevelFilter::Info)
         .is_test(true)
@@ -415,21 +425,46 @@ fn test_oltp_to_olap_conversion() {
     log::info!("\n[Phase 3] 手动触发转换...");
 
     // 收集所有 OLTP SSTable
+    // ⚠️ 修正两个错误的假设 @yutiansut @quantaxis
+    //
+    // 原来扫的是 `<base>/<inst>/oltp/*.rkyv`,而实际落盘是
+    // `<base>/<inst>/sstables/*.sst`(实测目录树:
+    //   rb2501/{wal,checkpoints,sstables/0000000001.sst,olap})。
+    // 目录名和扩展名**都不对** ⇒ `sstables` 恒为空 ⇒ 下面的
+    // `if !sstables.is_empty()` 整块被跳过 ⇒ **转换从未被触发**,
+    // 测试直接落到最后的 assert 失败。
+    //
+    // 这个测试原本标着 `#[ignore]`「需要手动运行」,所以从没人跑过,
+    // 这两个错误也就一直没暴露。
     let instrument_path = base_path.join(instrument);
-    let oltp_dir = instrument_path.join("oltp");
+    let oltp_dir = instrument_path.join("sstables");
     let mut sstables = Vec::new();
 
     if oltp_dir.exists() {
         for entry in std::fs::read_dir(&oltp_dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.extension().map(|e| e == "rkyv").unwrap_or(false) {
+            if path.extension().map(|e| e == "sst").unwrap_or(false) {
                 sstables.push(path);
             }
         }
     }
 
     log::info!("  发现 {} 个 OLTP SSTable", sstables.len());
+
+    // 诊断:打印真实目录树,确认扫描路径/扩展名的假设是否成立 @yutiansut @quantaxis
+    fn dump(dir: &std::path::Path, depth: usize) {
+        if depth > 3 { return; }
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                log::info!("  [tree]{}{}", "  ".repeat(depth), p.display());
+                if p.is_dir() { dump(&p, depth + 1); }
+            }
+        }
+    }
+    log::info!("  [tree] base_path = {}", base_path.display());
+    dump(&base_path, 0);
 
     if !sstables.is_empty() {
         conversion_manager

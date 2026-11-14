@@ -3,6 +3,9 @@
     class="layout"
     :class="{
       'has-announcement': showAnnouncementBar && currentAnnouncement,
+      // 与 has-announcement 同一模式:加类 → 该类下改 CSS 变量 → 布局预算自动传播。
+      // 不这样做,用 var(--qa-content-h) 的页面会算错高度。@yutiansut @quantaxis
+      'has-wsbar': !isConnected,
       'is-mobile': isMobile,
       'sidebar-collapsed': isCollapsed,
       'drawer-open': mobileDrawerOpen
@@ -215,10 +218,14 @@
           <div class="page-title">{{ pageTitle }}</div>
         </div>
         <div class="header-right">
-          <!-- 系统状态指示 -->
+          <!-- 系统状态指示
+               ⚠️ 原先是**写死的**绿点 + 「系统正常」四个字。实测所有 /api/**
+               返回 500 的 26 秒里它一直是绿色「正常」—— 而后端
+               `/api/monitoring/status` 明明返回了 status 字段,前端从不读。
+               @yutiansut @quantaxis -->
           <div class="status-indicator">
-            <span class="status-dot online"></span>
-            <span class="status-text">系统正常</span>
+            <span class="status-dot" :class="backendHealthy ? 'online' : 'offline'"></span>
+            <span class="status-text" :style="{ color: backendHealthy ? '#52c41a' : '#f85149' }">{{ backendHealthy ? '系统正常' : '连接异常' }}</span>
           </div>
 
           <!-- 用户信息 -->
@@ -252,6 +259,19 @@
         </div>
       </div>
 
+      <!-- ✨ 实时连接中断提示 @yutiansut @quantaxis
+           为什么需要:**用户数据页**(positions/orders/trades/my-accounts)零轮询,
+           数据全靠 WS 推送(监控页与管理页另有 10s 轮询,不在此列);
+           而主交易页(positions/orders/trades/my-accounts/admin*)此前**不显示连接状态**
+           —— 只有 factors/chart/WebSocketTest 三页显示。于是 WS 一断,
+           页面就永久停在陈旧数据且毫无提示。放在 .content-wrapper **外面**做兄弟节点,
+           且 v-if 为假时 DOM 里没有该元素 —— 正常状态零布局影响。 -->
+      <div v-if="!isConnected" class="ws-offline-bar">
+        <i class="el-icon-warning-outline"></i>
+        <span>实时连接已断开，页面数据可能不是最新。正在自动重连…</span>
+        <el-button type="text" size="mini" @click="$router.go(0)">刷新页面</el-button>
+      </div>
+
       <!-- 内容区域 -->
       <div class="content-wrapper">
         <transition name="fade" mode="out-in">
@@ -265,12 +285,14 @@
 <script>
 // @yutiansut @quantaxis - 专业量化交易系统布局
 import { mapGetters } from 'vuex'
-import { queryAnnouncements } from '@/api'
+import { queryAnnouncements, getSystemStatus } from '@/api'
 
 export default {
   name: 'Layout',
   data() {
     return {
+      // 后端可达性 —— 由 checkBackendHealth() 定期刷新,不再写死
+      backendHealthy: true,
       isCollapsed: false,
       isMobile: false,
       // ✨ 记住用户在宽屏下的折叠意愿, 从窄屏放大回来时按它恢复 @yutiansut @quantaxis
@@ -287,6 +309,13 @@ export default {
   },
   computed: {
     ...mapGetters(['currentUser', 'userInfo', 'isAdmin']),
+    // ⚠️ `isConnected` 在 **websocket 命名空间**里(该模块 `namespaced: true`)。
+    // 我一度写成 root 的 `mapGetters([... 'isConnected'])` → 恒为 `undefined`
+    // → `!undefined === true` → 断线横幅**每一页常显**,且 `--qa-wsbar-h`
+    // 永久占掉 32px 预算,所有用 `var(--qa-content-h)` 的表格都少 32px。
+    // 仓里其余 10 处消费本模块的地方都写对了命名空间,只有这里漏了。
+    // @yutiansut @quantaxis
+    ...mapGetters('websocket', ['isConnected']),
     activeMenu() {
       return this.$route.path
     },
@@ -305,50 +334,29 @@ export default {
     // 公告优先级对应的样式类型
     announcementAlertType() {
       if (!this.currentAnnouncement) return 'info'
+      // 后端序列化为 SCREAMING_SNAKE_CASE @yutiansut @quantaxis
       const priorityMap = {
-        'Urgent': 'error',
-        'High': 'warning',
-        'Normal': 'info',
-        'Low': 'info'
+        URGENT: 'error',
+        HIGH: 'warning',
+        NORMAL: 'info',
+        LOW: 'info'
       }
-      return priorityMap[this.currentAnnouncement.priority] || 'info'
+      return priorityMap[String(this.currentAnnouncement.priority || '').toUpperCase()] || 'info'
     },
     pageTitle() {
-      const titles = {
-        '/dashboard': '系统总览',
-        '/trade': '交易面板',
-        '/chart': 'K线图表',
-        '/orders': '订单管理',
-        '/positions': '持仓管理',
-        '/trades': '成交记录',
-        // Phase 11: 高级交易功能 @yutiansut @quantaxis
-        '/transfer': '银期转账',
-        '/conditional-orders': '条件单',
-        '/batch-orders': '批量下单',
-        // 账户管理
-        '/accounts': '账户列表',
-        '/my-accounts': '我的账户',
-        '/account-curve': '资金曲线',
-        // Phase 12: 用户功能 @yutiansut @quantaxis
-        '/password': '密码管理',
-        '/commission': '手续费查询',
-        '/margin': '保证金查询',
-        // 市场监控
-        '/market-overview': '市场总览',
-        '/monitoring': '系统监控',
-        // 管理中心
-        '/admin-instruments': '合约管理',
-        '/admin-risk': '风控监控',
-        '/admin-settlement': '结算管理',
-        '/admin-accounts': '账户管理',
-        '/admin-transactions': '资金流水',
-        // Phase 13: 管理端功能 @yutiansut @quantaxis
-        '/admin-account-freeze': '账户状态管理',
-        '/admin-audit-logs': '审计日志',
-        '/admin-announcements': '系统公告',
-        '/announcements': '系统公告'  // ✨ 用户端公告页面 @yutiansut @quantaxis
-      }
-      return titles[this.$route.path] || '量化交易系统'
+      // ✨ 用 router 的 meta.title,不要硬编码 path map @yutiansut @quantaxis
+      //
+      // 原先是一张 36 行的 `path -> 标题` 字典 + `|| '量化交易系统'` 兜底,
+      // 漏了 3 条路由:`/account/:accountId`(动态段永远匹配不上)、
+      // `/factors`、`/websocket-test` —— 这三页顶栏都回落成「量化交易系统」。
+      // 而 router 里这三条**都已经有 meta.title**(账户详情 / 因子分析 /
+      // WebSocket 测试),`router/index.js:239` 设置 document.title 时早就在用它,
+      // 所以浏览器标签页是对的、顶栏是错的。
+      //
+      // 字典还与 meta 自相矛盾:`/dashboard` 字典写「系统总览」,
+      // 而 meta.title 是「监控仪表盘」—— 同一页在标签页和顶栏显示两个名字。
+      // 单一数据源即可消除这类分叉。
+      return this.$route.meta.title || '量化交易系统'
     }
   },
   mounted() {
@@ -358,8 +366,16 @@ export default {
     window.addEventListener('resize', this.onWindowResize)
     // ✨ 加载公告 @yutiansut @quantaxis
     this.loadAnnouncements()
+    // 每 15 秒探一次后端可达性
+    this.checkBackendHealth()
+    this.healthTimer = setInterval(this.checkBackendHealth, 15000)
   },
   beforeDestroy() {
+    // 清理健康检查定时器 —— 不清会在路由切换后持续打接口 @yutiansut @quantaxis
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer)
+      this.healthTimer = null
+    }
     window.removeEventListener('resize', this.onWindowResize)
     if (this.resizeRaf) {
       window.cancelAnimationFrame(this.resizeRaf)
@@ -371,6 +387,23 @@ export default {
     }
   },
   methods: {
+    // ✨ 真实健康检查 —— 指示灯不能是写死的字符串 @yutiansut @quantaxis
+    async checkBackendHealth() {
+      try {
+        const res = await getSystemStatus()
+        this.backendHealthy = true
+        // ✨ 顺手把 payload 存进 store,供 dashboard 复用 @yutiansut @quantaxis
+        //
+        // 此前这里**拿到完整响应却只留一个布尔然后丢弃**,
+        // 而 dashboard 又独立请求同一接口 —— 整页加载 2 次(实测相隔 1ms),
+        // 首页稳态 5 次/分钟(layout 4 + dashboard 1)。
+        // 存下来后 dashboard 不必自己再取。
+        this.$store.commit('SET_SYS_STATUS', (res && res.data) || res || null)
+      } catch (e) {
+        this.backendHealthy = false
+        this.$store.commit('SET_SYS_STATUS', null)
+      }
+    },
     handleMenuSelect(index) {
       this.$router.push(index)
       // ✨ 窄屏下选完菜单立刻收起抽屉, 否则遮罩挡住刚跳转的页面 @yutiansut @quantaxis
@@ -409,12 +442,29 @@ export default {
     },
     checkMobile() {
       const wasMobile = this.isMobile
-      this.isMobile = window.innerWidth < 768
+      // ⚠️ 必须与 CSS 断点**同为闭区间**。@yutiansut @quantaxis
+      //
+      // 原为 `< 768`(开区间),而 :1019 / :1097 的 CSS 是
+      // `@media (max-width: 768px)`(闭区间)。于是**恰好 768px 宽**时:
+      // CSS 已进入抽屉模式,把 .sidebar 移到 left=-220 完全移出屏幕;
+      // 而 JS 认为仍是桌面端,isMobile=false ⇒ :212 的 v-if="isMobile"
+      // 汉堡按钮不渲染,.sidebar-footer 又被 :1051 的 display:none 隐藏
+      // —— **整页没有任何控件能把导航调出来**。
+      // 实测(全新上下文,未 resize):768 宽可点导航项=0,769 宽=16,
+      // 767 宽点开汉堡后=21。768 是 iPad 竖屏宽度,不是边角情况。
+      this.isMobile = window.innerWidth <= 768
       if (this.isMobile) {
-        this.isCollapsed = true
         if (!wasMobile) {
           this.mobileDrawerOpen = false
         }
+        // ⚠️ 不能无条件 `isCollapsed = true`。@yutiansut @quantaxis
+        //
+        // toggleCollapse() 结尾会调 notifyLayoutChange(),后者在 **300ms 后**
+        // 广播一次合成 resize,回流到这里。原写法会把用户刚点开的抽屉菜单
+        // 重新折叠成 64px 图标条 —— 抽屉开着(220px),里面的 el-menu 却仍带
+        // `el-menu--collapse`,实测 26 个菜单项**0 个显示文字**,右侧空 156px。
+        // 与 toggleCollapse 保持同一套逻辑:抽屉开着就别折。
+        this.isCollapsed = !this.mobileDrawerOpen
       } else if (wasMobile) {
         // ✨ 原来这里没有 else 分支: 窗口一旦被缩窄过, isCollapsed 就永久为 true,
         //    再放大也不会恢复展开。实测(headless Chrome): 700px 宽时 sidebar 64px,
@@ -441,7 +491,38 @@ export default {
     notifyLayoutChange() {
       window.setTimeout(() => {
         window.dispatchEvent(new Event('resize'))
+        // ✨ 广播 resize 只够 ECharts 用,**修不了 el-table 的冻结列错位**。
+        // @yutiansut @quantaxis
+        //
+        // 实测(2026-09-05,1366×768 与 1440×900 复现,1920 不复现):
+        // 折叠侧栏 → 列变窄 → 带排序箭头的表头折行 → 真实表头高度 74px→51px,
+        // 而 `.el-table__fixed-right .el-table__fixed-body-wrapper` 的内联 `top`
+        // 仍是 74 —— **冻结列整体错开 23px**(行高 45px,约半行)。
+        // 6 秒后不恢复、滚动来回也不恢复,**永不自愈**。
+        //
+        // 后果不是「看着歪」而是**点错行**:在 admin-risk 上按屏幕坐标点击,
+        // 视觉落在第 2 行,弹窗打开的却是第 1 行的账户。而该列在
+        // `risk_ratio >= 0.9` 时还会渲染**强平**按钮(admin/risk.vue:149)
+        // —— 同样的错位意味着可能**强平错账户**。
+        //
+        // el-table 对 window resize 的响应只重算列宽,不重算冻结体的 top;
+        // 唯一可靠的是调它自己的 `doLayout()`。这里遍历组件树统一调一次,
+        // 覆盖全仓所有表格(改动前全仓 `doLayout()` 调用数为 0)。
+        this.relayoutTables()
       }, 300)
+    },
+
+    // 递归调用组件树里所有 el-table 的 doLayout()。@yutiansut @quantaxis
+    // 用「有没有 doLayout 方法」识别,而不是判组件名 —— 后者依赖 element-ui
+    // 的内部命名,前者是它的公开 API,更稳。
+    relayoutTables(vm) {
+      const node = vm || this.$root
+      if (!node) return
+      if (typeof node.doLayout === 'function') {
+        try { node.doLayout() } catch (e) { /* 组件可能正在销毁 */ }
+      }
+      const kids = node.$children || []
+      for (let i = 0; i < kids.length; i++) this.relayoutTables(kids[i])
     },
     // ✨ 加载公告列表 @yutiansut @quantaxis
     async loadAnnouncements() {
@@ -455,10 +536,16 @@ export default {
           return now >= from && now <= until
         })
         // 按优先级排序：Urgent > High > Normal > Low
-        const priorityOrder = { 'Urgent': 0, 'High': 1, 'Normal': 2, 'Low': 3 }
-        this.announcements.sort((a, b) =>
-          (priorityOrder[a.priority] || 3) - (priorityOrder[b.priority] || 3)
-        )
+        // ⚠️ 后端 AnnouncementPriority 带 #[serde(rename_all="SCREAMING_SNAKE_CASE")]
+        //    (models.rs:645-653),线上值是 URGENT/HIGH/NORMAL/LOW —— 首字母大写查不到。
+        //    另:原写法 `map[p] || 3` 对 Urgent(序号 0)同样落到 3(0 是 falsy),
+        //    所以就算大小写改对,紧急公告依然不会置顶。两个 bug 叠在一行。
+        //    @yutiansut @quantaxis
+        const rank = (p) => {
+          const v = { URGENT: 0, HIGH: 1, NORMAL: 2, LOW: 3 }[String(p || '').toUpperCase()]
+          return v === undefined ? 3 : v
+        }
+        this.announcements.sort((a, b) => rank(a.priority) - rank(b.priority))
         if (this.announcements.length > 0) {
           this.showAnnouncementBar = true
           this.startAnnouncementRotation()
@@ -525,13 +612,21 @@ $dark-text-secondary: #8b949e;
   --qa-announcement-h: 0px;
   --qa-sidebar-w: #{$sidebar-width};
   --qa-content-h: calc(
-    100vh - var(--qa-header-h) - var(--qa-announcement-h) - var(--qa-content-pad) * 2
+    100vh - var(--qa-header-h) - var(--qa-announcement-h) - var(--qa-wsbar-h) -
+      var(--qa-content-pad) * 2
   );
   --qa-content-w: calc(100vw - var(--qa-sidebar-w) - var(--qa-content-pad) * 2);
 
   // ✨ 公告条出现时预算再减 40px, 得到真实的 100vh - 136px @yutiansut @quantaxis
   &.has-announcement {
     --qa-announcement-h: #{$announcement-height};
+  }
+
+  // ✨ 断线提示条同理 —— 它和公告条可以同时出现,两者各自加自己那一份。
+  //    复用 --qa-announcement-h 会导致两条同时在时预算少减一份。@yutiansut @quantaxis
+  --qa-wsbar-h: 0px;
+  &.has-wsbar {
+    --qa-wsbar-h: 32px;
   }
 
   // 侧边栏折叠时可用宽度变宽。注意 .collapsed 在后代元素上, CSS 无法向上冒泡,
@@ -554,6 +649,15 @@ $dark-text-secondary: #8b949e;
 
 // ✨ 移动端顶栏菜单按钮 @yutiansut @quantaxis
 .mobile-menu-btn {
+  // ⚠️ 抽屉打开时 .sidebar(z-index:1000)会盖住这个按钮,但**单改本元素的
+  //    z-index 无效** —— 父级 `.top-header` 是 `position:sticky; z-index:100`,
+  //    自身形成层叠上下文,子元素再高也只能在其内部排序,整棵子树以 100
+  //    参与外层比较,输给 sidebar(1000) 甚至 overlay(999)。
+  //    实测:计算值确认 z-index:1002 已应用,但 elementsFromPoint 的完整栈仍是
+  //    sidebar → sidebar-overlay → mobile-menu-btn,Playwright 真实点击 4s 超时。
+  //    正解是抬**父级**:见下方 `.layout.drawer-open .top-header`。
+  //    @yutiansut @quantaxis
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -811,11 +915,19 @@ $dark-text-secondary: #8b949e;
       box-shadow: 0 0 8px rgba(82, 196, 26, 0.6);
       animation: pulse 2s infinite;
     }
+
+    // 后端不可达 —— 颜色必须与 online 有明显区别,否则指示灯等于没有
+    // @yutiansut @quantaxis
+    &.offline {
+      background: #f85149;
+      box-shadow: 0 0 8px rgba(248, 81, 73, 0.6);
+    }
   }
 
   .status-text {
     font-size: 13px;
-    color: #52c41a;
+    color: inherit;   // 由父级 .status-indicator 决定,见下
+    // 绿/红跟随 status-dot —— 原先写死绿色,连接异常时文字仍是绿的
     font-weight: 500;
   }
 }
@@ -877,6 +989,24 @@ $dark-text-secondary: #8b949e;
 }
 
 // 内容区域
+.ws-offline-bar {
+  height: 32px;           // 与 --qa-wsbar-h 同值,改一处必须改另一处
+  flex-shrink: 0;         // 不参与纵向压缩,高度恒定 —— 布局预算的依据
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px;
+  font-size: 12px;
+  color: #faad14;
+  background: rgba(250, 173, 20, 0.12);
+  border-bottom: 1px solid rgba(250, 173, 20, 0.3);
+
+  .el-button {
+    color: #faad14;
+    padding: 0;
+  }
+}
+
 .content-wrapper {
   flex: 1;
   min-height: 0;          // ✨ 关键：flex item 默认 min-height:auto 会撑破容器，
@@ -1017,9 +1147,28 @@ $dark-text-secondary: #8b949e;
     transform: translateX(0);
   }
 
+  // ✨ 抽屉打开时把顶栏抬到 sidebar(1000)之上,否则它里面的关闭按钮点不动。
+  //    必须抬**父级**:`.top-header` 的 `position:sticky; z-index:100` 已形成
+  //    层叠上下文,子元素的 z-index 只在其内部有效。@yutiansut @quantaxis
+  //    抬到 1001 = 高于 sidebar(1000),但仍低于任何弹窗遮罩(el-dialog 用 2000+)。
+  .layout.drawer-open .top-header {
+    z-index: 1001;
+  }
+
   // ✨ 内容区不再被侧边栏挤压, 拿回整整 64px
+  //
+  // ⚠️ 必须把 `.sidebar.collapsed ~ .main-container` 也列进来。@yutiansut @quantaxis
+  //    桌面端那条规则(:781)的选择器特异性是 (0,3,0),
+  //    而这里原本只写了 `.collapsed ~ .main-container`(0,2,0) —— **压不过它**,
+  //    media query 不提升特异性,所以这条 `margin-left: 0` 从未生效。
+  //    实测(≤768px,抽屉关闭的默认态):.main-container 仍有 margin-left:64px,
+  //    而 sidebar 已经 translate 到 [-220,0] 完全离屏 ——
+  //    那 64px 是纯背景,`elementFromPoint(32, h/2)` 命中 div.layout.is-mobile。
+  //    400px 屏损失 16% 宽度、600px 损失 10.7%;且开/关抽屉时 margin 在 64↔0 之间
+  //    切换,导致**整页横向跳动 64px**。
   .main-container,
-  .collapsed ~ .main-container {
+  .collapsed ~ .main-container,
+  .sidebar.collapsed ~ .main-container {
     margin-left: 0;
   }
 
@@ -1087,6 +1236,19 @@ $dark-text-secondary: #8b949e;
 
   .layout.sidebar-collapsed {
     --qa-sidebar-w: 0px;
+  }
+
+  // ⚠️ padding 必须与预算变量定在**同一个也是最后一个** 768 块里,
+  //    否则源码顺序会打架。@yutiansut @quantaxis
+  //
+  //    ≤768px 时三个 media query 全部命中、特异性相同 ⇒ **后写的赢**:
+  //      padding          : 先 12px 后 14px ⇒ 实际生效 **14px**
+  //      --qa-content-pad : 先 14px 后 12px ⇒ 预算取 **12px**
+  //    两者方向相反 ⇒ 预算比实际少算 2×(14-12) = **4px**,
+  //    实测 my-accounts / admin-settlement 在 768 宽残留 4px 死滚动条。
+  //    在这里(最后)把 padding 也定成 12px,两者即一致。
+  .content-wrapper {
+    padding: 12px;
   }
 }
 </style>

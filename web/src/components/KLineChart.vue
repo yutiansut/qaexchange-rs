@@ -775,7 +775,9 @@ export default {
      */
     resetFactorHistory() {
       Object.keys(this.factorHistory).forEach(key => {
-        this.factorHistory[key] = []
+        // Vue 2 新增属性需 $set —— 今天是命令式读取所以无害,
+        // 绑到模板/computed 上就会「数据在、界面不动」。@yutiansut @quantaxis
+        this.$set(this.factorHistory, key, [])
       })
     },
 

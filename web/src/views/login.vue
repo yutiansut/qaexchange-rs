@@ -115,8 +115,15 @@
                 <i class="el-icon-odometer"></i>
               </div>
               <div class="feature-text">
+                <!-- ⚠️ 原文是「P99 &lt; 100μs 订单处理」——**编造的具体数字**。
+                     后端对撮合延迟**零采集**(monitoring.rs 那个同名硬编码串
+                     已改成「未采集」),这个 100μs 没有任何测量支撑。
+                     同批还删掉了 register.vue 的「10,000+ 活跃用户 / 99.9% 可用性」
+                     (实际 34 个注册用户)。
+                     旁边两条是**定性**描述,不涉及无法核实的数字,保留。
+                     若将来要恢复量化展示,数据必须来自接口。@yutiansut @quantaxis -->
                 <h4>超低延迟</h4>
-                <p>P99 < 100μs 订单处理</p>
+                <p>Rust 撮合内核 · 无 GC 停顿</p>
               </div>
             </div>
 
@@ -169,11 +176,11 @@
               {{ announcement.announcement_type || '公告' }}
             </el-tag>
             <span class="announcement-date">
-              {{ formatDate(announcement.created_at) }}
+              {{ formatDate(announcement.publish_time) }}
             </span>
           </div>
           <h4 class="announcement-title">{{ announcement.title }}</h4>
-          <div class="announcement-content" v-html="announcement.content"></div>
+          <div class="announcement-content" v-html="safeHtml(announcement.content)"></div>
           <el-divider v-if="index < loginAnnouncements.length - 1"></el-divider>
         </div>
       </div>
@@ -188,8 +195,10 @@
 
 <script>
 // @yutiansut @quantaxis - 专业量化交易系统登录页面
+import { sanitizeHtml } from '@/utils/sanitize'
 import { mapActions } from 'vuex'
 import { queryAnnouncements } from '@/api'
+import { extractErrorMessage } from '@/api/request'
 
 export default {
   name: 'Login',
@@ -215,6 +224,13 @@ export default {
     }
   },
   methods: {
+    // ⚠️ 公告用 v-html 渲染,**必须净化** —— 回验代理实测原实现可执行
+    // `<img src=x onerror=…>`(存储型 XSS)。见 utils/sanitize.js 的说明。
+    // @yutiansut @quantaxis
+    safeHtml (html) {
+      return sanitizeHtml(html)
+    },
+
     ...mapActions(['login']),
 
     handleLogin() {
@@ -240,7 +256,7 @@ export default {
           // ✨ 登录成功后检查公告 @yutiansut @quantaxis
           await this.checkLoginAnnouncements()
         } catch (error) {
-          const errorMsg = (error.response && error.response.data && error.response.data.error) || error.message || '登录失败'
+          const errorMsg = extractErrorMessage(error, '登录失败')
           this.$message.error(errorMsg)
         } finally {
           this.loading = false
@@ -264,10 +280,16 @@ export default {
           return now >= from && now <= until
         })
         // 按优先级排序
-        const priorityOrder = { 'Urgent': 0, 'High': 1, 'Normal': 2, 'Low': 3 }
-        validAnnouncements.sort((a, b) =>
-          (priorityOrder[a.priority] || 3) - (priorityOrder[b.priority] || 3)
-        )
+        // ⚠️ 后端 AnnouncementPriority 带 #[serde(rename_all="SCREAMING_SNAKE_CASE")]
+        //    (models.rs:645-653),线上值是 URGENT/HIGH/NORMAL/LOW —— 首字母大写查不到。
+        //    另:原写法 `map[p] || 3` 对 Urgent(序号 0)同样落到 3(0 是 falsy),
+        //    所以就算大小写改对,紧急公告依然不会置顶。两个 bug 叠在一行。
+        //    @yutiansut @quantaxis
+        const rank = (p) => {
+          const v = { URGENT: 0, HIGH: 1, NORMAL: 2, LOW: 3 }[String(p || '').toUpperCase()]
+          return v === undefined ? 3 : v
+        }
+        validAnnouncements.sort((a, b) => rank(a.priority) - rank(b.priority))
 
         if (validAnnouncements.length > 0) {
           this.loginAnnouncements = validAnnouncements
@@ -296,7 +318,9 @@ export default {
     // ✨ 格式化日期 @yutiansut @quantaxis
     formatDate(timestamp) {
       if (!timestamp) return ''
-      const date = new Date(timestamp * 1000)
+      // 后端时间戳是**毫秒**(account_admin.rs:104 用 as_millis()),不要 ×1000
+      // @yutiansut @quantaxis
+      const date = new Date(timestamp)
       return date.toLocaleDateString('zh-CN', {
         year: 'numeric',
         month: '2-digit',
@@ -308,8 +332,9 @@ export default {
 
     // ✨ 获取公告优先级类型 @yutiansut @quantaxis
     getPriorityType(priority) {
-      const map = { 'Urgent': 'danger', 'High': 'warning', 'Normal': 'info', 'Low': '' }
-      return map[priority] || 'info'
+      const map = { URGENT: 'danger', HIGH: 'warning', NORMAL: 'info', LOW: '' }
+      const v = map[String(priority || '').toUpperCase()]
+      return v === undefined ? 'info' : v
     }
   }
 }

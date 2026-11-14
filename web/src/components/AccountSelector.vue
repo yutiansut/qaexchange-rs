@@ -40,7 +40,12 @@
       </div>
       <div class="detail-item">
         <span class="label">冻结资金：</span>
-        <span class="value">¥{{ formatNumber(currentAccount.balance - currentAccount.available) }}</span>
+        <!-- ⚠️ 减法**本身就是一个数值消费点**,不能直接喂给 formatNumber。@yutiansut @quantaxis
+             `null - null === 0`(显示成"冻结 0",与真的 0 无法区分),
+             `undefined - undefined === NaN`(显示 `¥NaN`)。
+             回验代理实测:去掉 store getter 的守卫后,这一行由 `¥0.00` 变成 `¥NaN`
+             —— 是我上一轮改动引入的回归。改为**两个操作数都在才相减**。 -->
+        <span class="value">¥{{ frozenText }}</span>
       </div>
       <div class="detail-item">
         <span class="label">保证金：</span>
@@ -49,7 +54,7 @@
       <div class="detail-item">
         <span class="label">风险度：</span>
         <span class="value" :class="getRiskClass(currentAccount.risk_ratio)">
-          {{ (currentAccount.risk_ratio * 100).toFixed(2) }}%
+          {{ ((Number(currentAccount.risk_ratio) || 0) * 100).toFixed(2) }}%
         </span>
       </div>
     </div>
@@ -69,6 +74,15 @@ export default {
   },
 
   computed: {
+    // 冻结资金 = 余额 - 可用。两个操作数**都在**才算,否则 `--`。@yutiansut @quantaxis
+    frozenText() {
+      const b = this.currentAccount && this.currentAccount.balance
+      const a = this.currentAccount && this.currentAccount.available
+      if (b === null || b === undefined || a === null || a === undefined) return '--'
+      const v = Number(b) - Number(a)
+      return Number.isFinite(v) ? this.formatNumber(v) : '--'
+    },
+
     ...mapState('websocket', {
       userAccounts: state => state.userAccounts
     }),
@@ -125,11 +139,22 @@ export default {
      * 格式化数字
      */
     formatNumber(value) {
-      if (value === undefined || value === null) return '0.00'
-      return Number(value).toLocaleString('zh-CN', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      })
+      // ⚠️ 取不到值时返回 `--`,**不是 `0.00`**。@yutiansut @quantaxis
+      //
+      // 本组件显示的是**余额 / 可用 / 保证金**(:18/:39/:43/:47),
+      // 挂在 trade/batch、trade/conditional、trade/transfer 三个下单页上。
+      // 字段缺失时显示 `¥0.00`,用户会以为**账户真的没钱**而不是"还没加载"——
+      // 在下单页上这个误读的代价很直接。
+      //
+      // 同仓 `WebSocketTest.vue:843` 与 `websocket/examples/vue-component.vue:270`
+      // 的同名函数返回的是 `-`,只有这里返回 `0.00` ——
+      // **三套 formatNumber 行为不一致**,这里对齐到「不编造」的那一档。
+      // 非有限值(NaN / ±Infinity)也归 `--` —— 回验代理实测 `balance = "N/A"` 时
+      // 下拉框会渲染 `¥NaN`。@yutiansut @quantaxis
+      //
+      // ✨ 现已委托全局 `$money`(main.js):同一判空判据,另加**量级上限 1e15**
+      //    (`Number.isFinite(1e300)` 为真,只判 isFinite 挡不住污染账户)。
+      return this.$money(value)
     },
 
     /**
@@ -192,6 +217,15 @@ $primary-color: #1890ff;
 
 .account-select {
   flex: 1;
+  // ⚠️ flex 子项的 `min-width` 默认是 `auto`,对原生 `<select>` 而言
+  //    min-content 宽度 = **最长 option 的宽度**,因此它**无法收缩**。
+  //    实测 400px 视口:本组件溢出内容盒 115px,而 `.content-wrapper` 的
+  //    `overflow-x` 是 hidden(layout/index.vue:928),溢出部分**永远滚不到** ——
+  //    transfer / conditional-orders / batch-orders / trade 等所有嵌入本组件的
+  //    页面都受影响,账户下拉框有一截够不着。
+  //    这与仓库早前为 `.main-container` 记录并修过的 `min-width:auto` 同根。
+  //    @yutiansut @quantaxis
+  min-width: 0;
   padding: 8px 12px;
   border: 1px solid $dark-border !important;
   border-radius: 4px;

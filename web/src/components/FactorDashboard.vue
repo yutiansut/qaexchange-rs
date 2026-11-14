@@ -192,6 +192,7 @@
         </el-button>
       </div>
       <el-table
+        :empty-text="isConnected ? '暂无因子数据' : 'WebSocket 未连接，因子数据无法接收'"
         :data="factorTableData"
         class="factor-table"
         stripe
@@ -263,6 +264,18 @@
 // @yutiansut @quantaxis - 因子分析仪表盘
 import { mapGetters } from 'vuex'
 
+// 稳定序列化:键排序后递归展开,保证「同一内容 → 同一字符串」。
+// 用它而不是 JSON.stringify:后者不保证键序(虽然 V8 实际稳定,但不是规范承诺),
+// 且对 undefined / 函数会静默丢键。@yutiansut @quantaxis
+function stableStr (v) {
+  if (v === null || typeof v !== 'object') return String(v)
+  if (Array.isArray(v)) return '[' + v.map(stableStr).join(',') + ']'
+  const ks = Object.keys(v).sort()
+  let out = '{'
+  for (const k of ks) out += k + ':' + stableStr(v[k]) + ','
+  return out + '}'
+}
+
 export default {
   name: 'FactorDashboard',
 
@@ -281,6 +294,40 @@ export default {
   },
 
   computed: {
+    // ⚠️ 用**原始值签名**驱动重绘,不要 watch 对象 @yutiansut @quantaxis
+    //
+    // Vue 2.7 `Watcher.run` 里 `isObject(value)` 让对象值 watcher **无条件触发**,
+    // 引用相不相等都不看;`deep: true` 更是每条消息都走一遍。
+    // 实测(dashboard 模式静置 20 秒、**因子键数 = 0**):
+    //   SET_SNAPSHOT 38 次 → updateCharts 34 次、updateHistory 34 次、
+    //   ECharts setOption 34 次、累计 137.9ms。
+    // 而且这是**下限** —— updateMa/Rsi/MacdChart 都有 `!activeInstrument` 早退,
+    // 此刻只有热力图在真画;一旦有真因子,就是 4 张图 × 每条消息。
+    //
+    // 我原本判断「有 selectedInstruments.length === 0 守卫,重复触发只是空转」——
+    // **错了**:那个守卫只包住「自动选前 3 个合约」,下面三行在守卫之外。
+    factorsSig () {
+      const f = this.factors || {}
+      const keys = Object.keys(f).sort()
+      let sig = ''
+      for (const k of keys) {
+        const v = f[k]
+        // ⚠️ 必须**递归**下钻,不能只拼一层 @yutiansut @quantaxis
+        //
+        // 后端 patch 形状是 `{period, timestamp, values:{ma5, rsi, ...}}`
+        // (`diff_handler.rs:1371-1377`)—— **因子值在第二层**。
+        // 我第一版注释写「因子值是数值 map」,对形状的判断就是错的:
+        // 只拼一层时 `'' + v.values` 得到恒定的 `"[object Object]"`,
+        // 于是签名只由 period/timestamp/合约键集驱动,**对因子值完全失明**。
+        //
+        // 回验实测:同一 timestamp 下把 ma5 从 10 改成 99 再改成 42,
+        // 签名一字不变、updateCharts 0 次、setOption 0 次。
+        // 它现在还能重绘,只因为后端每次都带新 timestamp —— **那是搭便车,不是设计**;
+        // 同一 timestamp 的二次推送/重放/多周期合并推送会被静默丢弃。
+        sig += k + '=' + stableStr(v) + ';'
+      }
+      return sig
+    },
     ...mapGetters('websocket', [
       'factors',
       'factor',
@@ -324,8 +371,10 @@ export default {
   },
 
   watch: {
-    factors: {
-      handler(newFactors) {
+    // 监听签名(原始字符串)而非 factors 对象 —— 理由见 computed 里的 factorsSig
+    factorsSig: {
+      handler() {
+        const newFactors = this.factors || {}
         // 自动选择前3个合约
         if (this.selectedInstruments.length === 0 && Object.keys(newFactors).length > 0) {
           this.selectedInstruments = Object.keys(newFactors).slice(0, 3)
@@ -333,11 +382,23 @@ export default {
             this.activeInstrument = this.selectedInstruments[0]
           }
         }
-        this.updateCharts()
-        this.lastUpdateTime = new Date().toLocaleTimeString()
+        // ⚠️ 顺序必须是**先追加历史,再画图** @yutiansut @quantaxis
+        //
+        // 原顺序是 `updateCharts(); lastUpdateTime; updateHistory()` —— 先画后追加,
+        // 于是 `updateCharts` 渲染的永远是**上一次**的 historyData,
+        // **最新一个因子值永远不在屏幕上**,要等下一次更新才补上。
+        //
+        // 回验三条独立证据:
+        //   ① 推 ma5=99 后 maLen 仍是 1;推 42 后才变 2
+        //   ② 签名里已是 ma5:14、histLen=2,而 ECharts series 仍是 [13]
+        //   ③ 抖动臂 30 次推送 → 历史 30、图 29(恒少一)
+        //
+        // 这个缺陷让 remount 修复也被钝化:图画出来了,但画的是 remount 之前的值;
+        // 日线级低频因子会长期停在上一根。
         this.updateHistory()
+        this.lastUpdateTime = new Date().toLocaleTimeString()
+        this.updateCharts()
       },
-      deep: true,
       immediate: true
     },
 
@@ -349,6 +410,19 @@ export default {
   mounted() {
     this.$nextTick(() => {
       this.initCharts()
+      // ⚠️ initCharts 之后必须补一次 updateCharts @yutiansut @quantaxis
+      //
+      // `watch.factorsSig` 是 `immediate: true`,它在 **initState 阶段**就跑了 ——
+      // **早于这里的 initCharts()**。那一次 `updateCharts()` 因为
+      // `!this.charts.ma` 全部早退,等于白跑;而 initCharts 用空数据建完图后
+      // 原本**不再补一次**,于是图表一直空着,直到下一次签名变化。
+      //
+      // 旧的 `factors: {deep:true}` 掩盖了这个洞:下一条 WS 消息(~0.5s)会
+      // 无条件重触发,肉眼看不出来。改成签名式 watch 后洞就露出来了 ——
+      // 回验实测:先喂 4 次因子(maSeries0Len=3),切走再切回 ⇒ maSeries0Len=0,
+      // 再推一次**同值**(签名不变)仍是 0,要等 timestamp 前进才恢复。
+      // 低频因子(如日线周期)会让图长时间空着。
+      this.updateCharts()
     })
 
     // 监听窗口大小变化
@@ -726,7 +800,11 @@ export default {
 
       Object.keys(this.factors).forEach(ins => {
         if (!this.historyData[ins]) {
-          this.historyData[ins] = []
+          // Vue 2 里给对象**新增属性**不会触发响应式,必须用 $set。
+          // 今天无害(updateCharts 是命令式读它、没走模板/computed),
+          // 但谁哪天把 historyData 绑到模板或 computed 上就会踩 ——
+          // 那时表现是「数据在、界面不动」,又一个静默失效。@yutiansut @quantaxis
+          this.$set(this.historyData, ins, [])
         }
 
         const values = this.factorValues(ins) || {}

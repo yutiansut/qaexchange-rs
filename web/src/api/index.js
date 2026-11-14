@@ -159,10 +159,33 @@ export function queryOrder(orderId) {
 /**
  * 查询用户订单
  */
-export function queryUserOrders(userId) {
+/**
+ * 查询用户订单
+ * ✨ 支持分页 —— 后端 handlers.rs:query_user_orders 已加 page/page_size,
+ *    **两个都不传时返回全量**(向后兼容)。 @yutiansut @quantaxis
+ *    不分页时单账户 5,951 单要 18.4 秒出表 / 905MB heap。
+ * ⚠️ **这个参数收的是 account_id,不是 user_id** @yutiansut @quantaxis
+ *
+ * 路由叫 `/order/user/{id}`、后端形参叫 `user_id`,但索引是用 **account_id** 建的:
+ *   `order_router.rs:926  self.user_orders.entry(req.account_id.clone())`
+ *   `order_router.rs:2709` 同上,注释还写着「注意:QIFI 的 user_id 实际上是 account_id」
+ *
+ * 而**同族的另外两个端点相反**,收的是真 user_id(UUID):
+ *   `/position/user/{uuid}`  `/trades/user/{uuid}`
+ *
+ * 调用方目前全都传对了(`orders/index.vue:346,398`、`trade/index.vue:432` 传 account_id;
+ * `positions:331`、`trades:220` 传 UUID),但**参数名骗人** —— 一次重构就会传错,
+ * 而传错的后果是 200 + 空表(见下面两个函数的说明),静默不可见。
+ * 形参改名为 `accountId` 以正视听;URL 段保持 `user` 不动(那是后端路由,改动面大)。
+ *
+ * @param {string} accountId  **账户ID**(不是 user_id)
+ * @param {{page?:number, page_size?:number}} [params]
+ */
+export function queryUserOrders(accountId, params) {
   return request({
-    url: `/order/user/${userId}`,
-    method: 'get'
+    url: `/order/user/${accountId}`,
+    method: 'get',
+    params: params || undefined
   })
 }
 
@@ -170,6 +193,9 @@ export function queryUserOrders(userId) {
 
 /**
  * 查询用户持仓（跨所有账户）
+ * ⚠️ 与 `queryUserOrders` 相反:**这个收的是真 user_id(UUID)**。
+ * 三个端点名字都叫 `/…/user/{id}`,但 order 那个按 account_id 索引 ——
+ * 见 `queryUserOrders` 的说明。@yutiansut @quantaxis
  */
 export function queryPosition(userId) {
   return request({
@@ -192,11 +218,28 @@ export function queryAccountPosition(accountId) {
 
 /**
  * 查询用户成交记录（跨所有账户）
+ * ⚠️ 与 `queryUserOrders` 相反:**这个收的是真 user_id(UUID)**。
+ * 三个端点名字都叫 `/…/user/{id}`,但 order 那个按 account_id 索引 ——
+ * 见 `queryUserOrders` 的说明。@yutiansut @quantaxis
  */
-export function queryUserTrades(userId) {
+/**
+ * 查询用户成交。@yutiansut @quantaxis
+ * @param {string} userId  实际是 account_id(交易所模式下两者同值)
+ * @param {Object} [params] 可选筛选:`instrument_id` / `start_date` / `end_date`
+ *                          / `page` / `page_size` —— 后端
+ *                          `handlers.rs:1389` 的 `match_instrument` +
+ *                          `match_date` 支持这些。
+ *
+ * ⚠️ 原来这个函数**不接受 params**,而 `trades/index.vue` 的合约下拉框
+ * 声明了 `queryInstrument`、绑了 v-model、重置时也清它 —— **唯独不传**。
+ * 回验代理在网络层实测:选了 IF2502 点查询,发出的请求是
+ * `/api/trades/user/{uid}`,**一个参数都没有**。日期范围同样是死的。
+ */
+export function queryUserTrades(userId, params) {
   return request({
     url: `/trades/user/${userId}`,
-    method: 'get'
+    method: 'get',
+    params: params || undefined
   })
 }
 
@@ -363,10 +406,15 @@ export function listAllAccounts(params) {
 /**
  * 获取账户详情（管理端）
  */
-export function getAccountDetail(userId) {
+export function getAccountDetail(userId, params) {
+  // ⚠️ 这个接口会把该账户**当日全部订单**吐出来 —— 实测最大账户
+  // 65,460,145 字节 / 157,861 单,前端 el-table 不虚拟化,渲染要 13 秒、
+  // 38 万个 DOM 节点。传 { page, page_size } 走分页,响应里 orders_total
+  // 是分页前的总数。不传则全量(向后兼容)。@yutiansut @quantaxis
   return request({
     url: `/management/account/${userId}/detail`,
-    method: 'get'
+    method: 'get',
+    params
   })
 }
 
@@ -504,6 +552,25 @@ export function forceLiquidateAccount(data) {
 export function getAllInstruments() {
   return request({
     url: '/admin/instruments',
+    method: 'get'
+  })
+}
+
+/**
+ * 获取合约规格（只读，**不需要管理员身份**）
+ *
+ * ⚠️ 交易员页面要 contract_multiplier / margin_rate 时用这个，不要用
+ * `getAllInstruments()` —— 后者打的是 `/admin/instruments`，一旦
+ * `QAEX_REQUIRE_ADMIN_AUTH=1` 就 403。而 OrderForm.vue / trades/index.vue
+ * 都有 try/catch 静默回退到写死的 300，IC2501 真实乘数是 200 → 成交额高报 50%。
+ *
+ * 后端 `/api/market/instrument-specs` 与 `/api/admin/instruments` 是**同一个
+ * handler、同一个 InstrumentRegistry**，字段完全一致，只是不挂鉴权中间件。
+ * @yutiansut @quantaxis
+ */
+export function getInstrumentSpecs() {
+  return request({
+    url: '/market/instrument-specs',
     method: 'get'
   })
 }

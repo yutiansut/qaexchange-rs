@@ -63,18 +63,29 @@
           </div>
 
           <!-- 统计数据 -->
-          <div class="stats">
+          <!-- ⚠️ 这里原来写死三个「成绩单」数字,全部是编的。@yutiansut @quantaxis
+             2026-09-05 用生产实例实测对照:
+               宣称「10,000+ 活跃用户」→ 实际 **34 个注册用户 / 26 个活跃账户**
+               宣称「100μs 交易延迟」  → 后端**零采集**(monitoring.rs 里那个同名
+                                         硬编码串已改成「未采集」)
+               宣称「99.9% 系统可用性」→ 后端**零实现**,没有任何可用性统计
+             这是用户看到的**第一个页面**,而且是**注册页** ——
+             在这里写不实数字,性质比内部页面的假徽章更重。
+             改为展示**能自证的产品特性**,不写任何无法核实的量化承诺。
+             将来若要恢复量化展示,数据必须来自接口(如
+             `/api/monitoring/system` 的 accounts.total_count),不要写死。 -->
+        <div class="stats">
             <div class="stat-item">
-              <span class="stat-number">10,000+</span>
-              <span class="stat-label">活跃用户</span>
+              <span class="stat-number">QIFI</span>
+              <span class="stat-label">标准账户协议</span>
             </div>
             <div class="stat-item">
-              <span class="stat-number">100μs</span>
-              <span class="stat-label">交易延迟</span>
+              <span class="stat-number">Rust</span>
+              <span class="stat-label">撮合内核</span>
             </div>
             <div class="stat-item">
-              <span class="stat-number">99.9%</span>
-              <span class="stat-label">系统可用性</span>
+              <span class="stat-number">DIFF</span>
+              <span class="stat-label">实时数据同步</span>
             </div>
           </div>
         </div>
@@ -232,6 +243,7 @@
 <script>
 // @yutiansut @quantaxis - 专业量化交易系统注册页面
 import { register } from '@/api'
+import { extractErrorMessage } from '@/api/request'
 
 export default {
   name: 'Register',
@@ -346,7 +358,7 @@ export default {
             this.$router.push({ name: 'Login' })
           }, 1500)
         } catch (error) {
-          const errorMsg = (error.response && error.response.data && error.response.data.error) || error.message || '注册失败'
+          const errorMsg = extractErrorMessage(error, '注册失败')
           this.$message.error(errorMsg)
         } finally {
           this.loading = false

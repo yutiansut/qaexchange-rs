@@ -48,7 +48,7 @@
               {{ announcement.announcement_type }}
             </el-tag>
           </div>
-          <span class="date">{{ formatDate(announcement.created_at) }}</span>
+          <span class="date">{{ formatDate(announcement.publish_time) }}</span>
         </div>
         <h3 class="card-title">{{ announcement.title }}</h3>
         <p class="card-preview">{{ getContentPreview(announcement.content) }}</p>
@@ -84,9 +84,9 @@
           <el-tag type="info" size="small" effect="plain">
             {{ selectedAnnouncement.announcement_type }}
           </el-tag>
-          <span class="detail-date">发布时间: {{ formatDate(selectedAnnouncement.created_at) }}</span>
+          <span class="detail-date">发布时间: {{ formatDate(selectedAnnouncement.publish_time) }}</span>
         </div>
-        <div class="detail-body" v-html="selectedAnnouncement.content"></div>
+        <div class="detail-body" v-html="safeHtml(selectedAnnouncement.content)"></div>
         <div v-if="selectedAnnouncement.expire_time" class="detail-validity">
           <i class="el-icon-time"></i>
           有效期至: {{ formatDate(selectedAnnouncement.expire_time) }}
@@ -101,6 +101,7 @@
 
 <script>
 // @yutiansut @quantaxis - 用户公告页面
+import { sanitizeHtml } from '@/utils/sanitize'
 import { queryAnnouncements } from '@/api'
 
 export default {
@@ -121,6 +122,11 @@ export default {
     this.loadAnnouncements()
   },
   methods: {
+    // ⚠️ 同 login.vue:公告正文必须净化后再交给 v-html。@yutiansut @quantaxis
+    safeHtml (html) {
+      return sanitizeHtml(html)
+    },
+
     async loadAnnouncements() {
       this.loading = true
       try {
@@ -141,11 +147,18 @@ export default {
           return now >= from && now <= until
         })
         // 按优先级和时间排序
-        const priorityOrder = { 'URGENT': 0, 'HIGH': 1, 'NORMAL': 2, 'LOW': 3 }
+        // ⚠️ 本文件的大小写本来就对,但 `|| 3` 这一半照样错:
+        //    URGENT 的序号是 **0**,而 0 是 falsy → `0 || 3` 得 3,紧急公告排到最后。
+        //    实测后端按 URGENT→HIGH→NORMAL 返回,本页却渲染成 HIGH→NORMAL→URGENT。
+        //    @yutiansut @quantaxis
+        const rank = (p) => {
+          const v = { URGENT: 0, HIGH: 1, NORMAL: 2, LOW: 3 }[String(p || '').toUpperCase()]
+          return v === undefined ? 3 : v
+        }
         this.announcements.sort((a, b) => {
-          const pDiff = (priorityOrder[a.priority] || 3) - (priorityOrder[b.priority] || 3)
+          const pDiff = rank(a.priority) - rank(b.priority)
           if (pDiff !== 0) return pDiff
-          return (b.created_at || 0) - (a.created_at || 0)
+          return (Number(b.publish_time) || 0) - (Number(a.publish_time) || 0)
         })
         this.total = res.total || this.announcements.length
       } catch (error) {
@@ -163,7 +176,9 @@ export default {
 
     formatDate(timestamp) {
       if (!timestamp) return ''
-      const date = new Date(timestamp * 1000)
+      // 后端时间戳已是**毫秒**(account_admin.rs:104 用 as_millis()),不要再 ×1000。
+      // 同文件 :137 的有效期过滤直接拿 Date.now() 比大小,本就按毫秒处理 —— 原先自相矛盾。
+      const date = new Date(timestamp)
       return date.toLocaleDateString('zh-CN', {
         year: 'numeric',
         month: '2-digit',

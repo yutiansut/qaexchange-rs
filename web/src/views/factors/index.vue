@@ -93,6 +93,8 @@
               :symbol="selectedInstrument"
               :period="period"
               :kline-data="klineData"
+              :loaded="klineLoaded"
+              :load-error="klineError"
               :factor-data="currentFactorData"
               :show-factor-overlay="showFactorOverlay"
               :enabled-factors="enabledFactors"
@@ -120,6 +122,8 @@
                 :symbol="selectedInstrument"
                 :period="period"
                 :kline-data="klineData"
+              :loaded="klineLoaded"
+              :load-error="klineError"
                 :factor-data="currentFactorData"
                 :show-factor-overlay="showFactorOverlay"
                 :enabled-factors="enabledFactors"
@@ -139,6 +143,7 @@
             <div class="factor-history">
               <h4>因子历史记录</h4>
               <el-table
+                :empty-text="isConnected ? '暂无因子历史' : 'WebSocket 未连接，因子数据无法接收'"
                 :data="factorHistoryData"
                 size="mini"
                 stripe
@@ -193,6 +198,7 @@ import { mapGetters } from 'vuex'
 import FactorDashboard from '@/components/FactorDashboard.vue'
 import FactorIndicator from '@/components/FactorIndicator.vue'
 import KLineChart from '@/components/KLineChart.vue'
+import { getKlineData } from '@/api'
 
 export default {
   name: 'FactorsPage',
@@ -219,6 +225,14 @@ export default {
         { label: '日线', value: 0 }
       ],
       klineData: [],
+      // KLineChart 的三分支状态(`KLineChart.vue:6-20`)需要这两个 prop:
+      //   loadError 有值 → 「K线加载失败:…」
+      //   loaded=true 且空 → 「暂无K线数据」
+      //   两者都没有 → 「正在加载…」
+      // 我接真实 K 线时只传了 kline-data,于是空态和失败态都退化成
+      // **永久转圈**。`chart/index.vue:76-77` 早就传对了。@yutiansut @quantaxis
+      klineLoaded: false,
+      klineError: '',
       factorHistoryData: [],
       lastUpdateTime: '--:--:--',
       maxHistoryRows: 50
@@ -307,23 +321,45 @@ export default {
       this.loadKlineData(instrument)
     },
 
-    loadKlineData(instrument) {
-      // TODO: 从后端加载K线数据
-      // 这里先用模拟数据
-      console.log('[FactorsPage] Loading kline data for:', instrument)
-
-      // 模拟K线数据
-      const now = Date.now()
-      const interval = 5 * 60 * 1000  // 5分钟
-      this.klineData = Array.from({ length: 100 }, (_, i) => ({
-        datetime: now - (100 - i) * interval,
-        open: 4000 + Math.random() * 200,
-        high: 4100 + Math.random() * 200,
-        low: 3900 + Math.random() * 200,
-        close: 4000 + Math.random() * 200,
-        volume: Math.floor(Math.random() * 10000),
-        amount: Math.floor(Math.random() * 100000000)
-      }))
+    // 接真实 K 线 —— 原来这里是 `Math.random()` 造 100 根假 K 线 @yutiansut @quantaxis
+    //
+    // 原注释写着「TODO: 从后端加载K线数据 / 这里先用模拟数据」,但 `klineData`
+    // 直接喂给 :95 和 :122 两个图表组件 —— 用户看到的是**编出来的行情**,
+    // 而且 open/high/low/close 各自独立随机,连 high ≥ max(open,close) 都不保证。
+    //
+    // `getKlineData` 早就存在(`chart/index.vue:288` 一直在用),两头从没接上而已。
+    // period=5 对应 5 分钟(`kline.rs:17`:0=日 4=1分 5=5分 6=15分 7=30分 8=60分),
+    // 与原代码注释里的 5 分钟一致。
+    async loadKlineData(instrument) {
+      // 清空后(点 clearable 的 ×)也要重置,否则 overlay 会残留上一个合约的
+      // 「K线加载失败:…」且合约名为空。@yutiansut @quantaxis
+      if (!instrument) {
+        this.klineData = []
+        this.klineLoaded = false
+        this.klineError = ''
+        return
+      }
+      // ⚠️ 必须清空旧数据 —— overlay 的条件是 `klineData.length === 0`,
+      //    不清的话切换途中会显示**上一个合约的蜡烛图**,连「正在加载」都不出现。
+      this.klineData = []
+      this.klineLoaded = false
+      this.klineError = ''
+      try {
+        const res = await getKlineData(instrument, { period: 5, count: 100 })
+        // 本接口不走 {success,data,error} 信封,拦截器不拆包 —— 同 chart/index.vue:289
+        const bars = (res && res.data && res.data.klines) || []
+        // 请求期间用户可能已切合约,结果作废
+        if (instrument !== this.selectedInstrument) return
+        this.klineData = bars
+        this.klineLoaded = true      // 空数组 + loaded ⇒ 显示「暂无K线数据」
+      } catch (e) {
+        if (instrument !== this.selectedInstrument) return
+        // **宁可空图,也不编** —— 空数组 + loadError ⇒ 显示「加载失败:…」
+        this.klineData = []
+        this.klineError = (e && e.message) || String(e)
+        this.klineLoaded = true      // 别再转圈,让页面说清楚失败了
+        console.warn('[FactorsPage] K线加载失败:', instrument, this.klineError)
+      }
     },
 
     updateFactorHistory() {

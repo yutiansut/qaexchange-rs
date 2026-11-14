@@ -160,11 +160,11 @@ impl PerInstrumentWalManager {
     /// # Arguments
     /// * `instrument_id` - 品种 ID
     /// * `sequence` - 截断点（< sequence 的数据会被删除）
-    pub fn checkpoint(&self, instrument_id: &str, sequence: u64) -> Result<(), String> {
+    pub fn checkpoint(&self, instrument_id: &str, sequence: u64) -> Result<usize, String> {
         if let Some(manager) = self.managers.get(instrument_id) {
             manager.checkpoint(sequence)
         } else {
-            Ok(()) // 品种不存在，无需操作
+            Ok(0) // 品种不存在，无需操作
         }
     }
 
@@ -175,11 +175,12 @@ impl PerInstrumentWalManager {
     pub fn checkpoint_all(
         &self,
         sequences: &std::collections::HashMap<String, u64>,
-    ) -> Result<(), String> {
+    ) -> Result<usize, String> {
+        let mut removed = 0usize;
         for (instrument_id, sequence) in sequences {
-            self.checkpoint(instrument_id, *sequence)?;
+            removed += self.checkpoint(instrument_id, *sequence)?;
         }
-        Ok(())
+        Ok(removed)
     }
 
     /// 获取当前活跃的品种列表

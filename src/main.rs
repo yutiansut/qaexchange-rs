@@ -50,11 +50,51 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// HTTP / WS 优雅停机等待秒数(`QAEX_SHUTDOWN_TIMEOUT_SECS`,默认 5)。@yutiansut @quantaxis
+fn shutdown_timeout_secs() -> u64 {
+    std::env::var("QAEX_SHUTDOWN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5)
+}
+
 /// 把 actix 提取器（Json / Query / Path）产生的 400 统一包成
 /// `{ success, data, error }` 信封。
 ///
 /// 默认情况下 actix 直接返回 `text/plain` 裸文本（例如
 /// `Json deserialize error: missing field ...`），前端 `web/src/api/request.js`
+/// 每个 HttpServer 的 worker 线程数。
+///
+/// ⚠️ actix-web 默认 = 逻辑核数。本机 96 核 × 2 个 HttpServer(HTTP 8094 + WS 8095)
+/// = 288 个 worker 线程。实测危害在**内存**:全局分配器是 mimalloc(由 qars_core3
+/// 提供),它按线程持有本地 segment(v2 的 MI_SEGMENT_SIZE = 32 MiB)且不主动归还
+/// —— 288 × 32 MiB ≈ 9.2 GB 只是地板。实测 RSS 12.9 GB 中,活数据仅约 2.4 GB,
+/// smaps 显示 LazyFree = 0、Private_Dirty ≈ 全部 RSS(即并非可回收的 MADV_FREE 页)。
+///
+/// 交易所的请求路径是**锁受限**而非 CPU 受限(账户锁 / 合约撮合锁),
+/// worker 多于必要值只会加剧 convoy,不会提高吞吐。
+///
+/// 可用 `QAEX_HTTP_WORKERS` / `QAEX_WS_WORKERS` 覆盖(0 或非法值 = 用默认)。
+/// @yutiansut @quantaxis
+fn worker_threads(env_key: &str, default_cap: usize) -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let n = std::env::var(env_key)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or_else(|| cores.min(default_cap));
+    log::info!(
+        "{} = {} (逻辑核 {}, 默认上限 {})",
+        env_key,
+        n,
+        cores,
+        default_cap
+    );
+    n
+}
+
 /// 的响应拦截器读不到 `error.message`，用户只会看到
 /// "Request failed with status code 400"。@yutiansut @quantaxis
 fn extractor_error<E>(err: E, _req: &actix_web::HttpRequest) -> actix_web::Error
@@ -86,6 +126,17 @@ struct ExchangeConfig {
 
     /// 是否启用持久化
     enable_storage: bool,
+
+    /// `[[instruments]]` 配置段。@yutiansut @quantaxis
+    ///
+    /// ⚠️ 此前这一段**整段是死配置**:TOML 解析了,但运行时配置里没有这个字段,
+    /// 上市清单与行情合约配置都写死在本文件里(IF2501 / IF2502 / IC2501 / IH2501)——
+    /// 2026-11-08 在配置里加 FG / SA 后网页、订单簿、撮合全都看不见。
+    /// 现在:写死的四个照旧,配置里**新增**的合约一并上市(见 `init_instruments`、行情配置)。
+    instruments: Vec<qaexchange::utils::config::InstrumentConfig>,
+
+    /// `[settlement]` 日终结算调度(缺省每自然日北京 00:00)@yutiansut @quantaxis
+    settlement: qaexchange::utils::config::SettlementSettings,
 }
 
 impl ExchangeConfig {
@@ -96,6 +147,8 @@ impl ExchangeConfig {
             ws_address: toml_config.websocket.bind_address(),
             storage_path: toml_config.storage.base_path,
             enable_storage: toml_config.storage.enabled,
+            instruments: toml_config.instruments,
+            settlement: toml_config.settlement,
         }
     }
 }
@@ -107,6 +160,8 @@ impl Default for ExchangeConfig {
             ws_address: "127.0.0.1:8081".to_string(),
             storage_path: "/tmp/qaexchange/storage".to_string(),
             enable_storage: true,
+            instruments: Vec::new(),
+            settlement: Default::default(),
         }
     }
 }
@@ -258,13 +313,43 @@ impl ExchangeServer {
 
         // 1.3.2 启动K线Actor（订阅tick事件，独立处理K线聚合）
         log::info!("Starting KLine Actor...");
-        let kline_actor = qaexchange::market::KLineActor::new(
-            market_broadcaster.clone(),
-            kline_wal_manager.clone(),
+        // ⚠️ KLineActor 必须跑在**独立 Arbiter** 上,不能用 `.start()` 挂在主运行时 @yutiansut @quantaxis
+        //
+        // `.start()` 把 actor 放到当前 Arbiter —— 即 `#[actix_web::main]` 的**单线程**主运行时;
+        // 它的 tick 处理循环(`ctx.spawn`)每收完一根 K 线就同步 `wal_manager.append()`,
+        // 而 `append` 每条都 `flush` + `sync_all`(fsync)。2026-11-08 实测:把 60s 快照落盘
+        // 移出主运行时之后,主线程**仍有 96% 时间处于 D 态**,wchan 以
+        // `jbd2_log_wait_commit`(fsync 等日志提交)为主,同运行时上的盘口快照广播
+        // 8 秒只发出 1 张。fsync 在这块盘上一次可达数百毫秒(WAL 单测 P99 446ms)。
+        // 放进独立 Arbiter 后,fsync 只会拖慢 K 线自己,不再饿死主运行时上的其他任务。
+        // actix-rt 2.11 的 `Arbiter` 没有 Drop 实现 —— 离开作用域不会停线程,随 System 一起退出。
+        let kline_arbiter = actix::Arbiter::new();
+        let kline_broadcaster = market_broadcaster.clone();
+        let kline_wal = kline_wal_manager.clone();
+        let kline_actor = qaexchange::market::KLineActor::start_in_arbiter(
+            &kline_arbiter.handle(),
+            move |_ctx| {
+        qaexchange::market::KLineActor::new(
+            kline_broadcaster,
+            kline_wal,
         )
         // .with_instruments(vec![])  // 空列表表示订阅所有合约
-        .start();
-        log::info!("✅ KLine Actor started (subscribed to tick events)");
+        // ✨ 开启因子计算 —— 否则 /factors 页面结构性地拿不到数据
+        // @yutiansut @quantaxis
+        //
+        // `enable_factor_compute` 默认 false(kline_actor.rs:72「默认关闭,需要显式启用」),
+        // 而这里从来没有显式启用过。链条:不算因子 → 不广播 MarketDataEvent::FactorUpdate
+        // → DIFF 快照里永远没有 `factors` 键 → 前端 `/factors` 读 `snapshot.factors`
+        // 永远是空。导航里挂着一个结构性无法显示的页面。
+        // (实测:启动日志中「Factor computation enabled」出现 0 次;
+        //  订阅 WS 12 秒收到的补丁顶层键里没有 factors。)
+        //
+        // 开销可忽略:DEFAULT_FACTORS 7 个(ma5/ma10/ma20/ema12/ema26/rsi14/macd),
+        // 只在 K 线收盘时对已收盘的那根算一次,不在 tick 热路径上。
+        .with_factor_compute(true)
+            },
+        );
+        log::info!("✅ KLine Actor started on dedicated arbiter (subscribed to tick events)");
 
         // 1.4 创建 iceoryx2 管理器（如果启用）
         let iceoryx_manager: Option<Arc<parking_lot::RwLock<qaexchange::ipc::IceoryxManager>>> =
@@ -366,11 +451,15 @@ impl ExchangeServer {
 
         // 3.9 交易时段管制 @yutiansut @quantaxis
         //
-        // OrderRouter::trading_state_machine 默认是 None(:310,:411),
-        // 而 set_trading_state_machine(:325) **全库零调用** —— 连测试都没有,
-        // main.rs 里 TradingStateMachine/TradingSessionManager/trading_session
-        // 三个词出现 0 次。于是 :476 那个时段门禁永远进不去:
-        // **7×24 都能下单,没有集合竞价/午休/收盘之分。**
+        // OrderRouter::trading_state_machine 默认是 None(:310,:411)。
+        //
+        // 【历史】此处原注释写「set_trading_state_machine **全库零调用**」——
+        // 那是**接线之前**的状态,下面 :430 已经调了,注释当时没同步更新。
+        // 2026-09-05 复核:`grep -rn set_trading_state_machine src/` = 3 处
+        // (定义 order_router.rs:331 + 本处调用 + 本注释)。
+        //
+        // 现状:默认仍**不启用**(见下方 env 开关),所以门禁默认进不去 ——
+        // **7×24 都能下单,没有集合竞价/午休/收盘之分**。这一半仍然成立。
         //
         // validate_order(trading_session.rs:461)本身是完整的:
         // 先查交易日历当前时段的 allow_order,再查合约的 TradingState。
@@ -395,6 +484,8 @@ impl ExchangeServer {
         // 4. 创建结算引擎
         let settlement_engine = Arc::new(SettlementEngine::new(account_mgr.clone()));
         settlement_engine.set_order_router(order_router.clone());
+        // 日终归档当日快照 / 落结算后快照用(与 start_snapshot_scheduler 同一目录)@yutiansut @quantaxis
+        settlement_engine.set_snapshot_dir(format!("{}/snapshots", config.storage_path));
 
         // ✨ 条件单引擎也需要 order_router @yutiansut @quantaxis
         //
@@ -438,13 +529,56 @@ impl ExchangeServer {
                 service = service.with_iceoryx(iceoryx_mgr.clone());
             }
 
-            // 配置快照生成器：订阅所有合约，每秒生成一次快照
-            let instruments = vec![
-                "IF2501".to_string(),
-                "IF2502".to_string(),
-                "IC2501".to_string(),
-                "IH2501".to_string(),
+            // ✨ 合约配置(含**真实乘数**)必须注入 —— 否则接口只会吐兜底值 @yutiansut @quantaxis
+            //
+            // `MarketDataService::instrument_configs` 此前**从未被填充**
+            // (`set_instrument_configs` 唯一调用点在 `market/mod.rs:267` 的
+            //  `new_with_configs`,生产路径 main.rs 从没走过),于是
+            // `get_instruments()` 永远落到 `market/mod.rs:413` 的兜底
+            //     (format!("{} 期货", id), 300.0, 0.2)
+            // 对**所有**合约都报乘数 300。
+            //
+            // 而 IC2501 的真实乘数是 **200**(见 init_instruments,main.rs:542) ——
+            // 前端 `positions/index.vue` 拿不到真值只能自己硬编码 ×300,
+            // 对 IC 系合约的持仓市值/盈亏比**偏差 50%**。
+            //
+            // ⚠️ 这份表必须与 `init_instruments()` 的注册值保持一致。
+            //    两处都硬编码是隐患,但把合约表提到 `new()` 之前需要较大重构,
+            //    先用一致性断言兜住:启动时若两边对不上会 panic。
+            let inst_specs: Vec<(&str, &str, f64, f64)> = vec![
+                // (合约, 名称, 乘数, 最小变动价位)
+                ("IF2501", "沪深300股指期货2501", 300.0, 0.2),
+                ("IF2502", "沪深300股指期货2502", 300.0, 0.2),
+                ("IC2501", "中证500股指期货2501", 200.0, 0.2),
+                ("IH2501", "上证50股指期货2501",  300.0, 0.2),
             ];
+            let mut configs: Vec<qaexchange::utils::config::InstrumentConfig> = inst_specs
+                .iter()
+                .map(|(id, name, mult, tick)| qaexchange::utils::config::InstrumentConfig {
+                    instrument_id: id.to_string(),
+                    name: name.to_string(),
+                    exchange_id: "CFFEX".to_string(),
+                    product_type: "index_future".to_string(),
+                    init_price: 0.0,
+                    is_trading: true,
+                    multiplier: *mult,
+                    tick_size: *tick,
+                    commission_per_lot: None,
+                    commission_rate: None,
+                    margin_rate: None,
+                })
+                .collect();
+            // 配置里新增的合约(与 `init_instruments` 用同一份 `config.instruments`)@yutiansut @quantaxis
+            for c in &config.instruments {
+                if !configs.iter().any(|x| x.instrument_id == c.instrument_id) {
+                    configs.push(c.clone());
+                }
+            }
+            let instruments: Vec<String> =
+                configs.iter().map(|c| c.instrument_id.clone()).collect();
+            service.set_instrument_configs(configs);
+
+            // 配置快照生成器：订阅所有合约，每秒生成一次快照
             service = service.with_snapshot_generator(instruments, 1000);
 
             Arc::new(service)
@@ -455,10 +589,11 @@ impl ExchangeServer {
         // 7.1 设置 market_data_service 到 trade_gateway（用于更新快照统计）
         // 由于 trade_gateway 已经是 Arc，需要使用 unsafe 获取可变引用
         // 安全性：此时 trade_gateway 只有一个引用（刚创建），可以安全修改
-        unsafe {
-            let trade_gateway_ptr = Arc::as_ptr(&trade_gateway) as *mut TradeGateway;
-            (*trade_gateway_ptr).set_market_data_service(market_data_service.clone());
-        }
+        // ✨ 不再需要 unsafe。原注释写着「此时 trade_gateway 只有一个引用(刚创建)」——
+        // **那是错的**::364 已经把 `trade_gateway.clone()` 交给了 `OrderRouter`,
+        // 早于此处 178 行。字段已改为 `OnceLock`,`set` 只要 `&self`。
+        // @yutiansut @quantaxis
+        trade_gateway.set_market_data_service(market_data_service.clone());
         log::info!("✅ Market data service connected to trade gateway");
 
         log::info!("✅ Core components initialized");
@@ -499,7 +634,7 @@ impl ExchangeServer {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         // 注册合约：沪深300股指期货
-        let instruments = vec![
+        let mut instruments = vec![
             InstrumentInfo {
                 instrument_id: "IF2501".to_string(),
                 instrument_name: "沪深300股指期货2501".to_string(),
@@ -570,6 +705,53 @@ impl ExchangeServer {
             },
         ];
 
+        // ✨ 配置 `[[instruments]]` 里新增的合约一并上市(写死的四个保持原样)@yutiansut @quantaxis
+        //    保证金率取 qars MarketPreset(真正冻结与扣费用的就是它,见下方一致性校验);
+        //    按成交额计费的品种手续费率同样取 preset,按手计费的(如 FG)保留默认值仅供预检。
+        let mut config_init_price: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
+        for c in &self.config.instruments {
+            if instruments.iter().any(|i| i.instrument_id == c.instrument_id) {
+                continue;
+            }
+            let preset = qaexchange::core::account_ext::effective_preset(&c.instrument_id);
+            let instrument_type = if c.product_type.contains("index") || c.exchange_id == "CFFEX" {
+                InstrumentType::IndexFuture
+            } else {
+                InstrumentType::CommodityFuture
+            };
+            instruments.push(InstrumentInfo {
+                instrument_id: c.instrument_id.clone(),
+                instrument_name: c.name.clone(),
+                instrument_type,
+                exchange: c.exchange_id.clone(),
+                contract_multiplier: c.multiplier.round() as i32,
+                price_tick: c.tick_size,
+                margin_rate: if preset.buy_frozen_coeff > 0.0 { preset.buy_frozen_coeff } else { 0.12 },
+                commission_rate: if preset.commission_coeff_peramount > 0.0 {
+                    preset.commission_coeff_peramount
+                } else {
+                    0.0001
+                },
+                limit_up_rate: 0.1,
+                limit_down_rate: 0.1,
+                status: if c.is_trading { InstrumentStatus::Active } else { InstrumentStatus::Suspended },
+                list_date: None,
+                expire_date: None,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            });
+            config_init_price.insert(c.instrument_id.clone(), c.init_price);
+        }
+
+        // 手续费率不一致按**汇总**打印,不逐合约刷屏 @yutiansut @quantaxis
+        //
+        // 实测:4 个合约的 `commission_rate` 全是 0.0001、qars preset 全是 2.301e-05
+        // ⇒ 4 条告警**内容完全一致**,纯重复。而同批的保证金率告警只有 3 条,
+        // 其中指向 2.49 亿担保缺口的那条会被这 4 条重复淹没
+        // (先前正是这么丢掉 IH 那条的)。
+        let mut comm_mismatch: Vec<(String, f64, f64, f64)> = Vec::new();
+
         for inst in &instruments {
             // 注册合约到合约注册表
             if let Err(e) = self.instrument_registry.register(inst.clone()) {
@@ -583,7 +765,11 @@ impl ExchangeServer {
                 "IF2502" => 3820.0,
                 "IC2501" => 5600.0,
                 "IH2501" => 2800.0,
-                _ => 100.0,
+                other => config_init_price
+                    .get(other)
+                    .copied()
+                    .filter(|p| *p > 0.0)
+                    .unwrap_or(100.0),
             };
 
             self.matching_engine
@@ -614,16 +800,26 @@ impl ExchangeServer {
             // 这里只告警不阻断:preset 是品种级预设,registry 是合约级配置,
             // 允许按合约微调,但偏离过大几乎总是配错了。
             {
-                let preset = qars::qaaccount::marketpreset::MarketPreset::global()
-                    .get(&inst.instrument_id);
+                // 生效费率(qars 预设 + 按合约覆盖),与实际冻结 / 扣费一致
+                let preset = qaexchange::core::account_ext::effective_preset(&inst.instrument_id);
                 let preset_margin = preset.buy_frozen_coeff;
                 if preset_margin > 0.0 {
                     let dev = (inst.margin_rate - preset_margin).abs() / preset_margin;
-                    if dev > 0.25 {
+                    // ⚠️ 阈值从 0.25 收紧到 0.05 @yutiansut @quantaxis
+                    //
+                    // 2026-09-05 全账户实测(按 margin_long+short / position_cost_long+short):
+                    //   IC  0.1200 vs 0.12  dev=0.00  —— 一致
+                    //   IF  0.1000 vs 0.12  dev=0.20  —— **旧阈值 0.25 下不报**,而缺口约 1.00 亿
+                    //   IH  0.0500 vs 0.12  dev=1.40  —— 报了,但淹没在同批手续费告警里
+                    // 即旧阈值恰好把 IF 的一亿缺口漏掉。保证金率是资金安全的一等参数,
+                    // 5% 的偏离就该说话 —— 它不像手续费那样允许「按合约微调」。
+                    if dev > 0.05 {
                         log::warn!(
                             "⚠️ 保证金率不一致 {}: registry={:.4} vs qars preset buy_frozen_coeff={:.4} \
-                             (偏离 {:.0}%) —— 预检用前者、实际扣费用后者,偏离过大会让资金预检失真",
-                            inst.instrument_id, inst.margin_rate, preset_margin, dev * 100.0
+                             (偏离 {:.0}%) —— 预检用前者、**实际扣费用后者**;\
+                             每 1 亿名义敞口的担保差额约 {:.0} 万",
+                            inst.instrument_id, inst.margin_rate, preset_margin, dev * 100.0,
+                            (inst.margin_rate - preset_margin).abs() * 1e8 / 1e4
                         );
                     }
                 }
@@ -631,11 +827,13 @@ impl ExchangeServer {
                 if preset_comm > 0.0 {
                     let dev = (inst.commission_rate - preset_comm).abs() / preset_comm;
                     if dev > 1.0 {
-                        log::warn!(
-                            "⚠️ 手续费率不一致 {}: registry={:.6} vs qars preset commission_coeff_peramount={:.6} \
-                             (偏离 {:.0}%)",
-                            inst.instrument_id, inst.commission_rate, preset_comm, dev * 100.0
-                        );
+                        // 收集而非逐条打印 —— 见循环外的汇总。@yutiansut @quantaxis
+                        comm_mismatch.push((
+                            inst.instrument_id.clone(),
+                            inst.commission_rate,
+                            preset_comm,
+                            dev,
+                        ));
                     }
                 }
             }
@@ -648,6 +846,31 @@ impl ExchangeServer {
                 inst.commission_rate * 100.0
             );
         }
+
+        // 手续费率不一致的汇总告警 @yutiansut @quantaxis
+        if !comm_mismatch.is_empty() {
+            let all_same = comm_mismatch
+                .windows(2)
+                .all(|w| (w[0].1 - w[1].1).abs() < 1e-12 && (w[0].2 - w[1].2).abs() < 1e-12);
+            let (_, reg, pre, dev) = &comm_mismatch[0];
+            let ids: Vec<&str> = comm_mismatch.iter().map(|(i, ..)| i.as_str()).collect();
+            if all_same {
+                log::warn!(
+                    "⚠️ 手续费率不一致({} 个合约,参数相同): registry={:.6} vs qars preset={:.6} \
+                     (偏离 {:.0}%,即实际只收 1/{:.1});预检按前者冻结、**实际按后者扣费** \
+                     ⇒ 每 1 亿名义敞口少收约 {:.0} 元。合约: {}",
+                    comm_mismatch.len(), reg, pre, dev * 100.0, reg / pre,
+                    (reg - pre) * 1e8, ids.join(", ")
+                );
+            } else {
+                log::warn!("⚠️ 手续费率不一致({} 个合约,参数不同):", comm_mismatch.len());
+                for (id, r, p, d) in &comm_mismatch {
+                    log::warn!("    {}: registry={:.6} vs preset={:.6} (偏离 {:.0}%)", id, r, p, d * 100.0);
+                }
+            }
+        }
+
+        check_trading_calendar_horizon();
 
         log::info!("✅ {} instruments initialized", instruments.len());
     }
@@ -785,11 +1008,21 @@ impl ExchangeServer {
             snapshot_mgr: None,
         });
 
-        // 创建市场数据服务（解耦：业务逻辑与网络层分离）
-        // 传递 market_data_storage 以支持从 WAL 恢复历史行情
-        let mut market_service =
-            qaexchange::market::MarketDataService::new(self.matching_engine.clone())
-                .with_storage(self.market_data_storage.clone());
+        // ✨ 复用 self.market_data_service,不要在这里另造一个 @yutiansut @quantaxis
+        //
+        // 原实现在此处 `MarketDataService::new(...)` **新建了第二个实例**,
+        // 与 `new()` 里(main.rs:426)构造并注入了配置/快照生成器/账户管理器/
+        // 广播器的那一个完全独立。HTTP handler 的
+        // `web::Data<MarketDataService>` 拿到的是这个新的空壳,后果:
+        //   · `/api/market/instruments` 的 `instrument_configs` 恒空 →
+        //     落到 `market/mod.rs:413` 的兜底,**对所有合约都报乘数 300**,
+        //     而 IC2501 真实是 200 → 持仓页市值/盈亏比偏差 50%;
+        //   · 我在 :426 注入合约配置后重启,接口**仍然返回 300** ——
+        //     就是被这个分叉吃掉了。
+        //
+        // 这与本会话早先「7 个 ConversionManager 实例」是同一类问题:
+        // **同一个服务在两处各建一次,配置只进了其中一个。**
+        let mut market_service = (*self.market_data_service).clone();
 
         // 如果启用了 iceoryx2，将 manager 传递给 MarketDataService
         if let Some(ref manager) = self.iceoryx_manager {
@@ -854,6 +1087,16 @@ impl ExchangeServer {
                         .allow_any_origin()
                         .allow_any_method()
                         .allow_any_header()
+                        // ⚠️ 自定义响应头必须显式 expose,否则浏览器**不给 JS 读**
+                        //    @yutiansut @quantaxis
+                        //
+                        // CORS 默认只暴露 6 个 simple response headers
+                        // (Cache-Control / Content-Language / Content-Type /
+                        //  Expires / Last-Modified / Pragma)。
+                        // `X-Total-Count`(management.rs 按用户查流水时带的总数)
+                        // 不在其中 —— 不 expose 的话 axios/fetch 读到的是 undefined,
+                        // 而且**没有任何报错**,又是一个静默失效。
+                        .expose_headers(vec!["X-Total-Count"])
                         .max_age(3600),
                 )
                 // 提取器错误统一走 JSON 信封 @yutiansut @quantaxis
@@ -876,7 +1119,16 @@ impl ExchangeServer {
                     }
                 })
         })
+        .workers(worker_threads("QAEX_HTTP_WORKERS", 16))
+        // 优雅停机只等 5 秒(actix 默认 30 秒):keep-alive 连接在这段时间里还会继续下单,
+        // 2026-11-08 06:38 实测停机共 74 秒(HTTP 30s + WS 30s + 落盘)。@yutiansut @quantaxis
+        .shutdown_timeout(shutdown_timeout_secs())
         .bind(&bind_address)?
+        // ⚠️ 关掉 actix 自带的信号处理 —— 见 run() 末尾的落盘说明。@yutiansut @quantaxis
+        // actix 默认收到 SIGTERM 会 stop 整个 System,运行时当场终止,
+        // `try_join!` **之后的代码永远不会执行**(2026-09-05 实测:
+        // SIGTERM 后进程 1 秒退出、快照文件数 0→0、日志无落盘记录)。
+        .disable_signals()
         .run();
 
         log::info!("✅ HTTP server started at http://{}", bind_address);
@@ -897,14 +1149,16 @@ impl ExchangeServer {
     fn start_snapshot_broadcaster(&self) {
         log::info!("Starting orderbook snapshot broadcaster...");
 
-        // 启动快照广播服务（500ms 间隔）
-        SnapshotBroadcastService::spawn(
+        // 启动实时行情快照发布(事件驱动,10ms 合并窗口;500ms 只是空闲心跳)
+        // 独立 OS 线程 —— 见 snapshot_broadcaster.rs 模块文档 @yutiansut @quantaxis
+        let _quote_publisher = SnapshotBroadcastService::spawn(
             self.matching_engine.clone(),
             self.market_broadcaster.clone(),
-            500, // 500ms 间隔
+            self.market_data_service.clone(), // ✨ 共用成交写入的那个实例(累计量/额来自它的日 K)
+            500, // 空闲心跳间隔
         );
 
-        log::info!("✅ Orderbook snapshot broadcaster started (500ms interval)");
+        log::info!("✅ Realtime quote publisher started (event-driven, 10ms coalesce, 500ms heartbeat)");
     }
 
     /// 启动 WebSocket 服务器
@@ -918,6 +1172,7 @@ impl ExchangeServer {
             self.trade_gateway.clone(),
             self.market_broadcaster.clone(),
             self.kline_actor.clone(),
+            self.market_data_service.clone(),
         ));
 
         let bind_address = self.config.ws_address.clone();
@@ -936,7 +1191,10 @@ impl ExchangeServer {
                 )
                 .route("/health", web::get().to(|| async { "OK" }))
         })
+        .workers(worker_threads("QAEX_WS_WORKERS", 8))
+        .shutdown_timeout(shutdown_timeout_secs())
         .bind(&bind_address)?
+        .disable_signals()   // 同 HTTP,见 run() 末尾 @yutiansut @quantaxis
         .run();
 
         log::info!("✅ WebSocket server started at ws://{}", bind_address);
@@ -998,6 +1256,68 @@ impl ExchangeServer {
         })
     }
 
+    /// 周期性 WAL checkpoint —— 只对**有冷存储备份**的存储执行 @yutiansut @quantaxis
+    ///
+    /// `create_checkpoint()`(storage/hybrid/oltp.rs:560)此前**零生产调用**,
+    /// WAL 只增不减。安全性已逐项核实:
+    ///   ① `force_flush()` 先把 memtable 落成 SSTable;
+    ///   ② SSTable 写入走 `file.sync_all()`(sstable/oltp_rkyv.rs:260),**真 fsync**;
+    ///   ③ `WalManager::checkpoint`(wal/manager.rs:621)只删
+    ///      「后继文件起始序号 ≤ checkpoint 序号」的**完整**文件,
+    ///      且循环上界是 `len-1`,**从不删当前正在写的文件**。
+    ///
+    /// ⚠️ **只对 `market_data_storage` 执行**。实测各目录的冷存储覆盖:
+    ///   · market_data  WAL 1.6G / 157 个 parquet  → 有备份,可回收
+    ///   · 四个合约目录 WAL ~250M / 29~34 parquet   → 有备份(由 OrderRouter 持有,此处够不到)
+    ///   · `gateway_wal` **WAL 3.4G / parquet 0 个** → **没有任何备份**
+    ///   · `klines` 57M、`users` 692K              → 同样无备份
+    /// 对无备份的 WAL 做 checkpoint 等于**直接删数据**,所以一律不碰。
+    ///
+    /// 尤其注意 `gateway_wal`:它是全系统最大的 WAL,存的是订单/成交/持仓事件
+    /// (`ExchangeOrderRecord`/`ExchangeTradeRecord`/`PositionSnapshot`),
+    /// 与合约目录的行情数据(`TickData`/`OrderBookSnapshot`)**完全不重叠**,
+    /// 而且**只写不读**(TradeGateway 无 replay/recover,data_query 读的是
+    /// market_data_storage 与 kline_wal_manager)。
+    /// 即:最重要的审计数据是唯一没有冷存储层的 —— 需要先给它加 OLAP 转换,
+    /// 或者明确一个可接受丢失的保留策略,才谈得上回收。
+    fn start_periodic_checkpoint(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let storage = self.market_data_storage.clone();
+
+        tokio::spawn(async move {
+            // 首次延迟 10 分钟,避开启动期的恢复与预热
+            tokio::time::sleep(tokio::time::Duration::from_secs(600)).await;
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(600));
+
+            loop {
+                interval.tick().await;
+                let storage = storage.clone();
+                // checkpoint 会做磁盘 I/O 且持 memtable 写锁,放到阻塞线程池
+                let r = tokio::task::spawn_blocking(move || storage.create_checkpoint()).await;
+                match r {
+                    // ✨ 报「回收了几个文件」,不报笼统的「完成」。@yutiansut @quantaxis
+                    //
+                    // 实测:连续 136 次 ✅「完成」,而 `Removed old WAL` 0 次、
+                    // `Rotated to new WAL` 0 次 —— WAL 一个字节都没少。
+                    // 这不是 bug:`WalManager::checkpoint` 的循环是
+                    // `0..files.len().saturating_sub(1)`,而每个 WAL 目录只有 1 个文件
+                    // (滚动阈值 1GB,market_data 现 601MB = 63%),唯一那个段正在写入、
+                    // 右端开放,无法证明其中没有 >= checkpoint 的记录,因此不能删
+                    // (wal/manager.rs 的测试已把该语义锁死)。越过滚动阈值前,
+                    // checkpoint 本来就无事可做。
+                    //
+                    // 危害全在日志:运维看到 136 个 ✅ 会以为 WAL 正在回收。
+                    // 无事可做时降到 debug —— 既不撒谎,也不再产生每 10 分钟一条的噪音。
+                    Ok(Ok(0)) => log::debug!("market_data WAL checkpoint:无可回收的旧 WAL 段"),
+                    Ok(Ok(n)) => {
+                        log::info!("✅ market_data WAL checkpoint:回收 {} 个旧 WAL 文件", n)
+                    }
+                    Ok(Err(e)) => log::error!("❌ market_data WAL checkpoint 失败: {}", e),
+                    Err(e) => log::error!("❌ checkpoint 任务 panic: {}", e),
+                }
+            }
+        })
+    }
+
     fn start_periodic_reporting(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let server = self.clone();
 
@@ -1024,17 +1344,28 @@ impl ExchangeServer {
                     // QA_Account 字段：money（可用资金）
                     total_available += acc.money;
 
-                    // 计算总权益和保证金
-                    let mut account_balance = acc.money;
-                    let mut margin_used = 0.0;
-
-                    for position in acc.hold.values() {
-                        let long_value = position.volume_long_unmut() * position.lastest_price;
-                        let short_value = position.volume_short_unmut() * position.lastest_price;
-                        let position_value = long_value + short_value;
-                        account_balance += position_value;
-                        margin_used += position_value * 0.15;
-                    }
+                    // ✨ 用 qars 的权威字段,不要自己重算 @yutiansut @quantaxis
+                    //
+                    // 原实现犯了本会话的主线错误(两处):
+                    //   let long_value = volume_long * lastest_price;   // **漏乘合约乘数**
+                    //   margin_used += position_value * 0.15;           // **硬编码 15%**
+                    // 实测真实保证金率:IF=10% / IH=5% / IC 乘数还是 200 而非 300,
+                    // 这样算出来的「总保证金」偏差 +50% ~ +200%,
+                    // 而它每 5 分钟就写进一次日志,是错误数据的稳定来源。
+                    //
+                    // `QA_Position` 本来就带 `margin_long` / `margin_short`
+                    // (由 qars 按 MarketPreset 的真实费率与乘数算出),
+                    // `QA_Account` 也有 `get_balance()`。直接取即可。
+                    // ⚠️ `get_balance()` 需要 `&mut self`(qars 的签名),这里只有读锁。
+                    //    用 QIFI 缓存字段 —— 它由 RiskMonitor 每秒回写
+                    //    (risk/risk_monitor.rs 的派生量回写段),对 5 分钟一次的
+                    //    报告来说足够新。
+                    let account_balance = acc.accounts.balance;
+                    let margin_used: f64 = acc
+                        .hold
+                        .values()
+                        .map(|p| p.margin_long + p.margin_short)
+                        .sum();
 
                     total_balance += account_balance;
                     total_margin += margin_used;
@@ -1070,21 +1401,94 @@ impl ExchangeServer {
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60)); // 每60秒保存一次
+            // 一轮落盘超过 60s 时,下一轮从本轮结束起再等 60s,而不是立刻背靠背补跑
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
             loop {
                 interval.tick().await;
 
-                match account_mgr.save_snapshots(&snapshot_dir) {
-                    Ok(count) if count > 0 => {
+                // ⚠️ 必须 spawn_blocking —— 不能在这里直接同步调用 @yutiansut @quantaxis
+                //
+                // `save_snapshots` 是同步的:逐账户序列化整份 QIFI + 写 tmp + fsync + rename。
+                // 本任务跑在 `#[actix_web::main]` 的**单线程**运行时上,与 500ms 盘口快照广播
+                // (`start_snapshot_broadcaster`)、条件单扫描器、周期报告共用这一个线程。
+                // 2026-11-08 实测:快照目录涨到 2.0GB(每轮重写 ~112 个账户,单个 60~92MB),
+                // 一轮约 60 秒 → interval 每次都已到期、任务从不让出 → 同线程任务全部饿死:
+                //   · 主线程 60 秒采样:D 态(磁盘等待)66%、R 19%、空闲(ep_poll)仅 15%;
+                //   · 旧 `/ws` 原样抓广播器 10 秒:order_book_update 541 条、
+                //     order_book_snapshot **0 条** —— DIFF 客户端从此收不到任何盘口档位。
+                // 同文件 `start_periodic_checkpoint` 早就是 spawn_blocking 的正确写法,这里照搬。
+                let mgr = account_mgr.clone();
+                let dir = snapshot_dir.clone();
+                match tokio::task::spawn_blocking(move || mgr.save_snapshots(&dir)).await {
+                    Ok(Ok(count)) if count > 0 => {
                         log::debug!("Saved {} account snapshots", count);
                     }
-                    Ok(_) => {} // 没有账户，不记录日志
-                    Err(e) => {
+                    Ok(Ok(_)) => {} // 没有账户，不记录日志
+                    Ok(Err(e)) => {
                         log::error!("Failed to save snapshots: {}", e);
+                    }
+                    Err(e) => {
+                        log::error!("Snapshot save task panicked/cancelled: {}", e);
                     }
                 }
             }
         })
+    }
+
+    /// 每自然日日终结算定时任务(用户拍板)@yutiansut @quantaxis
+    ///
+    /// 北京时间 `[settlement] time`(缺省 00:00)触发 `SettlementEngine::run_end_of_day`,
+    /// 结算的是触发时刻之前的那个自然日。`run_end_of_day` 是阻塞调用(撤单 + 两轮快照落盘
+    /// + 并行结算),放 spawn_blocking —— 本任务所在的是 actix 单线程运行时(见快照任务的说明)。
+    /// 进程在触发时刻宕机则这一天不补结算:第二天的日终会把两天一起结掉(结算只依赖当前状态)。
+    fn start_daily_settlement_scheduler(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let cfg = self.config.settlement.clone();
+        if !cfg.auto_daily {
+            log::info!("日终结算定时任务未启用([settlement] auto_daily = false);手动 POST /api/admin/settlement/execute");
+            return None;
+        }
+        let at = match chrono::NaiveTime::parse_from_str(&cfg.time, "%H:%M") {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("[settlement] time = {:?} 不是 HH:MM({}),日终定时任务未启动", cfg.time, e);
+                return None;
+            }
+        };
+        let engine = self.settlement_engine.clone();
+        Some(tokio::spawn(async move {
+            let bj = chrono::FixedOffset::east_opt(8 * 3600).expect("UTC+8 offset");
+            loop {
+                let now = chrono::Utc::now().with_timezone(&bj);
+                let mut fire = now.date_naive().and_time(at);
+                if fire <= now.naive_local() {
+                    fire += chrono::Duration::days(1);
+                }
+                // 结算的是触发时刻之前的那个自然日:00:00 → 前一天;15:30 → 当天
+                let trading_day = (fire - chrono::Duration::seconds(1))
+                    .date()
+                    .format("%Y-%m-%d")
+                    .to_string();
+                let wait = (fire - now.naive_local()).to_std().unwrap_or_default();
+                log::info!(
+                    "📅 下次日终结算:北京时间 {} 结算 {}(约 {:.1} 小时后)",
+                    fire.format("%Y-%m-%d %H:%M"),
+                    trading_day,
+                    wait.as_secs_f64() / 3600.0
+                );
+                tokio::time::sleep(wait).await;
+
+                let e = engine.clone();
+                let day = trading_day.clone();
+                match tokio::task::spawn_blocking(move || e.run_end_of_day(&day)).await {
+                    Ok(Ok(_)) => {} // run_end_of_day 自己打完成日志
+                    Ok(Err(err)) => log::error!("[EOD] {} 日终结算失败: {}", trading_day, err),
+                    Err(err) => log::error!("[EOD] {} 日终任务异常退出: {}", trading_day, err),
+                }
+                // 同一分钟内不重复触发
+                tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+            }
+        }))
     }
 
     /// 从快照恢复账户
@@ -1170,7 +1574,44 @@ impl ExchangeServer {
         self.recover_from_wal();
 
         // 3.6. 从账户的 dailyorders 恢复订单索引到 order_router @yutiansut @quantaxis
+        // 客户端编号映射文件:恢复挂单(按快照里的交易所单号)之后再读回 @yutiansut @quantaxis
+        self.order_router
+            .set_client_order_id_file(format!("{}/client_order_ids.jsonl", self.config.storage_path));
         self.order_router.restore_orders_from_accounts();
+        let n = self.order_router.load_client_order_ids();
+        if n > 0 {
+            log::info!("✅ 读回客户端编号映射 {} 条", n);
+        }
+
+        // 3.7. ✨ 恢复总结 —— 一行看清"这次启动到底恢复了什么"。@yutiansut @quantaxis
+        //
+        // 为什么需要:上面四步各自的日志散落在几百行启动输出里,
+        // 且 `recover_from_wal` 的"无数据"分支是 `log::debug!`(生产级别看不到)。
+        // 运维在部署后最需要回答的问题是「数据都回来了吗」,
+        // 而这个问题此前要翻日志、数 `Restored account` 的行数才能答。
+        //
+        // 本会话的部署评估里,「快照恢复是否可用」正是关键一环
+        // (见 tasks/DECISIONS-PENDING.md 的重启安全性五项实测)。
+        {
+            let accounts = self.account_mgr.get_all_accounts();
+            let n_acc = accounts.len();
+            let (mut n_ord, mut n_trd, mut n_pos, mut total_bal) = (0usize, 0usize, 0usize, 0f64);
+            for a in &accounts {
+                let acc = a.read();
+                n_ord += acc.dailyorders.len();
+                n_trd += acc.dailytrades.len();
+                n_pos += acc
+                    .hold
+                    .values()
+                    .filter(|p| p.volume_long_unmut() != 0.0 || p.volume_short_unmut() != 0.0)
+                    .count();
+                total_bal += acc.accounts.balance;
+            }
+            log::info!(
+                "📦 [恢复总结] 账户 {} 个 | 订单 {} 条 | 成交 {} 笔 | 有量持仓 {} 个 | 权益合计 ¥{:.2}",
+                n_acc, n_ord, n_trd, n_pos, total_bal
+            );
+        }
 
         // 4. 启动存储订阅器
         let _storage_handle = self.start_storage_subscriber();
@@ -1188,8 +1629,10 @@ impl ExchangeServer {
         // do_risk_check(:305) 负责:风险等级升级预警 / 可用资金为负告警 /
         // 临近强平线(95%~100%)告警 / 触发强平。默认 1 秒一轮(:169)。
         //
-        // ⚠️ 只告警,不会自动强平:强平走 liquidation_callback(:221),
-        // 而 set_liquidation_callback(:241) 同样没有任何生产调用点,
+        // ⚠️ 只告警,不会自动强平:强平走 liquidation_callback(:221)。
+        // 2026-09-05 复核 `grep -rn set_liquidation_callback src/` = 3 处:
+        //   risk_monitor.rs:295 定义 / :1001 测试 / :1011 测试内调用
+        // —— **生产零调用**(测试里有,原注释「没有任何调用点」措辞不准),
         // 回调恒为 None。要启用自动强平需另行接回调 —— 那是独立决定。
         self.risk_monitor.start_monitoring();
         log::info!("✅ Intra-day risk monitor started (alerts only; auto-liquidation callback not wired)");
@@ -1200,6 +1643,9 @@ impl ExchangeServer {
         // 5. 启动QIFI快照定期保存 (方案A)
         let _snapshot_handle = server.start_snapshot_scheduler();
 
+        // 5.1 每自然日日终结算(`[settlement]`,缺省北京 00:00)@yutiansut @quantaxis
+        let _eod_handle = server.start_daily_settlement_scheduler();
+
         // 6. 启动快照广播服务
         server.start_snapshot_broadcaster();
 
@@ -1208,6 +1654,8 @@ impl ExchangeServer {
 
         // 7. 启动定期报告
         let _report_handle = server.start_periodic_reporting();
+        let _checkpoint_handle = server.start_periodic_checkpoint();
+        log::info!("✅ WAL checkpoint 任务已启动(market_data,10 分钟一次)");
 
         // 6. 启动 HTTP 服务器
         let http_server = server.clone().start_http_server().await?;
@@ -1218,8 +1666,71 @@ impl ExchangeServer {
         // 8. 打印启动信息
         print_startup_banner(&server.config);
 
-        // 8. 等待服务器
+        // 8. 自己接管 SIGTERM/SIGINT @yutiansut @quantaxis
+        //
+        // 两个 server 都 `.disable_signals()` 了,所以必须自己收信号并调
+        // `handle.stop(true)`(true = 优雅:等在途请求处理完)。这样 `try_join!`
+        // 才会**正常返回**,下面的最终落盘才有机会执行。
+        {
+            let http_handle = http_server.handle();
+            let ws_handle = ws_server.handle();
+            tokio::spawn(async move {
+                #[cfg(unix)]
+                {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let mut term = match signal(SignalKind::terminate()) {
+                        Ok(x) => x,
+                        Err(e) => { log::error!("SIGTERM 注册失败: {}", e); return; }
+                    };
+                    let mut intr = match signal(SignalKind::interrupt()) {
+                        Ok(x) => x,
+                        Err(e) => { log::error!("SIGINT 注册失败: {}", e); return; }
+                    };
+                    tokio::select! {
+                        _ = term.recv() => log::info!("收到 SIGTERM,开始优雅停机"),
+                        _ = intr.recv() => log::info!("收到 SIGINT,开始优雅停机"),
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = tokio::signal::ctrl_c().await;
+                    log::info!("收到 Ctrl-C,开始优雅停机");
+                }
+                http_handle.stop(true).await;
+                ws_handle.stop(true).await;
+            });
+        }
+
+        // 9. 等待服务器
         tokio::try_join!(async { http_server.await }, async { ws_server.await })?;
+
+        // 9. 停服前补一次落盘 —— 消除固有的 60 秒丢失窗口 @yutiansut @quantaxis
+        //
+        // 此前**没有任何 shutdown 钩子**:全仓 `ctrl_c` / `signal::unix` / `SignalKind`
+        // 零命中。actix 收到 SIGTERM 会优雅关闭 HTTP 连接并让上面的 try_join! 返回,
+        // 但快照调度器(`start_snapshot_scheduler`,60 秒一次)只是随进程被丢弃,
+        // **不会补写最后一次**。于是每次停服都必然丢失「距上次落盘以来」的状态,
+        // 最坏 60 秒 —— 包括计划内的每一次部署。
+        //
+        // 放在这里而不是注册信号处理器:try_join! 返回就是「两个 server 都已停止」,
+        // 此时没有新请求进来,内存态是静止的,是落盘的最佳时刻;
+        // 而自己注册 SIGTERM 会与 actix 自带的处理竞争。
+        //
+        // 仍**不能**替代 kill -9 的防护:SIGKILL 不给任何执行机会。
+        // (2026-09-05 事故正是 kill -9 撞上当时非原子的写入,毁掉 172,035 条订单。
+        //  `save_snapshots` 现已是 tmp+fsync+rename 原子写。)
+        // 用 `server`(:1346 的 `Arc::new(self)`)而非 `self` —— self 已被 move 进 Arc
+        // ✨ 先把 WAL 组提交缓冲刷完(async 模式下可能还有最后一个刷盘间隔的记录)@yutiansut @quantaxis
+        match qaexchange::storage::wal::flush_all_pending(std::time::Duration::from_secs(30)) {
+            Some(n) => log::info!("✅ WAL 缓冲已刷盘: {} 条", n),
+            None => log::error!("❌ WAL 缓冲刷盘超时(30s)—— 最后一个刷盘间隔的记录可能未落盘"),
+        }
+        let snapshot_dir = format!("{}/snapshots", server.config.storage_path);
+        log::info!("🛑 服务已停止,执行最后一次快照落盘...");
+        match server.account_mgr.save_snapshots(&snapshot_dir) {
+            Ok(n) => log::info!("✅ 最终快照已保存: {} 个账户", n),
+            Err(e) => log::error!("❌ 最终快照保存失败: {} —— 本次停服可能丢失最多 60 秒状态", e),
+        }
 
         Ok(())
     }
@@ -1314,6 +1825,34 @@ async fn main() -> io::Result<()> {
     // 初始化日志
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    // ✨ 给 rayon 全局线程池设上限 —— 必须在任何并行操作**之前** @yutiansut @quantaxis
+    //
+    // rayon 的全局池默认 = 逻辑核数(本机 96),**首次用到时懒创建、此后永不销毁**。
+    // 实测:全新实例 24 个 actix-rt 线程稳定 119 秒不变;一调
+    // `/api/management/transactions`(该 handler 用了 `par_iter`)立刻跳到 **120**
+    // (24 + 96),20 秒后仍是 120;RSS 同步从 2,350 MB 涨到 3,051 MB(约 7.3 MB/线程)。
+    //
+    // ⚠️ 这些线程**很难被发现**:rayon 用无名 `thread::Builder`,而 Linux 对无名线程
+    // 的 `comm` 继承父线程 —— 父线程是 actix worker,所以 96 个 rayon 线程全都顶着
+    // `actix-rt|system` 的名字,和真正的 worker 混在一起。我一度以为是
+    // `.workers()` 上限失效了。
+    //
+    // 全仓 rayon 使用点:qaexchange 19 处 + qars account.rs 7 处
+    // (`hold.par_iter_mut()` 等)。这里的并行度需求很小(43 个账户的聚合、
+    // 持仓结算),8 个线程绰绰有余。可用 `QAEX_RAYON_THREADS` 覆盖。
+    {
+        let n = std::env::var("QAEX_RAYON_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(8);
+        match rayon::ThreadPoolBuilder::new().num_threads(n).build_global() {
+            Ok(()) => log::info!("QAEX_RAYON_THREADS = {} (rayon 全局池上限)", n),
+            // 只可能因为已经初始化过而失败;不致命
+            Err(e) => log::warn!("rayon 全局池已被初始化,跳过设置: {}", e),
+        }
+    }
+
     // 1. 加载配置文件
     let toml_config = match TomlConfig::load_default() {
         Ok(cfg) => cfg,
@@ -1342,8 +1881,10 @@ async fn main() -> io::Result<()> {
                         batch_timeout_ms: 10,
                         buffer_size: 10000,
                     },
+                    wal: Default::default(), // 无配置文件时保持同步落盘
                 },
                 instruments: vec![],
+                settlement: Default::default(), // 每自然日北京 00:00 日终
             }
         }
     };
@@ -1364,8 +1905,39 @@ async fn main() -> io::Result<()> {
     log::info!("  Storage path: {}", toml_config.storage.base_path);
     log::info!("  Storage enabled: {}", toml_config.storage.enabled);
 
+    // ✨ WAL 落盘模式 —— 必须在任何 WalManager 打开之前设置 @yutiansut @quantaxis
+    // `[storage.wal] sync_mode` 此前是死配置(见 storage/wal/manager.rs 顶部说明)。
+    {
+        let wal = &toml_config.storage.wal;
+        if !wal.is_async() && !wal.sync_mode.eq_ignore_ascii_case("sync") {
+            log::warn!("⚠️ [storage.wal] sync_mode = {:?} 不认识,按 \"sync\" 处理", wal.sync_mode);
+        }
+        qaexchange::storage::wal::configure_wal_sync_mode(wal.is_async(), wal.sync_interval_ms);
+        if wal.is_async() {
+            log::info!(
+                "  WAL: async 组提交,后台每 {}ms 刷盘(崩溃最多丢该时间窗内的记录)",
+                wal.sync_interval_ms
+            );
+        } else {
+            log::info!("  WAL: sync(每条记录 fsync)");
+        }
+    }
+
     // 2. 转换为运行时配置
     let mut config = ExchangeConfig::from_toml(toml_config);
+
+    // ✨ 按合约覆盖 qars 费率 / 保证金(须早于账户恢复:恢复时据此改写持仓副本)@yutiansut @quantaxis
+    let n_override = qaexchange::core::account_ext::set_preset_overrides(&config.instruments);
+    if n_override > 0 {
+        for c in config.instruments.iter().filter(|c| {
+            c.commission_per_lot.is_some() || c.commission_rate.is_some() || c.margin_rate.is_some()
+        }) {
+            log::info!(
+                "  费率覆盖 {}: 每手 {:?} / 费率 {:?} / 保证金 {:?}",
+                c.instrument_id, c.commission_per_lot, c.commission_rate, c.margin_rate
+            );
+        }
+    }
 
     let args: Vec<String> = std::env::args().collect();
     for i in 0..args.len() {
@@ -1395,4 +1967,178 @@ async fn main() -> io::Result<()> {
     // 创建并运行服务器
     let server = ExchangeServer::new(config, perf_config);
     server.run().await
+}
+
+/// ✨ 交易日历剩余可用天数校验 —— 把一颗静默的定时炸弹变成启动告警。
+/// @yutiansut @quantaxis
+///
+/// qars `QATradeDate` 的交易日表是**硬编码 Vec<i32>**,实测覆盖 `20000104 ~ 20261231`。
+/// 而 `get_next_day` 有两处 `.unwrap()`,越界即 **panic**:
+///   · `trade_date.iter().position(|x| x >= &ur).unwrap()`   → 日期超出表尾
+///   · `trade_date.get_mut(u + 1).unwrap()`                  → 日期正好是表中最后一天
+///
+/// 危害面很大:`get_qifi_tradeday()` 被 `get_qifi_slice()` 调用,而后者是
+/// **每次 QIFI 投影的必经之路** —— 60 秒一次的快照写出、账户详情接口、
+/// 成交查询接口、WebSocket 推送全都走它。表一到头,这些路径同时开始 panic。
+///
+/// 实测(2026-09-06,用真实表模拟并以线上观测值做正对照:
+/// `2026-09-06 → 20260907`,与 79 份快照一致):
+///   `2026-12-31 09:00` → 20261231 ✅   `2026-12-31 20:00` → 💥
+///   `2027-01-04`(任意时刻)          → 💥
+///
+/// 本函数不修根因(要改 qars2 的表或让 `get_next_day` 不 panic,属共享库决策),
+/// 只在启动时**探测还剩多少天**并按紧迫程度分级告警。
+///
+/// ⚠️ 探测**绝不能靠触发 panic**(2026-11-07 修)@yutiansut @quantaxis
+///
+/// 原实现二分查找「调用 `get_trade_day` 不 panic 的最后一天」,用 `catch_unwind`
+/// 包住探测、并临时把 panic hook 换成空函数。但 release / verify profile 是
+/// **`panic = "abort"`**(Cargo.toml)—— `catch_unwind` 在 abort 模式下**什么也接不住**,
+/// 第一个越界探测(今天 + 900 天)直接 `abort()`。又因为 hook 被换成了空函数,
+/// **进程连一行 panic 信息都不留**就以 SIGABRT 退出(apport 抓到 core 才定位到
+/// `tradedate.rs:1166 get_next_day` ← 本函数)。
+/// `cargo test` 走 unwind,单测照样通过 —— 所以只有起 release 二进制才会暴露。
+///
+/// 改为只用**不会 panic** 的 `if_trade_date`(纯 `Vec::contains`)向前扫,
+/// 找出表里最后一个交易日。与原二分**结果完全等价**:对 `YYYY-MM-DD` 形式的输入,
+/// `get_trade_day(d)` panic 当且仅当 `d` 晚于表中最后一个交易日
+/// (`get_next_day` 的 `position(|x| x >= d).unwrap()` 落空)。
+///
+/// 探测交易日历还能处理多少天。返回 `None` 表示**今天就已越界**。
+/// 抽成返回值函数是为了能单测 —— 只打日志的检查无法证明它算得对。
+fn trading_calendar_days_left() -> Option<i64> {
+    use chrono::{Duration, Local};
+    let today = Local::now().date_naive();
+    const HORIZON: i64 = 900; // 探测上界:约 2.5 年,够覆盖任何合理的表
+    // 表若延伸到上界之后,上界后半个月内必有交易日(最长假期 ~10 天)
+    const TAIL: i64 = 15;
+    let mut cal = qars::qautil::tradedate::QATradeDate::new();
+    let mut last: Option<i64> = None;
+    for k in 0..=HORIZON + TAIL {
+        let s = (today + Duration::days(k)).format("%Y-%m-%d").to_string();
+        if cal.if_trade_date(&s) {
+            last = Some(k);
+        }
+    }
+    // 与原二分语义一致:上界那天仍可处理 ⇒ 报 HORIZON(「余量充足」)
+    last.map(|k| k.min(HORIZON))
+}
+
+/// 上面那个探测结果的分级告警。
+fn check_trading_calendar_horizon() {
+    use chrono::{Duration, Local};
+    let today = Local::now().date_naive();
+    let left = trading_calendar_days_left();
+    let lo = left.unwrap_or(0);
+    if left.is_none() {
+        log::error!(
+            "❌ 交易日历已越界:qars QATradeDate 处理不了今天({})—— \
+             `get_qifi_slice()` 路径(快照写出/账户详情/成交查询/WS 推送)会 panic。\
+             需扩表或让 `get_next_day` 不 panic(改 qars2)。",
+            today
+        );
+        return;
+    }
+    let last_ok = today + Duration::days(lo);
+    if lo >= 900 {
+        log::info!("✅ 交易日历余量充足(探测上界 900 天内均可用)");
+    } else if lo <= 30 {
+        log::error!(
+            "❌ 交易日历只剩 {} 天(最后可用日 {})—— 到期后 `get_qifi_slice()` 会 panic,\
+             快照写出/账户详情/成交查询/WS 推送同时失效。请扩 qars2 的 trade_date 表。",
+            lo, last_ok
+        );
+    } else {
+        log::warn!(
+            "⚠️ 交易日历剩余 {} 天(最后可用日 {})—— qars `QATradeDate` 的表是硬编码的,\
+             越界后 `get_next_day` 的 `.unwrap()` 会 panic,而 `get_qifi_tradeday()` \
+             在每次 QIFI 投影时都会调用它。请在到期前扩表。",
+            lo, last_ok
+        );
+    }
+}
+
+#[cfg(test)]
+mod trading_calendar_tests {
+    use super::*;
+
+    /// 日历必须至少还能用「今天」—— 否则 `get_qifi_slice()` 全线 panic。
+    #[test]
+    fn calendar_covers_today() {
+        assert!(
+            trading_calendar_days_left().is_some(),
+            "qars 交易日历已无法处理今天,QIFI 投影路径会 panic"
+        );
+    }
+
+    /// ✨ 正对照:探测器必须真的能**测出边界**,而不是恒返回上界。
+    /// qars 的表实测覆盖到 20261231,所以剩余天数必须 < 900(探测上界)。
+    /// 若哪天扩了表,这条会失败 —— 那是**好事**,提醒把上界调大。
+    #[test]
+    fn horizon_is_finite_and_detected() {
+        let left = trading_calendar_days_left().expect("今天就越界了");
+        // 打出来:`cargo test -- --nocapture` 能直接看到还剩多少天
+        eprintln!("  交易日历剩余可用天数 = {}", left);
+        assert!(left >= 0, "剩余天数不能为负: {}", left);
+        assert!(
+            left < 900,
+            "探测到剩余 {} 天 = 探测上界,说明没测出真实边界(或表已扩过,请调大上界)",
+            left
+        );
+    }
+
+    /// 探测器不能把 panic 泄漏出来 —— 它自己就是用来检测 panic 的。
+    #[test]
+    fn probe_does_not_propagate_panic() {
+        // 连调两次:第二次能正常返回,说明第一次的 panic hook 已还原
+        let a = trading_calendar_days_left();
+        let b = trading_calendar_days_left();
+        assert_eq!(a, b, "两次探测结果应一致(panic hook 未被破坏)");
+    }
+
+    /// ✨ 回归(2026-11-07):探测**全程不得触发任何 panic**。@yutiansut @quantaxis
+    ///
+    /// release 是 `panic = "abort"`,探测里只要 panic 一次进程就 SIGABRT ——
+    /// 而测试走 unwind,旧实现(catch_unwind 二分)在这里照样「通过」。
+    /// 所以这条用 panic hook 计数,把「探测期间发生过 panic」本身判为失败。
+    #[test]
+    fn probe_never_panics_even_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        // hook 是进程全局的,测试并行跑 —— 只数**本线程**的 panic,
+        // 否则别的测试(含下面那条故意 panic 的正对照)会让这条假失败
+        let me = std::thread::current().id();
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |_| {
+            if std::thread::current().id() == me { h.fetch_add(1, Ordering::SeqCst); }
+        }));
+        let _ = trading_calendar_days_left();
+        std::panic::set_hook(prev);
+        assert_eq!(hits.load(Ordering::SeqCst), 0,
+                   "探测期间发生了 panic —— 在 panic=abort 的 release 里这等于进程崩溃");
+    }
+
+    /// ✨ 结果必须与「get_trade_day 会不会 panic」的边界一致:
+    /// 今天+lo 可处理、今天+lo+1 起在表外。用 unwind 模式下的真实调用做正对照。
+    #[test]
+    fn horizon_matches_real_panic_boundary() {
+        use chrono::{Duration, Local};
+        let lo = match trading_calendar_days_left() { Some(v) => v, None => return };
+        if lo >= 900 { return; }
+        let today = Local::now().date_naive();
+        let call = |k: i64| {
+            let s = (today + Duration::days(k)).format("%Y-%m-%d").to_string();
+            std::panic::catch_unwind(|| {
+                qars::qautil::tradedate::QATradeDate::new().get_trade_day(s)
+            }).is_ok()
+        };
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let (ok_at_lo, ok_after) = (call(lo), call(lo + 1));
+        std::panic::set_hook(prev);
+        assert!(ok_at_lo, "第 {} 天应可处理", lo);
+        assert!(!ok_after, "第 {} 天应已越界", lo + 1);
+    }
 }

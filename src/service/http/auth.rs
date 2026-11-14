@@ -59,7 +59,7 @@ pub async fn register(
             )
         },
         Err(e) => {
-            log::error!("User registration failed: {:?}", e);
+            log::warn!("User registration failed: {:?}", e);
             Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(400, e.to_string())))
         }
     }
@@ -86,7 +86,7 @@ pub async fn login(
             }
         }
         Err(e) => {
-            log::error!("User login failed: {:?}", e);
+            log::warn!("User login failed: {:?}", e);
             Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(400, e.to_string())))
         }
     }
@@ -110,11 +110,25 @@ pub async fn get_current_user(
                     "account_ids": user.account_ids,
                     "created_at": user.created_at,
                     "status": user.status,
+                    // ✨ 补 is_admin / roles —— 与登录响应同形状。@yutiansut @quantaxis
+                    //
+                    // 此前这里**两个都不返回**,而登录返回的是
+                    // `{token, user_id, username, is_admin, roles, permissions}`,
+                    // 前端据此构造 `userInfo = {user_id, username, is_admin, roles}`。
+                    // 于是 `store/index.js` 的 `fetchUserInfo`(唯一调本接口的地方)
+                    // 成了**地雷**:它 `commit('SET_USER_INFO', data)` 是**整体替换**,
+                    // 一旦有人把它接上,`userInfo.is_admin` 就变 undefined ⇒
+                    // getter `isAdmin`(:318)变 false ⇒ 路由守卫
+                    // (`router/index.js:246,271`)把管理员挡在管理页外,
+                    // `views/accounts/index.vue` 的「选择用户」也会消失。
+                    // 现在它零调用,所以没炸 —— 但那是运气,不是设计。
+                    "is_admin": user.is_admin(),
+                    "roles": user.roles.iter().map(|r| format!("{:?}", r)).collect::<Vec<_>>(),
                 }))),
             )
         }
         Err(e) => {
-            log::error!("Get user failed: {:?}", e);
+            log::warn!("Get user failed: {:?}", e);
             Ok(HttpResponse::NotFound().json(ApiResponse::<()>::error(404, e.to_string())))
         }
     }
@@ -199,7 +213,7 @@ pub async fn set_user_roles(
             }))))
         }
         Err(e) => {
-            log::error!("Failed to set user roles: {:?}", e);
+            log::warn!("Failed to set user roles: {:?}", e);
             Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(400, e.to_string())))
         }
     }
@@ -245,7 +259,7 @@ pub async fn add_user_role(
             }))))
         }
         Err(e) => {
-            log::error!("Failed to add user role: {:?}", e);
+            log::warn!("Failed to add user role: {:?}", e);
             Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(400, e.to_string())))
         }
     }
@@ -268,7 +282,7 @@ pub async fn make_admin(
             }))))
         }
         Err(e) => {
-            log::error!("Failed to make user admin: {:?}", e);
+            log::warn!("Failed to make user admin: {:?}", e);
             Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(400, e.to_string())))
         }
     }

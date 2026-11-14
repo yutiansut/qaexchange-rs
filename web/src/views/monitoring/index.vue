@@ -222,23 +222,32 @@ export default {
       }
     },
 
+    // ✨ 委托给全局 `$money`(main.js)—— 判空 → isFinite → **量级上限 1e15**。
+    // @yutiansut @quantaxis
+    //
+    // 本页此前是自己写的格式化器,挡不住 `balance = 1e300` 的污染账户:
+    // 子代理实测它在这里渲染成 404 个字符(或 `¥1e+300`)。
+    // `Number.isFinite(1e300)` 为真,所以只判 isFinite 也不够,必须判量级。
+    // 全站四个各写各的格式化器现已统一到同一个判据。
     formatNumber(num) {
-      if (!num) return '0.00'
-      return parseFloat(num).toLocaleString('zh-CN', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      })
+      return this.$money(num)
     },
 
     getMarginRatio() {
-      if (!this.monitoringData.accounts) return '0.00'
+      if (!this.monitoringData.accounts) return '--'
       const { total_balance, total_margin_used } = this.monitoringData.accounts
-      if (!total_balance || total_balance === 0) return '0.00'
-      return ((total_margin_used / total_balance) * 100).toFixed(2)
+      // ✨ 与 $money 同口径兜底:total_balance 非有限或超 1e15(被 T1e300 的 1e300 吸污)时,
+      // 不要算出误导性的 0.00%(896M 占用会显示成健康绿 0%)。@yutiansut @quantaxis
+      const tb = Number(total_balance)
+      if (!Number.isFinite(tb) || Math.abs(tb) >= 1e15 || tb === 0) return '--'
+      const tm = Number(total_margin_used)
+      if (!Number.isFinite(tm) || Math.abs(tm) >= 1e15) return '--'
+      return ((tm / tb) * 100).toFixed(2)
     },
 
     getMarginRatioClass() {
       const ratio = parseFloat(this.getMarginRatio())
+      if (!Number.isFinite(ratio)) return ''   // '--' 时不上任何颜色(不伪装成健康绿)
       if (ratio >= 80) return 'danger'
       if (ratio >= 60) return 'warning'
       return 'success'
@@ -270,7 +279,12 @@ export default {
 }
 
 .status-card {
-  height: 120px;
+  /* ⚠️ 不能用固定 height —— el-card 默认 overflow:hidden,内容一超就永久裁掉。
+     实测 1280×800:卡片 clientH=118 而 body scrollH 达 149,副行
+     「待成交: 778」「金额: ¥850,274,092.76」被拦腰切断,且祖先滚动无解。
+     内容实际需要 125px(h3 21 + margin 8 + value 29 + margin 5 + sub 18 + padding 40),
+     标题换行再 +21px。@yutiansut @quantaxis */
+  min-height: 120px;
 }
 
 .status-item {
@@ -316,7 +330,7 @@ export default {
 .status-info h3 {
   margin: 0 0 8px 0;
   font-size: 14px;
-  color: #606266;
+  color: #8b949e;  /* 浅色遗留 2.83:1 → 暗色 5.63:1 */
   font-weight: normal;
 }
 
@@ -343,7 +357,7 @@ export default {
   align-items: center;
   margin-bottom: 15px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid rgba(240, 246, 252, 0.08);  /* 浅色遗留 */
 }
 
 .stat-item:last-child {
@@ -352,14 +366,36 @@ export default {
 }
 
 .stat-label {
-  color: #606266;
+  color: #8b949e;  /* 浅色遗留 2.83:1 → 暗色 5.63:1 */
   font-size: 14px;
+  /* ✨ 标签不参与压缩,也不许竖排。@yutiansut @quantaxis
+     `.stat-item` 是 flex,长数字会把 `.stat-value` 撑到 3186px(实测),
+     浏览器只好把标签压到 min-content —— 「总权益」竖成「总/权/益:」。 */
+  flex: 0 0 auto;
+  white-space: nowrap;
+  margin-right: 12px;
 }
 
 .stat-value {
-  color: #303133;
+  /* 浅色主题遗留 —— 本站只有暗色(styles/index.scss:14-28 无条件设暗底),
+     #303133 落在 #161b22 上对比度只有 1.33:1(AA 需 4.5),数字近乎隐形。
+     模板 :149 的「总任务数」是全站唯一没带 .primary/.success 修饰类的
+     裸 .stat-value,所以只有它中招。@yutiansut @quantaxis */
+  color: #f0f6fc;
   font-weight: bold;
   font-size: 16px;
+  /* ✨ flex 子项默认 `min-width:auto`,内容多长就撑多长 —— 不加这三行,
+     一个超长数字会把本项撑到 3186px、横向压住右侧兄弟元素的文字,
+     且**没有省略号、没有 tooltip、不可滚**,用户看到的是被静默切断的错数字。
+     实测(1920 视口):值宽 3186.1px / 父 758px,溢出 2445.5px,
+     并与右侧「待成交订单:」重叠 73.4×3px。
+     `min-width:0` 解除 flex 的最小尺寸约束,余下两行给出可见的截断提示。
+     @yutiansut @quantaxis */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 }
 
 .stat-value.primary {

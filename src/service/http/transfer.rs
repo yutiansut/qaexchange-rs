@@ -59,6 +59,21 @@ impl TransferStore {
     }
 
     /// 获取转账记录
+    /// 取该账户的**全部**转账记录(不分页)@yutiansut @quantaxis
+    ///
+    /// ⚠️ 不要用 `get_records(id, None, None, None, None)` 来「取全部」——
+    /// 它的 `page_size` 在 `None` 时**默认 20**、且被 `.min(100)` 封顶,
+    /// 所以那个方法**永远返回不了超过 100 条**。
+    /// `management.rs` 的全所资金流水聚合曾经就这么写,结果每个账户
+    /// 最多只看得到 20 条,而且真实条数被 `let (records, _) = ...` 丢弃 ——
+    /// 实测某账户实存 63 条,聚合接口只报 20。
+    pub fn get_all_records(&self, account_id: &str) -> Vec<TransferRecord> {
+        self.records
+            .get(account_id)
+            .map(|r| r.value().clone())
+            .unwrap_or_default()
+    }
+
     pub fn get_records(
         &self,
         account_id: &str,
@@ -89,6 +104,20 @@ impl TransferStore {
                 after_start && before_end
             })
             .collect();
+
+        // ✨ 时间倒序 —— 与全仓其余 23 处列表接口的约定一致。@yutiansut @quantaxis
+        //
+        // 原来这里**没有排序**,展示顺序是插入序(最早的在前),
+        // 而 `management.rs:482/593`、`handlers.rs:1333/1451`、
+        // `account_admin.rs:732` 等全部是 `b.xxx.cmp(&a.xxx)` 倒序。
+        // 出入金是时间序列型列表,用户期望"最近的在最上面"。
+        //
+        // ⚠️ 这里**不涉及翻页重复**风险(与 `management.rs:241` 那个坑不同):
+        // 数据源是 `DashMap<String, Vec<TransferRecord>>`,按 account_id
+        // 取出的是 **Vec,顺序稳定**;DashMap 的迭代不确定性只在遍历 key 时出现。
+        // 所以这是**一致性**修复,不是正确性修复。
+        let mut filtered = filtered;
+        filtered.sort_by(|a, b| b.datetime.cmp(&a.datetime));
 
         let total = filtered.len();
 
@@ -214,6 +243,12 @@ pub async fn do_transfer(
     let bank = bank.unwrap();
 
     // 验证金额
+    // 转账金额正负都合法(正=转入期货,负=转出),但绝对值仍要过统一校验:
+    // 有限、非零、不超单笔上限。见 models::validate_money_amount 的说明。
+    // @yutiansut @quantaxis
+    if let Err(e) = super::models::validate_money_amount(amount.abs()) {
+        return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(400, e)));
+    }
     if amount.abs() < 0.01 {
         return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
             4002,
@@ -251,6 +286,10 @@ pub async fn do_transfer(
 
     // 执行转账
     let mut acc = account.write();
+    // 变动前取值 —— 流水页的「交易前/后余额」两列此前恒为 0.00
+    // (management.rs:410 硬写 0.0,因为 TransferRecord 没有这两个字段)。
+    // @yutiansut @quantaxis
+    let balance_before = acc.get_balance();
     let transfer_id = Uuid::new_v4().to_string();
     let now = Utc::now().timestamp_millis();
 
@@ -275,22 +314,32 @@ pub async fn do_transfer(
             );
             (-1, "可用余额不足".to_string())
         } else {
-            acc.withdraw(withdraw_amount);
-            log::info!(
-                "银期转账: 账户 {} 出金 {} 成功",
-                account_id,
-                withdraw_amount
-            );
-            (0, "转账成功".to_string())
+            match crate::exchange::account_mgr::withdraw_checked(&mut acc, withdraw_amount) {
+                Ok(()) => {
+                    log::info!(
+                        "银期转账: 账户 {} 出金 {} 成功",
+                        account_id,
+                        withdraw_amount
+                    );
+                    (0, "转账成功".to_string())
+                }
+                Err(e) => {
+                    log::error!("银期转账: 账户 {} 出金 {} 未生效: {}", account_id, withdraw_amount, e);
+                    (-1, format!("出金未生效: {}", e))
+                }
+            }
         }
     };
 
     // 记录转账
+    let balance_after = account.write().get_balance();
     let record = TransferRecord {
         id: transfer_id.clone(),
         datetime: now,
         currency: "CNY".to_string(),
         amount,
+        balance_before,
+        balance_after,
         error_id,
         error_msg: error_msg.clone(),
         bank_id: req.bank_id.clone(),
@@ -373,6 +422,10 @@ mod tests {
             datetime: Utc::now().timestamp_millis(),
             currency: "CNY".to_string(),
             amount: 10000.0,
+            // ⚠️ `TransferRecord` 后来加了这两个字段,本测试未同步 ⇒
+            //    **整个 lib 测试套件一直编译不过**(E0063)。@yutiansut @quantaxis
+            balance_before: 100000.0,
+            balance_after: 110000.0,
             error_id: 0,
             error_msg: "成功".to_string(),
             bank_id: "ICBC".to_string(),

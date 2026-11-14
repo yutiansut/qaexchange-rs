@@ -19,13 +19,13 @@
           <el-option
             v-for="account in accounts"
             :key="account.account_id"
-            :label="`${account.account_name} (可用: ¥${account.available.toLocaleString()})`"
+            :label="`${account.account_name} (可用: ¥${$money(account.available)})`"
             :value="account.account_id"
           >
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <span>{{ account.account_name }}</span>
               <span style="color: #8492a6; font-size: 12px;">
-                可用: ¥{{ account.available.toLocaleString() }}
+                可用: ¥{{ $money(account.available) }}
               </span>
             </div>
           </el-option>
@@ -196,7 +196,7 @@ export default {
           await this.fetchPositions(this.form.account_id)
         }
       } catch (error) {
-        this.$message.error('加载账户列表失败: ' + (error.message || '未知错误'))
+        this.$message.error('加载账户列表失败: ' + (this.$errMsg(error, '未知错误')))
       }
     },
 
@@ -310,11 +310,11 @@ export default {
           volume: this.form.volume
         }
 
-        this.$emit('submit', orderData)
-
-        setTimeout(() => {
+        // 同 OrderForm:复位由父组件在请求结束后触发,不用固定定时器。
+        // @yutiansut @quantaxis
+        this.$emit('submit', orderData, () => {
           this.submitting = false
-        }, 1000)
+        })
       })
     }
   }
